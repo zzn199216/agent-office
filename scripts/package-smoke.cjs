@@ -9,6 +9,7 @@ async function main(){
     const status=JSON.parse(await run(exe,['status','--data-dir',data]));if(!status.projects.some(p=>p.name==='打包验收'))throw new Error('Packaged runtime registration failed.');
     const response=await fetch(start.url);const html=await response.text();if(!html.includes('AgentRoom'))throw new Error('Embedded UI unavailable.');
     const asset=await fetch(start.url+'/app.js');if(asset.status!==200)throw new Error('Embedded script unavailable.');
+    if(await asset.text()!==fs.readFileSync(path.join(root,'web','app.js'),'utf8'))throw new Error('Embedded UI script differs from the current source.');
     const installed=path.join(data,'bin','AgentRoom.exe');if(!fs.existsSync(installed))throw new Error('Stable self-install failed.');
     const sourceHash=crypto.createHash('sha256').update(fs.readFileSync(exe)).digest('hex'),installedHash=crypto.createHash('sha256').update(fs.readFileSync(installed)).digest('hex');if(sourceHash!==installedHash)throw new Error('Installed binary differs.');
     const evidence={tested_at:new Date().toISOString(),version,self_install_verified:true,embedded_ui_verified:true,no_node_or_python_child_runtime_required:true,version_command_no_side_effects:true,projects:status.projects.length,url:start.url};

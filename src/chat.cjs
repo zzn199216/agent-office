@@ -1,5 +1,5 @@
 'use strict';
-const fs=require('node:fs'),path=require('node:path');
+const fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypto');
 const {spawnSync}=require('node:child_process');
 const {ChatStore}=require('./chat-store.cjs');const {CodexClient,detectCodex}=require('./codex.cjs');const {Vault}=require('./vault.cjs');
 const {DiscoveryCatalog,qwenVendorScript,geminiVendorScript}=require('./discovery.cjs');const {ClaudeClient}=require('./claude.cjs');const {QwenClient}=require('./qwen.cjs');const {GeminiClient}=require('./gemini.cjs');
@@ -7,7 +7,7 @@ const {RoomError,id,now,sleep,redact,readableError,cleanText,atomicWrite,ownComm
 const done=status=>['posted','answered','completed','failed','cancelled','uncertain'].includes(status);
 class ChatManager {
   constructor(service,options={}){
-    this.service=service;this.store=new ChatStore(service.store);this.options=options;this.clients=new Map();this.connectedMembers=new Set();this.active=new Map();this.connecting=new Map();this.progress=new Map();this.closing=false;
+    this.service=service;this.store=new ChatStore(service.store);this.options=options;this.clients=new Map();this.connectedMembers=new Set();this.active=new Map();this.connecting=new Map();this.progress=new Map();this.notifications=new Map();this.closing=false;
     this.discovery=new DiscoveryCatalog({env:{...process.env,...service.codex.executable?{AGENTROOM_CODEX_PATH:service.codex.executable}:{}},...options.discovery});
     const mailbox={capabilities:['room-history','inbox','reply'],connect:(m,r)=>this.invite(m,r),message:m=>this.notifyMailbox(m)};
     // Product-specific behavior lives behind adapters, never in room recipients.
@@ -20,7 +20,13 @@ class ChatManager {
   publicMember(m){return {id:m.id,name:m.name,adapter:m.adapter,status:m.status,error:m.error,verified_at:m.verified_at,capabilities:this.adapter(m).capabilities,created:m.created,updated:m.updated,last_seen:m.config.last_seen||null,runtime_state:this.service.runtime?.memberState(m.id)||null,appearance:require('./appearance.cjs').storedAppearance(this.service.store,m)};}
   snapshot(){return {rooms:this.store.rooms(),members:this.store.members().map(m=>this.publicMember(m)),activeMessages:[...this.active.values()].map(a=>a.messageId).filter(Boolean)};}
   changed(){this.service.changed();this.exportRooms();}
-  room(roomId){const messages=this.store.db.prepare("SELECT * FROM chat_messages WHERE room_id=? ORDER BY seq DESC LIMIT 200").all(roomId).reverse().map(row=>this.store.publicMessage(row)).map(m=>({...m,...this.progress.has(m.id)?{progress:this.progress.get(m.id)}:{}})),participants=this.store.participants(roomId).map(m=>({...this.publicMember(m),native_thread_id:this.store.binding(roomId,m.id).thread_id}));return {room:this.store.room(roomId),participants,messages,approvals:[...this.service.approvals.values()].filter(a=>messages.some(m=>m.id===a.public.request_id)||participants.some(m=>a.public.request_id===`connect:${m.id}`)).map(a=>a.public)};}
+  room(roomId,options={}){
+    const page=this.store.messagePage(roomId,options),messages=page.messages.map(m=>({...m,...this.progress.has(m.id)?{progress:this.progress.get(m.id)}:{}}));
+    const participants=this.store.participants(roomId).map(m=>({...this.publicMember(m),native_thread_id:this.store.binding(roomId,m.id).thread_id,binding_state:this.store.binding(roomId,m.id).binding_state}));
+    const approvals=[...this.service.approvals.values()].filter(a=>this.store.db.prepare('SELECT 1 FROM chat_messages WHERE room_id=? AND id=?').get(roomId,a.public.request_id)||participants.some(m=>a.public.request_id===`connect:${m.id}`&&this.active.get(m.id)?.roomId===roomId)).map(a=>a.public);
+    const reconciliations=this.store.db.prepare('SELECT id,record,created FROM chat_reconciliations WHERE room_id=? ORDER BY rowid DESC LIMIT 200').all(roomId).map(row=>({id:row.id,...JSON.parse(row.record),created:row.created}));
+    return {room:this.store.room(roomId),participants,messages,approvals,pagination:page.pagination,reconciliations};
+  }
   addRoom(input){const r=this.store.addRoom(input);this.changed();return r;}
   join(roomId,memberId){this.store.join(roomId,memberId);this.changed();return this.publicMember(this.store.member(memberId));}
   leave(roomId,memberId){if(this.active.get(memberId)?.roomId===roomId)throw new RoomError('请先停止这个成员在房间里的处理。',409);this.store.leave(roomId,memberId);this.changed();return {ok:true};}
@@ -105,14 +111,20 @@ class ChatManager {
   }
   post(input){
     if(this.closing)throw new RoomError('聊天室正在停止。',503);
+    input={...input,idempotency_key:cleanText(input.idempotency_key,200,'消息标识')};
     let target=input.to_member_id||null;
     if(!target&&!['reply','acknowledgment'].includes(input.kind)){const text=String(input.text||'');const matches=this.store.participants(input.room_id).filter(m=>new RegExp('@'+m.name.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'(?=$|\\s|[，。！？,:;!?])','u').test(text));if(matches.length>1)throw new RoomError('一次请选择一个处理成员；其他成员都可以看到房间记录。');if(matches.length===1)target=matches[0].id;}
     if(target&&target===input.sender_id)throw new RoomError('不能向自己的活动会话排队提问。',409,'self_message');
     if(target&&input.sender_id&&input.sender_id!=='user'&&this.service.launch){const proxy=this.service.launch.db.prepare('SELECT backend_member_id FROM launch_proxies WHERE room_id=? AND proxy_member_id=?').get(input.room_id,input.sender_id);if(proxy&&target!==proxy.backend_member_id)throw new RoomError('群内代理只连接其固定本机后端。',403,'proxy_target_mismatch');}
-    if(input.sender_id&&input.sender_id!=='user'&&!input.reply_to){const old=this.store.db.prepare('SELECT reply_to FROM chat_messages WHERE room_id=? AND sender_id=? AND idempotency_key=?').get(input.room_id,input.sender_id,input.idempotency_key);const reference=old?.reply_to||this.active.get(input.sender_id)?.messageId;if(reference)input={...input,reply_to:reference};}
+    if(input.sender_id&&input.sender_id!=='user'&&!input.reply_to){const old=this.store.db.prepare('SELECT reply_to FROM chat_messages WHERE room_id=? AND sender_id=? AND idempotency_key=?').get(input.room_id,input.sender_id,input.idempotency_key);const reference=old?old.reply_to:this.active.get(input.sender_id)?.messageId;if(reference)input={...input,reply_to:reference};}
+    const existing=this.store.db.prepare('SELECT id FROM chat_messages WHERE room_id=? AND sender_id=? AND idempotency_key=?').get(input.room_id,input.sender_id||'user',input.idempotency_key);
+    if(!existing)this.assertNoDependencyCycle(input.sender_id,target,input.kind);
     let parent=input.reply_to,hops=0;while(parent){if(++hops>12)throw new RoomError('这条协作链已达到12次交接，请由用户明确开始新问题。',409,'hop_limit');parent=this.store.message(parent).reply_to;}
     const m=this.store.post({...input,to_member_id:target,sender_id:input.sender_id||'user'});this.changed();
     if(target&&m.status==='queued'){const member=this.store.member(target);this.adapter(member).message(m)?.catch?.(()=>{});}return m;
+  }
+  assertNoDependencyCycle(sender,target,kind,excludeMessageId=''){
+    if(sender&&sender!=='user'&&target&&!['reply','acknowledgment'].includes(kind)&&this.store.hasDependencyPath(target,sender,excludeMessageId))throw new RoomError('这次提问会形成相互等待。请先回复已有问题或向用户/秘书说明缺少的澄清，再分配后续任务；没有启动嵌套会话。',409,'collaboration_cycle');
   }
   reply(messageId,memberId,text,key){
     const original=this.store.message(messageId);if(original.to_member_id!==memberId)throw new RoomError('只有这个消息的接收成员可以回复。',403);
@@ -140,8 +152,53 @@ class ChatManager {
     }catch(e){this.store.updateMessage(first.id,{status:['rpc_timeout','connection_lost','outcome_uncertain','creation_uncertain'].includes(e.code)?'uncertain':e.code==='cancelled'?'cancelled':'failed',error:readableError(e)});this.nativeFailed(member,e);}
     finally{for(const[k,a]of this.service.approvals)if(a.public.request_id===first.id)this.service.approvals.delete(k);this.progress.delete(first.id);this.active.delete(memberId);this.changed();if(!this.closing)this.pump(memberId).catch(()=>{});}
   }
-  async wait(messageId,seconds=25,memberId){const end=Date.now()+Math.min(25,Math.max(0,Number(seconds)||0))*1000;for(;;){const message=this.store.message(messageId),responses=this.store.db.prepare("SELECT * FROM chat_messages WHERE room_id=? AND reply_to=? AND kind IN ('reply','acknowledgment') ORDER BY seq").all(message.room_id,messageId).map(row=>this.store.publicMessage(row));if(done(message.status)||responses.length||Date.now()>=end||this.closing){if(memberId&&message.sender_id===memberId)for(const response of responses)if(response.to_member_id===memberId&&['queued','delivered'].includes(response.status))this.store.ack(response.id,memberId);return {message,responses};}await sleep(200);}}
-  cancel(messageId){const m=this.store.message(messageId);if(m.status==='queued'||m.status==='delivered'){this.store.updateMessage(m.id,{status:'cancelled',error:'已停止等待。'});}else{const active=this.active.get(m.to_member_id);if(active?.messageId===m.id){active.abort.abort();for(const[k,a]of this.service.approvals)if(a.public.request_id===m.id){try{(a.client||this.service.codex).respond(a.rpcId,a.public.type==='input'?{answers:{}}:['form','url'].includes(a.public.type)?{action:'cancel'}:a.public.type==='permissions'?{permissions:{},scope:'turn'}:{decision:'cancel'});}catch{}this.service.approvals.delete(k);}}}this.changed();return this.store.message(m.id);}
+  async wait(messageId,seconds=25,memberId){const end=Date.now()+Math.min(25,Math.max(0,Number(seconds)||0))*1000;for(;;){const message=this.store.message(messageId),responses=this.store.db.prepare("SELECT * FROM chat_messages WHERE room_id=? AND reply_to=? AND kind IN ('reply','acknowledgment') ORDER BY seq").all(message.room_id,messageId).map(row=>this.store.publicMessage(row));if(!done(message.status)&&!responses.length&&memberId===message.sender_id)this.assertNoDependencyCycle(message.sender_id,message.to_member_id,message.kind,message.id);if(done(message.status)||responses.length||Date.now()>=end||this.closing){if(memberId&&message.sender_id===memberId)for(const response of responses)if(response.to_member_id===memberId&&['queued','delivered'].includes(response.status))this.store.ack(response.id,memberId);return {message,responses};}await sleep(200);}}
+  cancel(messageId){
+    const m=this.store.message(messageId),active=this.active.get(m.to_member_id);
+    if(active?.messageId===m.id){active.abort.abort();for(const[k,a]of this.service.approvals)if(a.public.request_id===m.id){try{(a.client||this.service.codex).respond(a.rpcId,a.public.type==='input'?{answers:{}}:['form','url'].includes(a.public.type)?{action:'cancel'}:a.public.type==='permissions'?{permissions:{},scope:'turn'}:{decision:'cancel'});}catch{}this.service.approvals.delete(k);}}
+    else if(['processing','waiting_input'].includes(m.status)||this.notifications.has(m.id))this.store.updateMessage(m.id,{status:'uncertain',error:'本机已停止等待，但无法确认外部执行是否结束。请核对证据后结案；没有重发。'});
+    else if(m.status==='queued'||m.status==='delivered')this.store.updateMessage(m.id,{status:'cancelled',error:m.status==='delivered'?'已停止本机等待；已送达的外部任务不会因此撤回。':'已取消尚未处理的本机排队。'});
+    this.changed();return this.store.message(m.id);
+  }
+  // Controller-only operations: the HTTP/CLI authority boundary must not expose
+  // these through a member's MCP or durable entry. Evidence is an attributed
+  // manual observation, not a claim that AgentRoom queried the provider.
+  reconcile(messageId,input){
+    if(!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).some(k=>!['outcome','evidence','answer'].includes(k))||!['completed','failed','cancelled'].includes(input.outcome))throw new RoomError('核对结案参数无效。',400,'reconciliation_input_invalid');
+    const evidence=this.store.evidence(input.evidence),answer=input.answer===undefined?null:redact(cleanText(input.answer,20000,'已核对回答'));
+    if(answer!==null&&input.outcome!=='completed')throw new RoomError('只有核对完成时可以补录回答。',400,'reconciliation_input_invalid');
+    const bodyHash=crypto.createHash('sha256').update(JSON.stringify([input.outcome,evidence,answer])).digest('hex');
+    const result=this.store.transaction(()=>{
+      const message=this.store.message(messageId),old=this.store.reconciliation('message',messageId,'resolution');
+      if(old){if(old.body_hash!==bodyHash)throw new RoomError('这条消息已有不同的核对结论，没有覆盖原证据。',409,'reconciliation_conflict');return {message,reconciliation:{id:old.id,...old.record,created:old.created}};}
+      if(this.active.get(message.to_member_id)?.messageId===messageId||this.notifications.has(messageId)||this.store.notification(messageId)?.status==='sending')throw new RoomError('本机仍在处理这条消息，请先停止并等待处理结束再核对。',409,'reconciliation_active');
+      if(!['uncertain','waiting_input','processing','consumed'].includes(message.status)||Date.parse(evidence.observed_at)<Date.parse(message.created))throw new RoomError('只有未结案且已实际核对的结果可以结案。',409,'reconciliation_state_invalid');
+      const hasBridge=!!this.store.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='bridge_entries'").get();
+      const entries=hasBridge?this.store.db.prepare("SELECT id FROM bridge_entries WHERE chat_message_id=? AND status IN ('waiting','uncertain','staged')").all(messageId):[];
+      if(entries.length&&input.outcome==='completed'&&answer===null)throw new RoomError('桥接请求核对完成时请补录实际回答，不能用结案状态代替原答案。',400,'reconciliation_answer_required');
+      const binding=message.to_member_id?this.store.db.prepare('SELECT thread_id,binding_state FROM chat_bindings WHERE room_id=? AND member_id=?').get(message.room_id,message.to_member_id):null;
+      const reconciliation=this.store.saveReconciliation(message.room_id,'message',messageId,'resolution',bodyHash,{subject_type:'message',message_id:messageId,actor:'controller',method:'manual_evidence',previous_status:message.status,outcome:input.outcome,evidence,answer,native_thread_id:binding?.thread_id||null,native_request_id:message.request_id});
+      this.store.updateMessage(messageId,{status:input.outcome,error:null});
+      for(const entry of entries)this.store.db.prepare('UPDATE bridge_entries SET status=?,response_text=?,error=NULL,updated=? WHERE id=?').run(input.outcome==='completed'?'answered':input.outcome,answer||'',now(),entry.id);
+      for(const [key,a]of this.service.approvals)if(a.public.request_id===messageId)this.service.approvals.delete(key);
+      return {message:this.store.message(messageId),reconciliation};
+    });this.changed();return result;
+  }
+  reconcileBinding(roomId,memberId,input){
+    if(!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).some(k=>!['outcome','thread_id','evidence','idempotency_key'].includes(k))||!['bound','not_created'].includes(input.outcome))throw new RoomError('会话核对参数无效。',400,'reconciliation_input_invalid');
+    const evidence=this.store.evidence(input.evidence),key=cleanText(input.idempotency_key,200,'核对标识'),thread=input.outcome==='bound'?cleanText(input.thread_id,1000,'已核对原生会话标识'):null;
+    if(input.outcome==='not_created'&&input.thread_id!=null)throw new RoomError('确认未创建时不能提供原生会话。',400,'reconciliation_input_invalid');
+    const subject=roomId+':'+memberId,bodyHash=crypto.createHash('sha256').update(JSON.stringify([input.outcome,thread,evidence])).digest('hex');
+    const result=this.store.transaction(()=>{
+      const binding=this.store.binding(roomId,memberId),old=this.store.reconciliation('binding',subject,key);
+      if(old){if(old.body_hash!==bodyHash)throw new RoomError('同一核对标识对应了不同证据。',409,'reconciliation_conflict');return {binding,reconciliation:{id:old.id,...old.record,created:old.created}};}
+      if(this.active.has(memberId)||this.connecting.has(subject))throw new RoomError('请先停止本机工作会话再核对绑定。',409,'reconciliation_active');
+      if(!['creation_uncertain','outcome_uncertain','resume_uncertain'].includes(binding.binding_state))throw new RoomError('这个会话没有待核对的绑定。',409,'reconciliation_state_invalid');
+      if(input.outcome==='not_created'&&(binding.thread_id||binding.binding_state!=='creation_uncertain')||input.outcome==='bound'&&binding.thread_id&&binding.thread_id!==thread)throw new RoomError('不能用核对操作替换已有原生会话。',409,'reconciliation_binding_mismatch');
+      const reconciliation=this.store.saveReconciliation(roomId,'binding',subject,key,bodyHash,{subject_type:'binding',room_id:roomId,member_id:memberId,actor:'controller',method:'manual_evidence',previous_binding:{...binding},outcome:input.outcome,thread_id:thread,evidence});
+      return {binding:this.store.bind(roomId,memberId,input.outcome==='bound'?'bound':'new',thread),reconciliation};
+    });this.changed();return result;
+  }
   inbox(memberId,roomId){this.heartbeat(memberId);return this.store.inbox(memberId,roomId);}
   ack(messageId,memberId){const r=this.store.ack(messageId,memberId);this.changed();return r;}
   async configureGrok(memberId,url,key){const m=this.store.member(memberId);if(m.adapter!=='grok-bridge')throw new RoomError('请选择 Grok 桥接成员。');const vault=new Vault(path.join(this.service.store.dir,'members',memberId));const status=vault.set(url,key);this.store.updateMember(memberId,{config:{...m.config,webhook_enabled:true}});this.changed();return status;}
@@ -149,14 +206,22 @@ class ChatManager {
     // A bridge caller waits on the correlated result and returns it in its
     // original native context. A separate Routine must not steal that return.
     if(message.kind==='reply'&&message.reply_to&&this.service.bridge?.store.entryForMessage(message.reply_to))return;
-    if(this.store.message(message.id).status!=='queued')return;const m=this.store.member(message.to_member_id);if(m.status!=='ready'||!m.config.webhook_enabled)return;
+    if(this.closing||this.store.message(message.id).status!=='queued')return;const m=this.store.member(message.to_member_id);if(m.status!=='ready'||!m.config.webhook_enabled)return;
     const vault=new Vault(path.join(this.service.store.dir,'members',m.id)),credential=vault.get();if(!credential)return;
-    this.store.updateMessage(message.id,{status:'processing'});this.changed();const own=ownCommand();
-    try{const response=await this.service.fetch(credential.url,{method:'POST',headers:{Authorization:`Bearer ${credential.key}`,'Content-Type':'application/json'},body:JSON.stringify({event:'agentroom.chat_message',room_id:message.room_id,member_id:m.id,message_id:message.id,local_command:{command:own.command,args:[...own.args,'chat-inbox','--room',message.room_id,'--member',m.id,'--data-dir',this.service.store.dir]},message:'按已授权的聊天室桥接规则，在 Windows 本机领取此消息，确认来源和原 Grok 群上下文后处理及回报。Webhook 受理不代表已经回复到原群。'}),signal:AbortSignal.timeout(25000),redirect:'error'});let body={};try{body=await response.json();}catch{}if(!response.ok||body.success!==true)throw new RoomError('Webhook 未明确受理，请核对例程；没有自动重发。',502,'outcome_uncertain');if(this.store.message(message.id).status==='processing')this.store.updateMessage(message.id,{status:'delivered',error:null});}
-    catch(e){if(this.store.message(message.id).status==='processing')this.store.updateMessage(message.id,{status:'uncertain',error:readableError(e)});}finally{this.changed();}
+    if(!this.store.claimNotification(message.id))return;
+    // The inbox remains readable before the external wake is emitted. The
+    // separate durable notification row claims this side effect exactly once.
+    const abort=new AbortController(),own=ownCommand();let resolveWork;const work=new Promise(resolve=>{resolveWork=resolve;});this.notifications.set(message.id,{abort,work});this.changed();
+    try{const response=await this.service.fetch(credential.url,{method:'POST',headers:{Authorization:`Bearer ${credential.key}`,'Content-Type':'application/json'},body:JSON.stringify({event:'agentroom.chat_message',room_id:message.room_id,member_id:m.id,message_id:message.id,local_command:{command:own.command,args:[...own.args,'chat-inbox','--room',message.room_id,'--member',m.id,'--data-dir',this.service.store.dir]},message:'按已授权的聊天室桥接规则，在 Windows 本机领取此消息，确认来源和原 Grok 群上下文后处理及回报。Webhook 受理不代表已经回复到原群。'}),signal:AbortSignal.any([abort.signal,AbortSignal.timeout(25000)]),redirect:'error'});let body={};try{body=await response.json();}catch{}if(!response.ok||body.success!==true)throw new RoomError('Webhook 未明确受理，请核对例程；没有自动重发。',502,'outcome_uncertain');this.store.finishNotification(message.id,'accepted');}
+    catch(e){this.store.finishNotification(message.id,'uncertain',readableError(e));}finally{this.notifications.delete(message.id);try{this.changed();}finally{resolveWork();}}
   }
   start(){for(const m of this.store.members())if(this.adapter(m).capabilities.includes('native-session'))this.pump(m.id).catch(()=>{});}
-  exportRooms(){try{for(const room of this.store.rooms()){const names=new Map(this.store.members().map(m=>[m.id,m.name]));const text=`# ${room.title}\n\n项目：${room.project_name}\n\n`+this.store.db.prepare("SELECT * FROM chat_messages WHERE room_id=? ORDER BY seq").all(room.id).map(m=>`## ${m.sender_id==='user'?'你':names.get(m.sender_id)||m.sender_id} · ${m.created}\n\n${m.to_member_id?'发给：'+names.get(m.to_member_id)+'\n\n':''}${m.text}\n\n状态：${m.status} · 消息ID：${m.id}\n${m.error?'\n'+m.error+'\n':''}`).join('\n');atomicWrite(path.join(this.service.store.dir,'chatrooms',room.id,'conversation.md'),text);}}catch{this.exportError='部分聊天室 Markdown 记录暂未写入，稍后补写。';}}
-  async close(){this.closing=true;clearInterval(this.exportTimer);for(const memberId of this.connectedMembers){this.service.runtime?.releaseWorker(`native:${memberId}`);this.service.runtime?.releaseSession(memberId,`native:${memberId}`);}this.connectedMembers.clear();for(const a of this.active.values())a.abort.abort();await Promise.allSettled([...this.clients.values()].map(c=>c.close()));for(let i=0;this.active.size&&i<40;i++)await sleep(100);this.exportRooms();}
+  exportRooms(){
+    let failed=false;const pending=this.store.pendingExports();if(!pending.length){this.exportError=null;return;}
+    const names=new Map(this.store.members().map(m=>[m.id,m.name]));
+    for(const item of pending)try{const room=this.store.room(item.room_id);const text=`# ${room.title}\n\n项目：${room.project_name}\n\n`+this.store.db.prepare("SELECT * FROM chat_messages WHERE room_id=? ORDER BY seq").all(room.id).map(m=>`## ${m.sender_id==='user'?'你':names.get(m.sender_id)||m.sender_id} · ${m.created}\n\n${m.to_member_id?'发给：'+names.get(m.to_member_id)+'\n\n':''}${m.text}\n\n状态：${m.status} · 消息ID：${m.id}\n${m.error?'\n'+m.error+'\n':''}`).join('\n');atomicWrite(path.join(this.service.store.dir,'chatrooms',room.id,'conversation.md'),text);this.store.exported(room.id,item.revision);}catch{failed=true;}
+    this.exportError=failed?'部分聊天室 Markdown 记录暂未写入，稍后补写。':null;
+  }
+  async close(){this.closing=true;clearInterval(this.exportTimer);for(const memberId of this.connectedMembers){this.service.runtime?.releaseWorker(`native:${memberId}`);this.service.runtime?.releaseSession(memberId,`native:${memberId}`);}this.connectedMembers.clear();for(const a of this.active.values())a.abort.abort();for(const n of this.notifications.values())n.abort.abort();await Promise.allSettled([...this.clients.values()].map(c=>c.close()).concat([...this.notifications.values()].map(n=>n.work)));for(let i=0;this.active.size&&i<40;i++)await sleep(100);this.exportRooms();}
 }
 module.exports={ChatManager,done};

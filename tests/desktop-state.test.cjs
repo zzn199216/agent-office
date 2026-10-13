@@ -56,7 +56,7 @@ test('first desktop read and stopped control never create a DB, ensure a server,
   const main={readControl(){controls++;return null;},ensureServer(){ensures++;throw new Error('An implicit start is forbidden.');},apiCall(){api++;throw new Error('No service exists.');}};
   const before=filesState(files.root);
   for(let n=0;n<3;n++){
-    const state=await desktopState(files.data,{}, {main});assert.equal(state.running,false);assert.equal(state.initialized,false);assert.equal(state.snapshot.instance_id,null);assert.deepEqual(state.snapshot.chat.rooms,[]);assert.equal(state.history,null);
+    const state=await desktopState(files.data,{}, {main});assert.equal(state.running,false);assert.equal(state.initialized,false);assert.equal(state.snapshot.instance_id,null);assert.deepEqual(state.snapshot.chat.rooms,[]);assert.equal(state.history,null);assert.equal(state.team,null);
   }
   const stopped=await desktopStop(files.data,{}, {main});assert.equal(stopped.running,false);assert.equal(stopped.busy.is_busy,false);
   assert.equal(controls,4);assert.equal(ensures,0);assert.equal(api,0);assert.deepEqual(filesState(files.root),before);assert.equal(fs.existsSync(files.data),false);
@@ -115,12 +115,62 @@ async function httpFixture(t,options={}){
 test('real isolated HTTP start-stop-start retains instance, rooms, members, history and native binding without a model call',async t=>{
   const v=await httpFixture(t),before=offlineState(v.data,v.first.id),initialCards=databaseState(v.data).rows.chat_resume_credentials.length;
   const start=await desktopStart(v.data,{room_id:v.first.id},{main:v.main});assert.equal(start.running,true);assert.equal(start.url,v.control.url);assert.equal(start.snapshot.instance_id,v.instance);assert.equal(start.history.room.id,v.first.id);assert.equal(v.startCalls,1);
+  assert.deepEqual(start.team,JSON.parse(JSON.stringify(v.service.team.snapshot(v.first.id))));
   for(let i=0;i<3;i++){const state=await desktopState(v.data,{room_id:v.second.id},{main:v.main});assert.equal(state.running,true);assert.equal(state.history.room.id,v.second.id);}
   assert.equal(v.startCalls,1);
   const stopped=await desktopStop(v.data,{room_id:v.first.id},{main:v.main,isPidAlive:v.isPidAlive,sleep:v.sleep});assert.equal(stopped.running,false);assert.equal(stopped.snapshot.instance_id,v.instance);assert.equal(v.shutdowns,1);assert.equal(stopped.history.participants.find(member=>member.id===v.backend.id).native_thread_id,v.thread);
   assert.deepEqual(stopped.snapshot.chat.rooms.map(room=>room.id).sort(),before.snapshot.chat.rooms.map(room=>room.id).sort());assert.deepEqual(stopped.snapshot.chat.members.map(member=>member.id).sort(),before.snapshot.chat.members.map(member=>member.id).sort());
   const restarted=await desktopStart(v.data,{room_id:v.first.id},{main:v.main});assert.equal(restarted.snapshot.instance_id,v.instance);assert.deepEqual(restarted.history.messages.map(message=>message.id),[v.question.id]);assert.equal(restarted.history.participants.find(member=>member.id===v.backend.id).native_thread_id,v.thread);assert.equal(v.startCalls,2);
   assert.equal(databaseState(v.data).rows.chat_resume_credentials.length,initialCards);assert.ok(v.codices.every(codex=>codex.calls.length===0));
+});
+
+test('cold offline desktop retains complete team data with online projection parity and no recovery, scheduling or writes',async t=>{
+  const files=fixture();let service=new RoomService(files.data,{codex:new FakeCodex(),vault:new FakeVault(),fetch:async()=>{assert.fail('offline fixture must never notify a real provider');}});
+  t.after(async()=>{if(service)await service.close();cleanup(files);});
+  const project=service.addProject({path:files.project,name:'Offline team project'}),room=service.chat.addRoom({project_id:project.id,title:'Offline team'}),other=service.chat.addRoom({project_id:project.id,title:'Other team'});
+  const secretary=service.chat.addMember({name:'Saved secretary',adapter:'mailbox'}),worker=service.chat.addMember({name:'Saved research window',adapter:'mailbox'}),native=service.chat.addMember({name:'Saved native backend',adapter:'codex'});
+  for(const member of [secretary,worker,native])service.chat.join(room.id,member.id);service.chat.join(other.id,worker.id);service.secretary.set({room_id:room.id,member_id:secretary.id});
+  const nativeThread=id();service.chat.store.bind(room.id,native.id,'bound',nativeThread);
+  const source=[{reference:'fixture://research/notes',note:'Saved window evidence',observed_at:new Date().toISOString()}];
+  service.team.card({room_id:room.id,member_id:worker.id,role:'Research',skills:['fact checking'],information:'Has the prior research findings',sources:source,session_ref:'the-selected-existing-window'});
+  service.team.card({room_id:other.id,member_id:worker.id,role:'Other room role',information:'Only this other room should contain this information',sources:[]});
+  const goal=service.team.goal({room_id:room.id,title:'Saved goal',description:'Assemble evidence',acceptance:'Verified sources',idempotency_key:'offline-goal'});
+  const task=service.team.createTask({room_id:room.id,goal_id:goal.id,title:'Saved task',assignee_id:worker.id,deliverable:'Research report',acceptance:'Source-linked report',idempotency_key:'offline-task'});
+  const closed=service.team.meeting({room_id:room.id,title:'Completed meeting',agenda:'First round results',participant_ids:[worker.id,secretary.id],idempotency_key:'closed-meeting'});
+  service.team.report(closed.id,{room_id:room.id,member_id:worker.id,summary:'Original report',sources:source,idempotency_key:'first-report'});
+  service.team.save(service.team.record(closed.id,'meeting',room.id),{status:'review'},null,'fixture_collection_deadline_elapsed');
+  service.team.closeMeeting(closed.id,{room_id:room.id,summary:'Original saved minutes',decisions:['Continue the saved task'],action_task_ids:[task.id],idempotency_key:'close-meeting'});
+  service.team.report(closed.id,{room_id:room.id,member_id:secretary.id,summary:'Late report remains distinct',sources:source,idempotency_key:'late-report'});
+  service.team.ack({room_id:room.id,member_id:worker.id,version:1});
+  const collecting=service.team.meeting({room_id:room.id,title:'Unfinished meeting',agenda:'Await the missing report',participant_ids:[secretary.id,worker.id],idempotency_key:'collecting-meeting'});
+  service.team.report(collecting.id,{room_id:room.id,member_id:secretary.id,summary:'Only one window reported',sources:source,idempotency_key:'partial-report'});
+  const schedule=service.team.schedule({room_id:room.id,enabled:true,interval_hours:24,timezone:'Asia/Taipei'});
+  service.team.save(schedule,{next_run_at:'2020-01-01T00:00:00.000Z'},null,'fixture_due_while_offline');
+  const inFlight=service.chat.store.post({room_id:room.id,to_member_id:worker.id,text:'Persisted execution awaiting outcome',idempotency_key:'offline-processing'});service.chat.store.updateMessage(inFlight.id,{status:'processing'});
+  service.team.save(task,{message_id:inFlight.id,status:'running'},null,'fixture_crash_state');
+  service.store.db.prepare("UPDATE team_outbox SET status='uncertain',error='Saved delivery outcome needs review' WHERE record_id=?").run(goal.id);
+  const expected=service.team.snapshot(room.id),otherExpected=service.team.snapshot(other.id),instance=service.runtime.instanceId;
+  await service.close();service=null;
+  const beforeDatabase=databaseState(files.data),beforeFiles=filesState(files.data);let apiCalls=0,starts=0;
+  const main={readControl:()=>null,apiCall:()=>{apiCalls++;throw new Error('No service API on cold offline load');},ensureServer:()=>{starts++;throw new Error('No implicit service start');}};
+  for(let i=0;i<3;i++){
+    const restored=await desktopState(files.data,{room_id:room.id},{main});assert.equal(restored.running,false);assert.equal(restored.snapshot.instance_id,instance);assert.deepEqual(restored.team,expected);
+    assert.equal(restored.team.cards.find(card=>card.member_id===native.id).native_session_ref,nativeThread);assert.equal(restored.team.cards.find(card=>card.member_id===worker.id).ack_version,1);
+    assert.equal(restored.team.tasks[0].status,'running');assert.equal(restored.history.messages.find(message=>message.id===inFlight.id).status,'processing','offline reads must not run crash recovery');
+    assert.deepEqual(restored.team.meetings.find(meeting=>meeting.id===collecting.id).missing_member_ids,[worker.id]);assert.equal(restored.team.meetings.find(meeting=>meeting.id===closed.id).late_revision,1);assert.match(restored.team.brief.content,/Original saved minutes/);
+    assert.equal(restored.team.schedule.next_run_at,'2020-01-01T00:00:00.000Z','an overdue meeting remains unexecuted offline');assert.ok(restored.team.delivery_issues.length>0);
+    const switched=await desktopState(files.data,{room_id:other.id},{main});assert.deepEqual(switched.team,otherExpected);assert.equal(switched.team.goals.length,0);assert.equal(switched.team.meetings.length,0);assert.equal(switched.team.cards[0].role,'Other room role');
+  }
+  assert.equal(apiCalls,0);assert.equal(starts,0);assert.deepEqual(databaseState(files.data),beforeDatabase);assert.deepEqual(filesState(files.data),beforeFiles);
+});
+
+test('offline viewing an older instance without team tables returns empty defaults and does not migrate its database',async t=>{
+  const files=fixture();t.after(()=>cleanup(files));const saved=await seed(files),db=new DatabaseSync(path.join(files.data,'room.sqlite'));
+  try{db.exec('DROP TABLE team_outbox; DROP TABLE team_events; DROP TABLE team_records;');}finally{db.close();}
+  const before=databaseState(files.data),beforeFiles=filesState(files.data),state=offlineState(files.data,saved.first.id);
+  assert.equal(state.team.room_id,saved.first.id);assert.equal(state.team.secretary_id,null);assert.equal(state.team.cards.length,2);assert.ok(state.team.cards.every(card=>card.context_status==='not_provided'));
+  assert.deepEqual(state.team.goals,[]);assert.deepEqual(state.team.tasks,[]);assert.deepEqual(state.team.meetings,[]);assert.deepEqual(state.team.delivery_issues,[]);assert.deepEqual(state.team.brief,{version:0,content:'',updated_at:null});assert.equal(state.team.schedule.enabled,false);
+  assert.deepEqual(databaseState(files.data),before);assert.deepEqual(filesState(files.data),beforeFiles);
 });
 
 test('busy service refuses desktop and HTTP shutdown and preserves each active work source',async t=>{

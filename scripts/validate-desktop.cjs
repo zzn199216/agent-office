@@ -35,7 +35,7 @@ async function main(){
     const customRaster='data:image/png;base64,'+imageResult;seed.appearance.set({member_id:member.id,preset:'robot',color:'#4289c5',furniture:'beanbag',avatar_data:customRaster,character_data:customRaster});
     for(const room of [first,second])seed.office.set({room_id:room.id,time_zone:'Asia/Taipei',time_mode:'night'});
     for(const name of ['Codex','Claude Code','Qwen','Grok','Cursor','豆包']){const agent=seed.chat.addMember({name:name+' 头像验证',adapter:'mailbox'});for(const room of[first,second])seed.chat.join(room.id,agent.id);}
-    for(const room of[first,second]){seed.chat.join(room.id,member.id);seed.chat.store.post({room_id:room.id,sender_id:'user',text:'桌面验证：这条群聊保存在本机。',idempotency_key:'native-desktop-persisted-'+room.id});}
+    for(const room of[first,second]){seed.chat.join(room.id,member.id);const setup=await seed.chat.connect(member.id,room.id);seed.chat.completeInvite(setup.invite.id,setup.invite.nonce,member.id);seed.chat.store.post({room_id:room.id,sender_id:'user',text:'桌面验证：这条群聊保存在本机。',idempotency_key:'native-desktop-persisted-'+room.id});}
     seed.secretary.set({room_id:first.id,member_id:member.id});
     await seed.close();
     initial=JSON.parse(await child(cli,['desktop-state','--data-dir',data]));

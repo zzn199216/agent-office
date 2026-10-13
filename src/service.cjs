@@ -19,6 +19,7 @@ class RoomService extends EventEmitter {
     const {OfficeSettingsManager}=require('./office-settings.cjs');this.office=new OfficeSettingsManager(this);
     const {RuntimeState}=require('./runtime-state.cjs');this.runtime=new RuntimeState(this.chat.store,{wakeAdapters:['codex','claude-code','qwen-code','gemini-cli']});
     const {SecretaryManager}=require('./secretary.cjs');this.secretary=new SecretaryManager(this);
+    const {TeamManager}=require('./team.cjs');this.team=new TeamManager(this,options.team||{});
     const {ResumeAccess}=require('./resume.cjs');this.resume=new ResumeAccess(this.chat.store,{instanceId:this.runtime.instanceId,dataDirectory:dir});
     const {RoomEntry}=require('./entry.cjs');this.entry=new RoomEntry(this);this.runtimeRef=`service:${process.pid}`;
     const {BridgeManager}=require('./bridge.cjs');this.bridge=new BridgeManager(this.chat,{allowLocalTest:process.env.AGENTROOM_LOCAL_TEST==='1',...options.bridge});
@@ -62,6 +63,7 @@ class RoomService extends EventEmitter {
     const pulse=()=>{this.runtime.serviceHeartbeat(this.runtimeRef,{pid:process.pid});for(const memberId of new Set([...this.chat.connectedMembers,...this.chat.active.keys()])){const client=this.chat.clients.get(memberId);if(['claude-code','qwen-code','gemini-cli'].includes(this.chat.store.member(memberId).adapter)&&!client?.child)continue;this.runtime.workerHeartbeat(`native:${memberId}`,{member_id:memberId,pid:client?.child?.pid||null});this.runtime.heartbeat(memberId,{session_ref:`native:${memberId}`});}};
     pulse();this.runtimeTimer=setInterval(pulse,10000);this.runtimeTimer.unref();
     this.chat.start();
+    this.team.start();
     this.health().catch(() => {});
     this.pump().catch(() => {});
     for (const r of this.store.db.prepare("SELECT * FROM requests WHERE status='queued' AND recipient='grok'").all()) this.dispatchGrok(r).catch(() => {});
@@ -235,7 +237,7 @@ class RoomService extends EventEmitter {
     await this.codex.close(); this.store.setting('codex_path', executable); this.codex = new CodexClient({ executable }); this.codexHealth = null; return this.health();
   }
   async close() {
-    this.closing = true; clearInterval(this.exportTimer);clearInterval(this.runtimeTimer);this.runtime.releaseWorker(this.runtimeRef); this.active?.abort.abort();await this.onboarding.close();await this.runtimeInstaller.close();await this.launch.close();await this.bridge.close();await this.chat.close(); await this.codex.close();
+    this.closing = true; this.team.close(); clearInterval(this.exportTimer);clearInterval(this.runtimeTimer);this.runtime.releaseWorker(this.runtimeRef); this.active?.abort.abort();await this.onboarding.close();await this.runtimeInstaller.close();await this.launch.close();await this.bridge.close();await this.chat.close(); await this.codex.close();
     for (let i=0; this.pumping && i<40; i++) await sleep(100);
     this.flushExports(); this.store.close();
   }

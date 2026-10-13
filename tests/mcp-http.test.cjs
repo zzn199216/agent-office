@@ -50,7 +50,8 @@ test('Streamable HTTP discovery stays unverified until an actual permitted membe
   await h.send(card, { jsonrpc: '2.0', method: 'notifications/initialized' }, session, { headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream', 'Mcp-Session-Id': session, 'MCP-Protocol-Version': '2025-06-18' } });
   const listed = await h.send(card, { jsonrpc: '2.0', id: 2, method: 'tools/list' }, session, { headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream', 'Mcp-Session-Id': session, 'MCP-Protocol-Version': '2025-06-18' } });
   assert.ok(listed.data.result.tools.some(tool => tool.name === 'agentroom_room_ensure'));
-  for (const name of ['agentroom_discover_agents', 'agentroom_group_prepare', 'agentroom_ask', 'agentroom_join', 'agentroom_chat_rooms', 'agentroom_delegate']) assert.ok(!listed.data.result.tools.some(tool => tool.name === name));
+  for (const name of ['agentroom_discover_agents', 'agentroom_group_prepare', 'agentroom_ask', 'agentroom_join', 'agentroom_delegate']) assert.ok(!listed.data.result.tools.some(tool => tool.name === name));
+  assert.ok(listed.data.result.tools.some(tool => tool.name === 'agentroom_chat_rooms'));
   assert.equal(h.service.resume.credential(card.credential_id).status, 'pending');
   assert.equal(h.service.chat.store.member(card.member_id).verified_at, null);
   const entered = await h.send(card, { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'agentroom_room_ensure', arguments: {} } }, session, { headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream', 'Mcp-Session-Id': session, 'MCP-Protocol-Version': '2025-06-18' } });

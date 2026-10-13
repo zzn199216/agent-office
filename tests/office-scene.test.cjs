@@ -2,7 +2,7 @@
 const test=require('node:test'),assert=require('node:assert/strict');
 const scene=require('../web/office.js');
 const now=Date.parse('2026-10-13T08:00:00Z');
-const member={id:'code-one',name:'Codex 开发',adapter:'codex',status:'ready'};
+const member={id:'code-one',name:'Codex 开发',adapter:'codex',status:'ready',presence:'online'};
 const online={members:[{id:member.id,presence:'online',worker_online:true,lease_expires:'2026-10-13T08:01:00Z'}],service:{online:true}};
 test('office shows only participants in the selected room, including offline and unverified members',()=>{
   const model=scene.describe({roomId:'room-a',participants:[member,{...member,name:'duplicate'},{id:'awaiting',name:'等待接入',status:'pending'},{id:'offline',name:'离线成员',presence:'offline'}],messages:[],online:false},now);
@@ -19,6 +19,14 @@ test('offline and expired agents leave an empty station while preserving identit
   const stale=scene.describe({participants:[member],runtime:{members:[{id:member.id,presence:'online',lease_expires:'2026-10-13T07:59:00Z'}]},online:true},now).members[0];
   assert.equal(stale.presence.status,'stale');assert.equal(stale.occupied,false);
   const restored=scene.describe({participants:[member],runtime:online,online:true},now).members[0];assert.equal(restored.occupied,true);
+});
+test('unknown and unverified members retain an empty station until current online evidence exists',()=>{
+  const awaiting={id:'awaiting',name:'待接通成员',status:'awaiting_handshake'};
+  const readyUnknown={id:'verified',name:'身份已验证但在线未知',status:'ready',verified_at:'2026-10-13T07:00:00Z'};
+  const model=scene.describe({participants:[awaiting,readyUnknown],online:true,messages:[]},now);
+  assert.ok(model.members.every(item=>item.presence.status==='unknown'&&!item.occupied&&!item.processing));
+  const observed=scene.describe({participants:[readyUnknown],online:true,runtime:{members:[{id:readyUnknown.id,presence:'online',lease_expires:'2026-10-13T08:01:00Z'}]}},now);
+  assert.equal(observed.members[0].occupied,true);
 });
 test('queued messages and an open client alone do not animate real work',()=>{
   const input={roomId:'room-a',participants:[member],runtime:online,online:true,messages:[{id:'question',sender_id:'user',to_member_id:member.id,status:'queued',text:'问题'}]};

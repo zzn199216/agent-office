@@ -104,9 +104,13 @@ async function main(args=process.argv.slice(2)){
   }
   if(command==='serve')return serve(dir,options);
   if(command==='stop'){if(entry)throw new RoomError('停止整个处理程序属于本机管理操作，请不用成员入口卡执行。',403,'resume_scope_mismatch');await apiCall(dir,'/api/shutdown',{idle_only:true});print({stopping:true});return;}
-  const guard=entry?(route,input)=>{const mod=require('./entry.cjs'),disk=mod.openDisk(dir,{readOnly:true});try{disk.resume.inspect(entry.card);if(route)mod.assertEntryScope(disk,entry.card,route,input);}finally{disk.close();}}:undefined;
+  const memberScope=entry?.card||(command==='mcp'&&(process.env.AGENTROOM_MEMBER_ID||process.env.AGENTROOM_ROOM_ID)?{member_id:process.env.AGENTROOM_MEMBER_ID,room_id:process.env.AGENTROOM_ROOM_ID}:null);
+  if(memberScope&&(!memberScope.member_id||!memberScope.room_id))throw new RoomError('成员 MCP 必须同时绑定成员和房间。',403,'resume_scope_mismatch');
+  const inspectScope=(route,input)=>{const mod=require('./entry.cjs'),disk=mod.openDisk(dir,{readOnly:true});try{if(entry)disk.resume.inspect(entry.card);else disk.chat.requireParticipant(memberScope.room_id,memberScope.member_id);if(route)require('./member-policy.cjs').assertMemberRoute(disk,memberScope,route,input,{allowJoin:!entry});return {env:process.env,proxy:!!require('./member-policy.cjs').proxyFor(disk,memberScope),allowJoin:!entry,secretary:disk.store.setting('secretary.'+memberScope.room_id)?.member_id===memberScope.member_id};}finally{disk.close();}};
+  const guard=memberScope?inspectScope:undefined;
   const baseApi=createRecoveringApi(dir,{guard});const api=async(route,input)=>{if(entry){await guard(route,input);await baseApi('/api/resume/accept',{card:entry.card});}return baseApi(route,input);};
-  api.diskState=args=>require('./entry.cjs').diskState(dir,entry,{roomId:args?.room_id||options.room,memberId:options.member});
+  api.diskState=args=>{if(memberScope)inspectScope();return require('./entry.cjs').diskState(dir,entry,{roomId:memberScope?.room_id||args?.room_id||options.room,memberId:memberScope?.member_id||options.member});};
+  api.mcpContext=()=>memberScope?inspectScope():{env:process.env};
   if(command==='room-ensure'||command==='enter'){const runtime=await api(`/api/runtime${options.room?'?room_id='+encodeURIComponent(options.room):''}`);print({...runtime,restored:true,url:readControl(dir).url,ui_required:false});return;}
   if(command==='wake'){print(await api('/api/runtime/wake',{room_id:options.room,member_id:options.to,caller_member_id:options.member}));return;}
   if(command==='mcp'){const {runMcp}=require('./mcp.cjs');runMcp(api);return;}

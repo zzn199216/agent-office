@@ -193,7 +193,7 @@
         const needsInput = requests.some(message => ['waiting_input','uncertain'].includes(message.status));
         const message = latest.get(member.id) || null;
         const created = message && Date.parse(message.created || message.created_at || '');
-        const occupied=online&&!['offline','stale'].includes(presence.status);
+        const occupied=online&&['online','worker_online'].includes(presence.status);
         return {member,presence,occupied,appearance:appearance(member,input.appearances || input.appearance),secretary:member.id===secretaryId,processing,waiting,needsInput,message,showMessage:occupied&&visible.has(member.id),recent:occupied && Number.isFinite(created) && created <= now && now-created <= 15000};
       }),
       lastMessage: messages.slice().reverse().find(message => !['system','event'].includes(message.kind) && message.sender_id !== 'system' && typeof message.text === 'string' && message.text.trim()) || null

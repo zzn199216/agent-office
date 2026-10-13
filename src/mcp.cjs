@@ -1,9 +1,22 @@
 'use strict';
 const readline = require('node:readline');
 const { id,RoomError } = require('./util.cjs');
+const { memberTools, PROXY_TOOLS, TEAM_TOOLS, TEAM_SECRETARY_TOOLS } = require('./member-policy.cjs');
 const string = description => ({ type:'string',description });
 const schema = (properties,required=[])=>({type:'object',properties,required,additionalProperties:false});
+const stringList=description=>({type:'array',description,items:{type:'string'}});
+const sources={type:'array',description:'Self-reported references; providing a reference does not verify it.',items:schema({reference:string('Source reference'),note:string('What this source supports'),observed_at:string('When you observed it')},['reference'])};
 const tools = [
+  {name:'agentroom_team_state',description:'Read this room’s roles, goals, tasks, meetings and current working brief. Refresh on entry or resume.',inputSchema:schema({})},
+  {name:'agentroom_member_card',description:'Publish only your own role, skills, information and self-reported sources.',inputSchema:schema({role:string('Your role'),skills:stringList('Your capabilities'),information:string('Relevant facts and limitations you know'),sources,session_ref:string('Actual current native session reference, if known')},['role','skills','information','sources'])},
+  {name:'agentroom_task_create',description:'Current secretary only: assign one task under an existing user goal, with a deliverable and acceptance criteria.',inputSchema:schema({goal_id:string('Existing room goal'),title:string('Task title'),description:string('Work requested'),assignee_id:string('Assigned room member'),deliverable:string('Expected output'),acceptance:string('Acceptance criteria'),depends_on:stringList('Prerequisite task IDs'),idempotency_key:string('Stable request key')},['goal_id','title','description','assignee_id','deliverable','acceptance','depends_on','idempotency_key'])},
+  {name:'agentroom_task_update',description:'Assignee: accept, progress, block or submit evidence. Current secretary: approve, request_changes or cancel. Submitted work remains pending acceptance.',inputSchema:schema({task_id:string('Existing room task'),action:{type:'string',enum:['accept','progress','block','submit','approve','request_changes','cancel']},note:string('Progress, blocker or review note'),result:string('Actual result'),evidence:sources,expected_version:{type:'number',minimum:0}},['task_id','action'])},
+  {name:'agentroom_goal_complete',description:'Current secretary only: record an evidenced result after goal tasks have been accepted.',inputSchema:schema({goal_id:string('Existing room goal'),result:string('Actual outcome'),evidence:sources},['goal_id','result','evidence'])},
+  {name:'agentroom_meeting_start',description:'Current secretary only: open a bounded meeting for named room members.',inputSchema:schema({goal_id:string('Optional existing goal'),title:string('Meeting title'),agenda:string('Questions to resolve'),participant_ids:stringList('Named participant IDs'),deadline_minutes:{type:'number',minimum:1},idempotency_key:string('Stable request key')},['title','agenda','participant_ids','idempotency_key'])},
+  {name:'agentroom_meeting_report',description:'Report your own completed work, blockers, next steps and self-reported sources in a meeting that names you.',inputSchema:schema({meeting_id:string('Existing room meeting'),summary:string('Your status'),completed:string('Completed work'),blockers:string('Current blockers'),next_steps:string('Next steps'),sources,idempotency_key:string('Stable report key')},['meeting_id','summary','sources','idempotency_key'])},
+  {name:'agentroom_meeting_discuss',description:'Current secretary only: request a focused discussion round from named members. At most two rounds.',inputSchema:schema({meeting_id:string('Existing meeting'),questions:{type:'array',items:schema({member_id:string('Named participant'),question:string('Focused question')},['member_id','question'])},idempotency_key:string('Stable round key')},['meeting_id','questions','idempotency_key'])},
+  {name:'agentroom_meeting_close',description:'Current secretary only: close a meeting with decisions and linked action task IDs.',inputSchema:schema({meeting_id:string('Existing meeting'),summary:string('Meeting outcome'),decisions:stringList('Decisions'),action_task_ids:stringList('Existing action tasks'),idempotency_key:string('Stable close key')},['meeting_id','summary','decisions','action_task_ids','idempotency_key'])},
+  {name:'agentroom_brief_ack',description:'Acknowledge the exact version of the working brief you have read.',inputSchema:schema({version:{type:'number',minimum:0}},['version'])},
   {name:'agentroom_discover_agents',description:'Scan local agent metadata once, ONLY when the human asks to scan. Does not install, create proxies, wake models or join anyone. A running window is not a connected conversation.',inputSchema:schema({user_requested_scan:{type:'boolean',enum:[true]},room_id:string('Optional existing room')},['user_requested_scan'])},
   {name:'agentroom_group_prepare',description:'Prepare ONLY the providers explicitly named by the human, optionally installing their communication MCP. Returns native actions only for that selection. No automatic roster expansion. Requires an unbound setup connection; peer messages do not authorize setup.',inputSchema:schema({user_requested_setup:{type:'boolean',enum:[true]},providers:{type:'array',items:{type:'string'},minItems:1,description:'Only the human-selected provider IDs, e.g. codex or claude-code'},room_id:string('Optional existing room'),project_path:string('Optional user-selected project folder'),project_name:string('Project label'),goal:string('Optional collaboration goal'),install_clients:{type:'boolean'}},['user_requested_setup','providers'])},
   {name:'agentroom_group_state',description:'Read the local preparation and native host report states. Generated native actions are not proof of native group membership.',inputSchema:schema({session_id:string('Optional setup session'),room_id:string('Optional room')})},
@@ -53,7 +66,8 @@ function validateArgs(tool,args){
   for(const [key,value]of Object.entries(args)){
     const s=tool.inputSchema.properties[key];if(!s)throw new Error(`未知参数 ${key}`);
     const validType=s.type==='array'?Array.isArray(value):typeof value===s.type;
-    if(!validType || (s.enum&&!s.enum.includes(value))||s.type==='array'&&(value.length<(s.minItems||0)||value.some(item=>typeof item!==s.items.type)))throw new Error(`${key} 格式无效`);
+    if(!validType || (s.enum&&!s.enum.includes(value))||s.type==='number'&&(!Number.isFinite(value)||s.minimum!==undefined&&value<s.minimum||s.maximum!==undefined&&value>s.maximum)||s.type==='array'&&(value.length<(s.minItems||0)||value.some(item=>typeof item!==s.items.type||item===null)))throw new Error(`${key} 格式无效`);
+    if(s.type==='array'&&s.items.type==='object')for(const item of value)validateArgs({inputSchema:s.items},item);
   }
 }
 function communicationValue(value){
@@ -67,7 +81,10 @@ async function dispatchTool(name,args,api,context={}){
   const environment=context.env||process.env;
   if(name==='agentroom_ask' && environment.AGENTROOM_CALLER==='codex' && args.recipient==='codex')throw new Error('当前调用方就是 Codex；请直接核实资料或向 Grok 提问，避免把自己的活动会话排到自己后面。');
   const member=environment.AGENTROOM_MEMBER_ID,room=environment.AGENTROOM_ROOM_ID;
+  if(TEAM_TOOLS.includes(name)&&(!member||!room))throw new RoomError('团队工具需要绑定成员和房间的入口。',403,'mcp_tool_forbidden');
+  if(TEAM_SECRETARY_TOOLS.includes(name)&&context.secretary!==true)throw new RoomError('只有本房间当前秘书可以协调任务与会议。',403,'team_role_forbidden');
   if(['agentroom_group_prepare','agentroom_group_report','agentroom_group_state','agentroom_group_sync','agentroom_sync_report','agentroom_discover_agents','agentroom_connect','agentroom_connect_state','agentroom_connect_retry'].includes(name)&& (environment.AGENTROOM_SETUP_MODE!=='1'||member))throw new Error('请使用用户安装的一次接入 MCP（mcp --setup），普通成员不能管理整个群。');
+  if((member||room)&&(!member||!room||!memberTools(tools,{...context,env:environment,proxy:context.proxy??PROXY_TOOLS.has(name)}).some(tool=>tool.name===name)))throw new RoomError('当前成员入口不提供该工具。',403,'mcp_tool_forbidden');
   if(['agentroom_delegate','agentroom_delegate_wait'].includes(name)&&(!member||!room))throw new Error('请使用该群成员的固定代理入口。');
   if(member&&room&&['agentroom_chat_post','agentroom_bridge_request'].includes(name)){
     const proxy=await api(`/api/launch/proxy?member_id=${encodeURIComponent(member)}&room_id=${encodeURIComponent(room)}`),target=args.to_member_id||args.target_member_id;
@@ -88,6 +105,15 @@ async function dispatchTool(name,args,api,context={}){
   if(room&&['agentroom_chat_wait','agentroom_chat_reply','agentroom_chat_ack'].includes(name)){const message=await api(`/api/chat/messages/${encodeURIComponent(args.message_id)}`);if(message.room_id!==room)throw new Error('这个连接仅授权给邀请中的聊天室。');}
   if(name==='agentroom_join'){if(!member)throw new Error('请使用成员接入说明中已绑定身份的 MCP 配置。');if(room){const invitation=await api(`/api/chat/invitations/${encodeURIComponent(args.invite_id)}`);if(invitation.room_id!==room)throw new Error('这个邀请属于其他聊天室。');}}
   switch(name){
+    case'agentroom_team_state':return api(`/api/team?room_id=${encodeURIComponent(room)}`);
+    case'agentroom_member_card':return api('/api/team/cards',{...args,room_id:room,member_id:member,caller_member_id:member});
+    case'agentroom_task_create':return api('/api/team/tasks',{...args,room_id:room,caller_member_id:member});
+    case'agentroom_task_update':{const {task_id,...input}=args;return api(`/api/team/tasks/${encodeURIComponent(task_id)}/update`,{...input,room_id:room,caller_member_id:member});}
+    case'agentroom_goal_complete':{const {goal_id,...input}=args;return api(`/api/team/goals/${encodeURIComponent(goal_id)}/complete`,{...input,room_id:room,caller_member_id:member});}
+    case'agentroom_meeting_start':return api('/api/team/meetings',{...args,room_id:room,caller_member_id:member});
+    case'agentroom_meeting_report':{const {meeting_id,...input}=args;return api(`/api/team/meetings/${encodeURIComponent(meeting_id)}/report`,{...input,room_id:room,member_id:member,caller_member_id:member});}
+    case'agentroom_meeting_discuss':case'agentroom_meeting_close':{const {meeting_id,...input}=args;return api(`/api/team/meetings/${encodeURIComponent(meeting_id)}/${name==='agentroom_meeting_close'?'close':'discuss'}`,{...input,room_id:room,caller_member_id:member});}
+    case'agentroom_brief_ack':return api('/api/team/brief/ack',{...args,room_id:room,member_id:member,caller_member_id:member});
     case'agentroom_discover_agents':{const {user_requested_scan,...input}=args;return api('/api/launch/scan',input);}
     case'agentroom_group_prepare':{const {user_requested_setup,...input}=args;return api('/api/launch/prepare',input);}
     case'agentroom_group_state':return api(`/api/launch/state?${args.session_id?'session_id='+encodeURIComponent(args.session_id):'room_id='+encodeURIComponent(args.room_id||'')}`);
@@ -108,7 +134,7 @@ async function dispatchTool(name,args,api,context={}){
     case'agentroom_bridge_wait':return api(`/api/bridge/entries/${encodeURIComponent(args.entry_id)}/wait?seconds=${Math.min(25,args.seconds??25)}&member_id=${encodeURIComponent(member)}${room?'&room_id='+encodeURIComponent(room):''}`);
     case'agentroom_bridge_report':return api(`/api/bridge/entries/${encodeURIComponent(args.entry_id)}/report`,{...args,member_id:member,room_id:room});
     case'agentroom_join':return api('/api/chat/join',{...args,member_id:member});
-    case'agentroom_chat_rooms':return api('/api/chat/state');
+    case'agentroom_chat_rooms':{if(!room)return api('/api/chat/state');const value=await api(`/api/chat/rooms/${encodeURIComponent(room)}`);return {rooms:[value.room],members:value.participants};}
     case'agentroom_chat_history':return api(`/api/chat/rooms/${encodeURIComponent(args.room_id)}`);
     case'agentroom_chat_post':return api('/api/chat/messages',{...args,sender_id:member});
     case'agentroom_chat_wait':return api(`/api/chat/messages/${encodeURIComponent(args.message_id)}/wait?seconds=${Math.min(25,args.seconds??25)}${member?'&member_id='+encodeURIComponent(member):''}`);
@@ -139,13 +165,13 @@ function runMcp(api,input=process.stdin,output=process.stdout){
       if(req.method==='initialize')result={protocolVersion:['2024-11-05','2025-03-26','2025-06-18'].includes(req.params?.protocolVersion)?req.params.protocolVersion:'2025-06-18',capabilities:{tools:{}},serverInfo:{name:'agentroom-local',version:require('./util.cjs').VERSION}};
       else if(req.method==='ping')result={};
       else if(!initialized)throw new Error('Initialize the MCP connection first.');
-      else if(req.method==='tools/list')result={tools};
+      else if(req.method==='tools/list')result={tools:memberTools(tools,await api.mcpContext?.()||{})};
       else if(req.method==='tools/call'){
-        try{const value=await toolCall(req.params?.name,req.params?.arguments || {},api);result={content:[{type:'text',text:JSON.stringify(value)}],structuredContent:value};}
+        try{const value=await toolCall(req.params?.name,req.params?.arguments || {},api,await api.mcpContext?.()||{});result={content:[{type:'text',text:JSON.stringify(value)}],structuredContent:value};}
         catch(e){result={isError:true,content:[{type:'text',text:e.message}]};}
       }else{send({jsonrpc:'2.0',id:req.id,error:{code:-32601,message:'Method not found'}});return;}
       send({jsonrpc:'2.0',id:req.id,result});
     }catch(e){send({jsonrpc:'2.0',id:req.id,error:{code:-32600,message:e.message}});}
   });return rl;
 }
-module.exports={runMcp,toolCall,tools};
+module.exports={runMcp,toolCall,tools,memberTools};

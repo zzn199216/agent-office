@@ -51,6 +51,42 @@ class ChatStore {
       );
       CREATE INDEX IF NOT EXISTS chat_messages_room ON chat_messages(room_id,seq);
       CREATE INDEX IF NOT EXISTS chat_messages_inbox ON chat_messages(to_member_id,status,seq);
+      CREATE TABLE IF NOT EXISTS chat_notifications (
+        message_id TEXT PRIMARY KEY REFERENCES chat_messages(id), status TEXT NOT NULL,
+        error TEXT, created TEXT NOT NULL, updated TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS chat_reconciliations (
+        id TEXT PRIMARY KEY, room_id TEXT NOT NULL REFERENCES chat_rooms(id),
+        subject_type TEXT NOT NULL, subject_id TEXT NOT NULL, idempotency_key TEXT NOT NULL,
+        body_hash TEXT NOT NULL, record TEXT NOT NULL, created TEXT NOT NULL,
+        UNIQUE(subject_type,subject_id,idempotency_key)
+      );
+      CREATE TABLE IF NOT EXISTS chat_exports (
+        room_id TEXT PRIMARY KEY REFERENCES chat_rooms(id), revision INTEGER NOT NULL,
+        exported_revision INTEGER NOT NULL DEFAULT 0
+      );
+      CREATE TRIGGER IF NOT EXISTS chat_export_message_insert AFTER INSERT ON chat_messages BEGIN
+        INSERT INTO chat_exports(room_id,revision) VALUES(NEW.room_id,1)
+        ON CONFLICT(room_id) DO UPDATE SET revision=revision+1;
+      END;
+      CREATE TRIGGER IF NOT EXISTS chat_export_message_update AFTER UPDATE ON chat_messages BEGIN
+        INSERT INTO chat_exports(room_id,revision) VALUES(NEW.room_id,1)
+        ON CONFLICT(room_id) DO UPDATE SET revision=revision+1;
+      END;
+      CREATE TRIGGER IF NOT EXISTS chat_export_room_insert AFTER INSERT ON chat_rooms BEGIN
+        INSERT OR IGNORE INTO chat_exports(room_id,revision) VALUES(NEW.id,1);
+      END;
+      CREATE TRIGGER IF NOT EXISTS chat_export_room_update AFTER UPDATE OF title,project_id ON chat_rooms BEGIN
+        INSERT INTO chat_exports(room_id,revision) VALUES(NEW.id,1)
+        ON CONFLICT(room_id) DO UPDATE SET revision=revision+1;
+      END;
+      CREATE TRIGGER IF NOT EXISTS chat_export_member_name AFTER UPDATE OF name ON chat_members
+      WHEN OLD.name<>NEW.name BEGIN
+        INSERT INTO chat_exports(room_id,revision)
+        SELECT DISTINCT room_id,1 FROM chat_messages WHERE sender_id=NEW.id OR to_member_id=NEW.id
+        ON CONFLICT(room_id) DO UPDATE SET revision=revision+1;
+      END;
+      INSERT OR IGNORE INTO chat_exports(room_id,revision) SELECT id,1 FROM chat_rooms;
     `);
     this.hasRoomTombstones = true;
   }
@@ -117,6 +153,7 @@ class ChatStore {
       const busy=()=>{throw new RoomError('聊天室仍有待办、正在处理或结果待核对的任务。请先处理或停止待办任务，并核对不确定的结果，再删除聊天室。',409,'room_busy');};
       if(this.db.prepare("SELECT 1 FROM chat_messages WHERE room_id=? AND (status NOT IN ('posted','answered','completed','failed','cancelled','consumed') OR status='consumed' AND kind NOT IN ('reply','acknowledgment')) LIMIT 1").get(roomId))busy();
       if(this.db.prepare("SELECT 1 FROM chat_bindings WHERE room_id=? AND binding_state IN ('creating','creation_uncertain','outcome_uncertain','resume_uncertain') LIMIT 1").get(roomId))busy();
+      if(this.db.prepare("SELECT 1 FROM chat_notifications n JOIN chat_messages m ON m.id=n.message_id WHERE m.room_id=? AND n.status='sending' LIMIT 1").get(roomId))busy();
       if(hasTable('launch_sessions')&&this.db.prepare("SELECT 1 FROM launch_sessions WHERE room_id=? AND status='preparing' LIMIT 1").get(roomId))busy();
       if(hasTable('onboarding_runs')&&this.db.prepare("SELECT 1 FROM onboarding_runs WHERE room_id=? AND status='running' LIMIT 1").get(roomId))busy();
       if(hasTable('bridge_entries')&&this.db.prepare("SELECT 1 FROM bridge_entries e JOIN bridge_bindings b ON b.id=e.binding_id WHERE b.room_id=? AND e.status NOT IN ('answered','delivered','failed','cancelled') LIMIT 1").get(roomId))busy();
@@ -159,12 +196,33 @@ class ChatStore {
   }
   messages(roomId, options = {}) {
     this.room(roomId);
+    if(options.before_seq!==undefined){
+      if(options.after_seq!==undefined)throw new RoomError('不能同时向前和向后分页。');
+      return this.messagePage(roomId,options).messages;
+    }
     const after = options.after_seq === undefined ? 0 : Number(options.after_seq);
     const limit = options.limit === undefined ? 200 : Number(options.limit);
     if (!Number.isSafeInteger(after) || after < 0 || !Number.isInteger(limit) || limit < 1 || limit > 1000) throw new RoomError('消息分页参数无效。');
     return this.db.prepare('SELECT * FROM chat_messages WHERE room_id=? AND seq>? ORDER BY seq LIMIT ?').all(roomId, after, limit).map(row => this.publicMessage(row));
   }
-  publicMessage(row) { const { idempotency_key, body_hash, ...visible } = row; return visible; }
+  messagePage(roomId, options = {}) {
+    this.room(roomId);
+    const before=options.before_seq===undefined?null:Number(options.before_seq),limit=options.limit===undefined?200:Number(options.limit);
+    if(before!==null&&(!Number.isSafeInteger(before)||before<1)||!Number.isInteger(limit)||limit<1||limit>1000)throw new RoomError('消息分页参数无效。');
+    const rows=this.db.prepare(`SELECT * FROM chat_messages WHERE room_id=? ${before===null?'':'AND seq<?'} ORDER BY seq DESC LIMIT ?`).all(...(before===null?[roomId,limit+1]:[roomId,before,limit+1]));
+    const hasMore=rows.length>limit,messages=rows.slice(0,limit).reverse().map(row=>this.publicMessage(row));
+    return {messages,pagination:{limit,before_seq:before,has_more:hasMore,next_before_seq:hasMore?messages[0].seq:null}};
+  }
+  publicMessage(row) {
+    const { idempotency_key, body_hash, ...visible } = row;
+    // Only persisted scheduler provenance can label a message as coordination.
+    // User text and caller-supplied message kinds are never trusted for this.
+    if(row.sender_id==='user'&&this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='team_outbox'").get()) {
+      const event=this.db.prepare('SELECT e.record_id,e.event_key,r.kind,r.body FROM team_outbox e JOIN team_records r ON r.id=e.record_id WHERE e.room_id=? AND e.recipient_id=? AND (e.message_id=? OR e.id=?) LIMIT 1').get(row.room_id,row.to_member_id,row.id,idempotency_key?.startsWith('team:')?idempotency_key.slice(5):'');
+      if(event){const record=JSON.parse(event.body),labels={goal:'目标安排',task:'任务安排',meeting:'会议安排'};visible.coordination={record_id:event.record_id,kind:event.kind,title:(event.event_key.startsWith('brief:')?'共同简报':labels[event.kind]||'协作安排')+'：'+(record.title||'团队协作')};}
+    }
+    return visible;
+  }
   message(messageId) {
     const row = this.db.prepare('SELECT * FROM chat_messages WHERE id=?').get(messageId);
     if (!row) throw new RoomError('消息不存在。', 404);
@@ -235,11 +293,58 @@ class ChatStore {
   }
   recovery() {
     return this.transaction(() => {
-      const active = this.db.prepare("UPDATE chat_messages SET status='uncertain',error='处理期间程序结束，请先核对原生会话，避免重复执行。',updated=? WHERE status='processing'").run(now());
+      const active = this.db.prepare("UPDATE chat_messages SET status='uncertain',error='处理或等待批准期间程序结束，请先核对原生会话，避免重复执行。',updated=? WHERE status IN ('processing','waiting_input')").run(now());
+      this.db.prepare("UPDATE chat_messages SET status='uncertain',error='唤醒通知结果待核对，没有自动再次通知。',updated=? WHERE status IN ('queued','delivered') AND id IN (SELECT message_id FROM chat_notifications WHERE status='sending')").run(now());
+      this.db.prepare("UPDATE chat_notifications SET status='uncertain',error='发送通知期间程序结束，请核对接收方；没有自动重发。',updated=? WHERE status='sending'").run(now());
       this.db.prepare("UPDATE chat_bindings SET binding_state='creation_uncertain',updated=? WHERE binding_state='creating'").run(now());
       return Number(active.changes);
     });
   }
+  notification(messageId) { return this.db.prepare('SELECT * FROM chat_notifications WHERE message_id=?').get(messageId)||null; }
+  claimNotification(messageId) {
+    return this.transaction(()=>{
+      if(this.message(messageId).status!=='queued')return false;
+      const stamp=now();
+      return Number(this.db.prepare("INSERT OR IGNORE INTO chat_notifications(message_id,status,created,updated) VALUES(?,'sending',?,?)").run(messageId,stamp,stamp).changes)===1;
+    });
+  }
+  finishNotification(messageId,status,error=null) {
+    if(!['accepted','uncertain'].includes(status))throw new RoomError('通知状态无效。');
+    return this.transaction(()=>{
+      const detail=error==null?null:redact(error).slice(0,2000);
+      this.db.prepare("UPDATE chat_notifications SET status=?,error=?,updated=? WHERE message_id=? AND status='sending'").run(status,detail,now(),messageId);
+      const message=this.message(messageId);
+      // A recipient may have read or answered during the HTTP request.
+      if(message.status==='queued')this.updateMessage(messageId,{status:status==='accepted'?'delivered':'uncertain',error:detail});
+      return this.notification(messageId);
+    });
+  }
+  hasDependencyPath(fromMember,toMember,excludeMessageId='') {
+    return !!this.db.prepare(`WITH RECURSIVE reachable(member_id) AS (
+      SELECT ? UNION SELECT m.to_member_id FROM chat_messages m JOIN reachable r ON m.sender_id=r.member_id
+      WHERE m.id<>? AND m.to_member_id IS NOT NULL AND m.sender_id<>'user'
+      AND m.kind NOT IN ('reply','acknowledgment') AND m.status IN ('queued','processing','waiting_input','delivered','consumed')
+    ) SELECT 1 FROM reachable WHERE member_id=? LIMIT 1`).get(fromMember,excludeMessageId,toMember);
+  }
+  evidence(input) {
+    if(!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).some(key=>!['summary','source','observed_at'].includes(key)))throw new RoomError('请提供核对说明、证据来源和实际核对时间。',400,'reconciliation_evidence_required');
+    const observed=this.date(input.observed_at,'核对时间');
+    if(Date.parse(observed)>Date.now()+60000)throw new RoomError('核对时间不能在未来。',400,'reconciliation_evidence_invalid');
+    return {summary:redact(cleanText(input.summary,4000,'核对说明')),source:redact(cleanText(input.source,2000,'证据来源')),observed_at:observed};
+  }
+  reconciliation(subjectType,subjectId,key) {
+    const row=this.db.prepare('SELECT * FROM chat_reconciliations WHERE subject_type=? AND subject_id=? AND idempotency_key=?').get(subjectType,subjectId,key);
+    return row?{...row,record:JSON.parse(row.record)}:null;
+  }
+  saveReconciliation(roomId,subjectType,subjectId,key,bodyHash,record) {
+    const value={id:id(),room_id:roomId,subject_type:subjectType,subject_id:subjectId,idempotency_key:key,body_hash:bodyHash,record:JSON.stringify(record),created:now()};
+    this.db.prepare('INSERT INTO chat_reconciliations VALUES(:id,:room_id,:subject_type,:subject_id,:idempotency_key,:body_hash,:record,:created)').run(value);
+    return {id:value.id,...record,created:value.created};
+  }
+  pendingExports() {
+    return this.db.prepare('SELECT e.room_id,e.revision FROM chat_exports e WHERE e.revision>e.exported_revision AND NOT EXISTS(SELECT 1 FROM chat_room_tombstones t WHERE t.room_id=e.room_id)').all();
+  }
+  exported(roomId,revision) { this.db.prepare('UPDATE chat_exports SET exported_revision=? WHERE room_id=? AND exported_revision<?').run(revision,roomId,revision); }
   date(value, label) {
     const date = typeof value === 'number' ? new Date(value) : new Date(cleanText(value, 100, label));
     if (Number.isNaN(date.valueOf())) throw new RoomError(`${label}无效。`);

@@ -15,28 +15,7 @@ function readEntry(file){
 function diskState(dir,entry,scope={}){const disk=openDisk(dir,{readOnly:true});try{if(entry)disk.resume.inspect(entry.card);return {...disk.runtime.offlineSnapshot(entry?.card.room_id||scope.roomId,entry?.card.member_id||scope.memberId),data_directory:fs.realpathSync.native(dir),transport:'disk',ui_required:false};}finally{disk.close();}}
 function acceptEntry(entry){const disk=openDisk(entry.dir);try{const result=disk.resume.accept(entry.card);disk.runtime.heartbeat(result.member_id,{session_ref:`entry:${entry.card.credential_id}`});return result;}finally{disk.close();}}
 function assertEntryScope(disk,card,route,input){
-  const url=new URL(route,'http://127.0.0.1'),room=card.room_id,member=card.member_id,p=url.pathname;
-  if(/^\/api\/chat\/rooms\/[^/]+$/.test(p)&&input!==undefined)throw new RoomError('删除或管理聊天室只能通过本机控制界面进行。',403,'resume_scope_mismatch');
-  if(p.startsWith('/api/connection/'))throw new RoomError('连接诊断属于本机控制界面，成员恢复入口不提供管理诊断。',403,'resume_scope_mismatch');
-  if(input?.room_id&&input.room_id!==room||input?.sender_id&&input.sender_id!==member||input?.caller_member_id&&input.caller_member_id!==member||url.searchParams.has('room_id')&&url.searchParams.get('room_id')!==room)throw new RoomError('请求超出了恢复入口的房间或成员授权。',403,'resume_scope_mismatch');
-  const target=p.match(/^\/api\/chat\/(rooms|messages|invitations)\/([a-f0-9-]{36})/i);
-  if(target){const actual=target[1]==='rooms'?target[2]:target[1]==='messages'?disk.chat.message(target[2]).room_id:disk.chat.invite(target[2]).room_id;if(actual!==room)throw new RoomError('这条记录属于另一个聊天室。',403,'resume_scope_mismatch');}
-  const bridge=p.match(/^\/api\/bridge\/entries\/([a-f0-9-]{36})/i);if(bridge){const b=disk.store.db.prepare('SELECT b.room_id,b.member_id FROM bridge_entries e JOIN bridge_bindings b ON b.id=e.binding_id WHERE e.id=?').get(bridge[1]);if(!b||b.room_id!==room||b.member_id!==member)throw new RoomError('桥接结果不属于当前恢复入口。',403,'resume_scope_mismatch');}
-  const hasProxies=disk.store.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='launch_proxies'").get();
-  const proxy=hasProxies?disk.store.db.prepare('SELECT backend_member_id FROM launch_proxies WHERE room_id=? AND proxy_member_id=?').get(room,member):null;
-  if(p==='/api/launch/state'||p==='/api/launch/proxy'&&(url.searchParams.get('member_id')!==member||url.searchParams.get('room_id')!==room))throw new RoomError('恢复入口只能读取自己的代理，不用于群初始化管理。',403,'resume_scope_mismatch');
-  if(proxy){
-    if(input?.to_member_id&&input.to_member_id!==proxy.backend_member_id||input?.target_member_id&&input.target_member_id!==proxy.backend_member_id)throw new RoomError('群内代理只连接其绑定的本机成员。',403,'proxy_target_mismatch');
-    if(target?.[1]==='messages'){const message=disk.chat.message(target[2]);if(message.sender_id!==member&&message.to_member_id!==member)throw new RoomError('这条消息不属于当前代理。',403,'proxy_target_mismatch');}
-  }
-  if(input){
-    const ownHeartbeat=p===`/api/chat/members/${member}/heartbeat`,messageOperation=/^\/api\/chat\/messages\/[a-f0-9-]{36}\/(reply|ack|cancel)$/.test(p),bridgeReport=/^\/api\/bridge\/entries\/[a-f0-9-]{36}\/report$/.test(p);
-    const delegate=proxy&&['/api/launch/delegate','/api/launch/wait'].includes(p);
-    if(!['/api/resume/accept','/api/chat/messages','/api/runtime/wake','/api/bridge/request'].includes(p)&&!ownHeartbeat&&!messageOperation&&!bridgeReport&&!delegate)throw new RoomError('恢复入口仅用于当前成员的房间协作；管理配置请从本机控制界面操作。',403,'resume_scope_mismatch');
-    if(delegate&&input.member_id!==member)throw new RoomError('代理身份不匹配。',403,'proxy_target_mismatch');
-    if(p==='/api/resume/accept'&&(input.card?.instance_id!==card.instance_id||input.card?.room_id!==room||input.card?.member_id!==member))throw new RoomError('恢复凭证身份不匹配。',403,'resume_scope_mismatch');
-    if(messageOperation){const message=disk.chat.message(target[2]);if(message.sender_id!==member&&message.to_member_id!==member)throw new RoomError('不能处理未交给当前成员的消息。',403,'resume_scope_mismatch');}
-  }
+  return require('./member-policy.cjs').assertMemberRoute(disk,card,route,input);
 }
 class RoomEntry {
   constructor(service){this.service=service;}

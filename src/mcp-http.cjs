@@ -1,6 +1,7 @@
 'use strict';
 const crypto = require('node:crypto');
 const { tools, toolCall } = require('./mcp.cjs');
+const { memberTools } = require('./member-policy.cjs');
 const { assertEntryScope } = require('./entry.cjs');
 const { CARD_SCHEMA, CARD_VERSION } = require('./resume.cjs');
 const { VERSION, RoomError, ownCommand, readableError } = require('./util.cjs');
@@ -8,13 +9,6 @@ const { VERSION, RoomError, ownCommand, readableError } = require('./util.cjs');
 const PROTOCOLS = ['2025-03-26', '2025-06-18'];
 const MAX_BODY = 64 * 1024;
 const SESSION_LEASE = 30 * 60 * 1000;
-const ROOM_TOOLS = new Set([
-  'agentroom_room_state', 'agentroom_room_ensure', 'agentroom_member_wake', 'agentroom_heartbeat',
-  'agentroom_chat_history', 'agentroom_chat_post', 'agentroom_chat_wait', 'agentroom_chat_inbox',
-  'agentroom_chat_reply', 'agentroom_chat_ack', 'agentroom_bridge_request', 'agentroom_bridge_result',
-  'agentroom_bridge_wait', 'agentroom_bridge_report'
-]);
-const PROXY_TOOLS = new Set(['agentroom_delegate', 'agentroom_delegate_wait']);
 const UUID = '[a-f0-9-]{36}';
 
 // This URL is a local member credential. Keep the generated config in a local
@@ -54,33 +48,11 @@ function createMcpHttp(service, options = {}) {
     return card;
   }
   function isProxy(card) { return !!service.launch.lookup(card.member_id, card.room_id); }
-  function allowedTools(card) { const proxy = isProxy(card); return tools.filter(tool => ROOM_TOOLS.has(tool.name) || proxy && PROXY_TOOLS.has(tool.name)); }
+  function contextFor(card) { return { env: { AGENTROOM_MEMBER_ID: card.member_id, AGENTROOM_ROOM_ID: card.room_id, AGENTROOM_SETUP_MODE: '0', AGENTROOM_CALLER: service.chat.store.member(card.member_id).name }, proxy: isProxy(card), allowJoin: false, secretary: service.secretary.get(card.room_id).member_id === card.member_id }; }
+  function allowedTools(card) { return memberTools(tools, contextFor(card)); }
   function assertRoute(card, route, input) {
-    service.resume.inspect(card); // Recheck revocation and membership on every call.
+    service.resume.inspect(card);
     assertEntryScope(disk, card, route, input);
-    const url = new URL(route, 'http://127.0.0.1'), p = url.pathname, q = url.searchParams;
-    const ownRoom = q.get('room_id') === card.room_id, ownMember = q.get('member_id') === card.member_id;
-    let permitted;
-    if (input === undefined) {
-      permitted = p === '/api/runtime' && ownRoom && ownMember ||
-        p === '/api/launch/proxy' && ownRoom && ownMember ||
-        p === `/api/chat/rooms/${card.room_id}` ||
-        p === '/api/chat/inbox' && ownRoom && ownMember ||
-        new RegExp(`^/api/chat/messages/${UUID}$`, 'i').test(p) ||
-        new RegExp(`^/api/chat/messages/${UUID}/wait$`, 'i').test(p) && ownMember ||
-        new RegExp(`^/api/bridge/entries/${UUID}(?:/wait)?$`, 'i').test(p) && ownRoom && ownMember;
-    } else {
-      permitted = p === `/api/chat/members/${card.member_id}/heartbeat` ||
-        p === '/api/runtime/wake' && input.room_id === card.room_id && input.caller_member_id === card.member_id ||
-        p === '/api/chat/messages' && input.room_id === card.room_id && input.sender_id === card.member_id ||
-        new RegExp(`^/api/chat/messages/${UUID}/(?:reply|ack)$`, 'i').test(p) && input.member_id === card.member_id ||
-        p === '/api/bridge/request' && input.room_id === card.room_id && input.member_id === card.member_id ||
-        new RegExp(`^/api/bridge/entries/${UUID}/report$`, 'i').test(p) && input.room_id === card.room_id && input.member_id === card.member_id ||
-        ['/api/launch/delegate', '/api/launch/wait'].includes(p) && isProxy(card) && input.room_id === card.room_id && input.member_id === card.member_id;
-      if (p === '/api/runtime/wake') service.chat.store.requireParticipant(card.room_id, input.member_id);
-      if (['/api/chat/messages', '/api/bridge/request'].includes(p) && (input.to_member_id || input.target_member_id)) service.chat.store.requireParticipant(card.room_id, input.to_member_id || input.target_member_id);
-    }
-    if (!permitted) throw new RoomError('MCP 入口只授权当前成员的房间工具。', 403, 'mcp_scope_mismatch');
   }
   function boundApi(card) {
     return async (route, input) => {
@@ -151,8 +123,7 @@ function createMcpHttp(service, options = {}) {
           const name = request.params?.name, args = request.params?.arguments ?? {};
           if (!allowedTools(card).some(tool => tool.name === name)) throw new RoomError('这个成员入口不提供该工具。', 403, 'mcp_tool_forbidden');
           if (args?.room_id && args.room_id !== card.room_id) throw new RoomError('这个入口只授权给原聊天室。', 403, 'resume_scope_mismatch');
-          const member = service.chat.store.member(card.member_id);
-          const value = await toolCall(name, args, boundApi(card), { env: { AGENTROOM_MEMBER_ID: card.member_id, AGENTROOM_ROOM_ID: card.room_id, AGENTROOM_SETUP_MODE: '0', AGENTROOM_CALLER: member.name } });
+          const value = await toolCall(name, args, boundApi(card), contextFor(card));
           result = { content: [{ type: 'text', text: JSON.stringify(value) }], structuredContent: value };
         } catch (error) {
           const message = readableError(error).replaceAll(card.secret, '[credential]');

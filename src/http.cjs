@@ -60,6 +60,7 @@ function createServer(service,{token,port=47831,onShutdown}={}) {
     try {
       if(service.closing&&req.method==='POST'&&pathname!=='/api/shutdown')throw new RoomError('服务正在停止，新的操作尚未开始。',503,'service_stopping');
       if(req.method==='GET' && pathname==='/api/state')return json(res,service.snapshot());
+      if(req.method==='GET' && pathname==='/api/team')return json(res,service.team.snapshot(new URL(req.url,'http://127.0.0.1').searchParams.get('room_id')));
       if(req.method==='GET'&&pathname==='/api/connection/doctor'){const q=new URL(req.url,'http://127.0.0.1').searchParams;return json(res,require('./connection-doctor.cjs').connectionDoctor(service,{room_id:q.get('room_id'),member_id:q.get('member_id')},{online:true}));}
       if(req.method==='GET'&&pathname==='/api/appearance')return json(res,service.appearance.get(new URL(req.url,'http://127.0.0.1').searchParams.get('member_id')));
       if(req.method==='GET'&&pathname==='/api/office')return json(res,service.office.get(new URL(req.url,'http://127.0.0.1').searchParams.get('room_id')));
@@ -85,14 +86,14 @@ function createServer(service,{token,port=47831,onShutdown}={}) {
       }
       const invitation=pathname.match(/^\/api\/chat\/invitations\/([a-f0-9-]{36})$/i);if(req.method==='GET'&&invitation)return json(res,service.chat.store.invite(invitation[1]));
       if(req.method==='GET' && pathname==='/api/chat/inbox'){const q=new URL(req.url,`http://${req.headers.host}`).searchParams;return json(res,service.chat.inbox(q.get('member_id'),q.get('room_id')||undefined));}
-      const chat=pathname.match(/^\/api\/chat\/(rooms|members|messages)\/([a-f0-9-]{36})(?:\/(join|leave|connect|setup|wait|reply|cancel|ack|heartbeat|grok-configure))?$/i);
+      const chat=pathname.match(/^\/api\/chat\/(rooms|members|messages)\/([a-f0-9-]{36})(?:\/(join|leave|connect|setup|wait|reply|cancel|ack|heartbeat|grok-configure|reconcile))?$/i);
       if(req.method==='DELETE'&&pathname.startsWith('/api/chat/rooms/')){
         const route=new URL(req.url,'http://127.0.0.1'),input=await body(req);
         if(!chat||chat[1]!=='rooms'||chat[3]||route.search||!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).length)throw new RoomError('删除聊天室的请求范围无效。',400,'room_delete_input_invalid');
         return json(res,require('./room-lifecycle.cjs').deleteRoom(service,chat[2]));
       }
       if(req.method==='GET' && chat){const q=new URL(req.url,`http://${req.headers.host}`).searchParams;
-        if(chat[1]==='rooms')return json(res,service.chat.room(chat[2]));
+        if(chat[1]==='rooms')return json(res,service.chat.room(chat[2],{...(q.has('before_seq')?{before_seq:Number(q.get('before_seq'))}:{}),...(q.has('limit')?{limit:Number(q.get('limit'))}:{})}));
         if(chat[1]==='members')return json(res,chat[3]==='setup'?service.chat.setup(chat[2],q.get('room_id')):service.chat.publicMember(service.chat.store.member(chat[2])));
         if(chat[3]==='wait')return json(res,await service.chat.wait(chat[2],q.get('seconds')||25,q.get('member_id')));return json(res,service.chat.store.message(chat[2]));
       }
@@ -112,6 +113,26 @@ function createServer(service,{token,port=47831,onShutdown}={}) {
       if(req.method!=='POST')throw new RoomError('没有这个接口。',404);
       const input=await body(req,pathname==='/api/office'?1000000:pathname==='/api/appearance'?360000:150000);
       if(service.closing&&pathname!=='/api/shutdown')throw new RoomError('服务正在停止，新的操作尚未开始。',503,'service_stopping');
+      const teamRoute=pathname.match(/^\/api\/team\/(tasks|goals|meetings)\/([a-f0-9-]{36})\/(update|complete|cancel|report|discuss|close)$/i);
+      if(pathname==='/api/team/cards')return json(res,service.team.card(input));
+      if(pathname==='/api/team/goals')return json(res,service.team.goal(input),202);
+      if(pathname==='/api/team/tasks')return json(res,service.team.createTask(input),202);
+      if(pathname==='/api/team/meetings')return json(res,service.team.meeting(input),202);
+      if(pathname==='/api/team/schedule')return json(res,service.team.schedule(input));
+      if(pathname==='/api/team/brief/ack')return json(res,service.team.ack(input));
+      if(teamRoute){
+        const type=teamRoute[1],action=teamRoute[3],key=teamRoute[2];
+        if(type==='tasks'&&action==='update')return json(res,service.team.updateTask(key,input));
+        if(type==='goals'&&action==='complete')return json(res,service.team.completeGoal(key,input));
+        if(type==='goals'&&action==='cancel')return json(res,service.team.cancelGoal(key,input));
+        if(type==='meetings'&&action==='report')return json(res,service.team.report(key,input));
+        if(type==='meetings'&&action==='discuss')return json(res,service.team.discuss(key,input));
+        if(type==='meetings'&&action==='close')return json(res,service.team.closeMeeting(key,input));
+        throw new RoomError('协作操作无效。',404);
+      }
+      const bindingReconcile=pathname.match(/^\/api\/chat\/rooms\/([a-f0-9-]{36})\/bindings\/([a-f0-9-]{36})\/reconcile$/i);
+      if(bindingReconcile)return json(res,service.chat.reconcileBinding(bindingReconcile[1],bindingReconcile[2],input));
+      if(chat?.[1]==='messages'&&chat[3]==='reconcile')return json(res,service.chat.reconcile(chat[2],input));
       if(pathname==='/api/appearance')return json(res,service.appearance.set(input));
       if(pathname==='/api/office')return json(res,service.office.set(input));
       if(pathname==='/api/secretary')return json(res,service.secretary.set(input));

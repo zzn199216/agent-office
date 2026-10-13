@@ -77,7 +77,9 @@ class SecretaryManager{
     // ChatManager.post dispatches adapters even for an existing queued message.
     // Read the accepted message instead so a retry cannot resend a notification
     // or a request whose outcome is still uncertain.
-    const message=existing?chat.message(existing.id):this.service.chat.post({room_id:room.id,sender_id:'user',to_member_id:role.member_id,text:SECRETARY_INSTRUCTIONS+'\n\n用户的办公室目标：\n'+redact(goal),kind:'message',idempotency_key:key});
+    const workGoal=this.service.team.tutorialGoal(room.id,redact(goal),key);
+    const message=existing?chat.message(existing.id):this.service.chat.post({room_id:room.id,sender_id:'user',to_member_id:role.member_id,text:SECRETARY_INSTRUCTIONS+'\n\n用户的办公室目标：\n'+redact(goal)+'\n\n'+require('./team.cjs').INSTRUCTIONS+'\nroom_id='+room.id+'\ngoal_id='+workGoal.id,kind:'message',idempotency_key:key});
+    this.service.team.linkTutorialGoal(workGoal,role.member_id,message.id);
     this.service.store.setting('secretary.'+room.id,{member_id:role.member_id,assignment_id:role.assignment_id,goal:redact(goal),request_id:message.id});this.service.changed();
     return {secretary:this.get(room.id),message:chat.message(message.id)};
   }

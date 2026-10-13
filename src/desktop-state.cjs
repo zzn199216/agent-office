@@ -2,6 +2,7 @@
 const fs=require('node:fs'),path=require('node:path');
 const {RoomError,VERSION,livePid,sleep}=require('./util.cjs');
 const {openDisk}=require('./entry.cjs');
+const {readTeamSnapshot}=require('./desktop-team.cjs');
 const ROOM_ID=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 function roomInput(value){if(value!=null&&!ROOM_ID.test(value))throw new RoomError('聊天室标识无效。',400,'desktop_room_invalid');return value||null;}
 function activity(state){
@@ -11,7 +12,7 @@ function activity(state){
 function emptySnapshot(){return {version:VERSION,instance_id:null,runtime:{durable:true,service:{online:false,state:'not_initialized'},rooms:[],members:[]},chat:{rooms:[],members:[],activeMessages:[]},office:{},secretaries:{},activeSetup:{onboarding:0,runtime_installs:0,launch:0},projects:[],discussions:[],activeRequest:null,approvals:[],grok:{configured:false},codex:{connected:false},revision:0,exportError:null};}
 function offlineState(dir,roomId){
   roomId=roomInput(roomId);
-  if(!fs.existsSync(path.join(dir,'room.sqlite')))return {running:false,url:null,initialized:false,busy:activity({}),snapshot:emptySnapshot(),history:null,selected_room_id:null};
+  if(!fs.existsSync(path.join(dir,'room.sqlite')))return {running:false,url:null,initialized:false,busy:activity({}),snapshot:emptySnapshot(),history:null,team:null,selected_room_id:null};
   const disk=openDisk(dir,{readOnly:true});
   try{
     const runtime=disk.runtime.offlineSnapshot(),rooms=disk.chat.rooms(),members=disk.chat.members();
@@ -23,7 +24,7 @@ function offlineState(dir,roomId){
     let history=null;
     if(selected){const room=disk.chat.room(selected),participants=disk.chat.participants(selected).map(member=>({...publicMember(member),native_thread_id:disk.chat.binding(selected,member.id).thread_id})),messages=disk.store.db.prepare('SELECT * FROM chat_messages WHERE room_id=? ORDER BY seq DESC LIMIT 200').all(selected).reverse().map(row=>disk.chat.publicMessage(row));history={room,participants,messages,approvals:[]};}
     const snapshot={...emptySnapshot(),instance_id:runtime.instance_id,runtime,chat:{rooms,members:members.map(publicMember),activeMessages:[]},office:require('./office-settings.cjs').officeSnapshot(disk.store,rooms),secretaries:require('./secretary.cjs').secretarySnapshot(disk.store,disk.chat,disk.runtime,rooms,{offline:true}),projects:disk.store.projects(),discussions:disk.store.discussions(),dataDirectory:dir};
-    return {running:false,url:null,initialized:true,busy:activity({}),snapshot,history,selected_room_id:selected};
+    return {running:false,url:null,initialized:true,busy:activity({}),snapshot,history,team:selected?readTeamSnapshot(disk,selected):null,selected_room_id:selected};
   }finally{disk.close();}
 }
 async function desktopState(dir,input={},options={}){
@@ -35,8 +36,9 @@ async function desktopState(dir,input={},options={}){
     return {...offline,connection_error:'暂时无法联系本机服务。已保存的聊天仍可查看。'};
   }
   if(!offline.initialized||snapshot.instance_id!==offline.snapshot.instance_id||control.instance_id!==snapshot.instance_id)throw new RoomError('本机服务与原聊天室身份不一致，未打开替代实例。',409,'instance_control_mismatch');
-  const selected=roomInput(input.room_id)||snapshot.chat.rooms[0]?.id||null,history=selected?await main.apiCall(dir,'/api/chat/rooms/'+selected,undefined,5000):null;
-  return {running:true,url:control.url,initialized:true,busy:activity(snapshot),snapshot,history,selected_room_id:selected};
+  const selected=roomInput(input.room_id)||snapshot.chat.rooms[0]?.id||null;
+  const [history,team]=selected?await Promise.all([main.apiCall(dir,'/api/chat/rooms/'+selected,undefined,5000),main.apiCall(dir,'/api/team?room_id='+encodeURIComponent(selected),undefined,5000)]):[null,null];
+  return {running:true,url:control.url,initialized:true,busy:activity(snapshot),snapshot,history,team,selected_room_id:selected};
 }
 async function desktopStart(dir,input={},options={}){roomInput(input.room_id);const main=options.main||require('./main.cjs');await main.ensureServer(dir);return desktopState(dir,input,{...options,main});}
 async function desktopStop(dir,input={},options={}){
