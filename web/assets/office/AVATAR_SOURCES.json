@@ -1,137 +1,211 @@
 {
-  "schema_version": 1,
-  "retrieved_on": "2026-10-13",
+  "schema_version": 2,
+  "generated_on": "2026-10-13",
   "runtime_network_required": false,
-  "purpose": "Identify the corresponding agent in the office and chat. These third-party marks are not the Agent Office brand and do not imply endorsement.",
-  "rendering": "Keep the supplied image, aspect ratio and colors; show it as a separate identity image on an original character. User-selected local images take priority.",
-  "license_note": "Public availability or an open-source repository license does not automatically grant rights to a company mark or character. No general commercial-reuse license is claimed for these third-party images. Consult the linked owner's terms before further distribution or promotional use.",
-  "avatars": {
-    "codex": {
-      "providers": [
-        "codex"
-      ],
-      "asset": "/assets/office/avatar-codex.png",
-      "fallback": "/assets/office/logo-codex.svg",
-      "kind": "official_organization_logo_fallback",
-      "label": "OpenAI official organization logo used to identify Codex",
-      "owner": "OpenAI",
-      "source_page": "https://github.com/openai",
-      "source_url": "https://avatars.githubusercontent.com/u/14957082?v=4&s=256",
-      "terms_url": "https://openai.com/brand/",
-      "sha256": "6025a4347a8eaed17e31eaebf7834e33ec4af26cc7f59be586ac59ba5157fa1c",
-      "bytes": 4081,
-      "width": 200,
-      "height": 200
-    },
-    "claude": {
-      "providers": [
-        "claude-code",
-        "claude-desktop"
-      ],
-      "asset": "/assets/office/avatar-claude.png",
-      "fallback": "/assets/office/logo-claude.svg",
-      "kind": "official_product_icon_fallback",
-      "label": "Claude official product icon; not a Clawd mascot illustration",
-      "owner": "Anthropic PBC",
-      "source_page": "https://apps.apple.com/us/app/claude-by-anthropic/id6473753684",
-      "official_referrer": "https://claude.com/product/claude-code",
-      "source_api": "https://itunes.apple.com/lookup?id=6473753684",
-      "source_url": "https://is1-ssl.mzstatic.com/image/thumb/Purple211/v4/d9/c0/df/d9c0df97-6ace-af90-44c9-3a86432c3462/AppIcon-0-0-1x_U007epad-0-1-85-220.png/256x256bb.png",
-      "terms_url": "https://www.anthropic.com/legal/consumer-terms",
-      "sha256": "847116f177b3f6ff7730f857a78a6fa8e863b7074dc8637f62931883d2314a8a",
-      "bytes": 37420,
-      "width": 256,
-      "height": 256
-    },
-    "qwen": {
-      "providers": [
-        "qwen-code",
-        "qwen-desktop"
-      ],
-      "asset": "/assets/office/avatar-qwen.png",
-      "fallback": "/assets/office/logo-qwen.svg",
-      "kind": "official_organization_logo_fallback",
-      "label": "Qwen official organization logo",
-      "owner": "Qwen team, Alibaba Cloud",
-      "source_page": "https://github.com/QwenLM",
-      "source_url": "https://avatars.githubusercontent.com/u/141221163?v=4&s=256",
-      "terms_url": null,
-      "rights_note": "No separate logo redistribution license was confirmed; model and code licenses must not be assumed to license the brand mark.",
-      "sha256": "25869dae20028c631830e273362ece1e54fcc6a2f81ff5399e0f05c62e8fe286",
-      "bytes": 8919,
-      "width": 256,
-      "height": 256
-    },
-    "grok": {
-      "providers": [
-        "grok",
-        "grok-host",
-        "grok-proxy"
-      ],
-      "asset": "/assets/office/avatar-grok.png",
-      "fallback": "/assets/office/logo-grok.svg",
-      "kind": "official_product_icon_fallback",
-      "label": "Grok official product icon",
-      "owner": "The Grok product owner; App Store seller X Corp.",
-      "source_page": "https://apps.apple.com/us/app/grok-ai/id6670324846",
-      "official_referrer": "https://x.ai/legal/brand-guidelines",
-      "source_api": "https://itunes.apple.com/lookup?id=6670324846",
-      "source_url": "https://is1-ssl.mzstatic.com/image/thumb/Purple221/v4/82/e4/dc/82e4dc37-21e2-eb50-435f-6238213d694e/AppIcon-0-0-1x_U007epad-0-0-0-1-0-0-0-85-220.png/256x256bb.png",
-      "terms_url": "https://x.ai/legal/brand-guidelines",
-      "rights_note": "Owner's brand guidelines restrict misleading association, use in another app's title, and alterations. The icon is only a separate identifier for a Grok member.",
-      "sha256": "796002bd2e0410216dbf8f7048ad9953655d5aa04fb37f16c0d4f61d868ec873",
-      "bytes": 31280,
-      "width": 256,
-      "height": 256
-    },
-    "cursor": {
-      "providers": [
-        "cursor",
-        "cursor-cli"
-      ],
-      "asset": "/assets/office/avatar-cursor.png",
-      "fallback": "/assets/office/logo-cursor.svg",
-      "kind": "official_product_icon_fallback",
-      "label": "Cursor official website app icon",
-      "owner": "Anysphere, Inc.",
-      "source_page": "https://cursor.com/brand",
-      "source_url": "https://cursor.com/marketing-static/icon-192x192-light.png",
-      "terms_url": "https://cursor.com/brand",
-      "sha256": "267649be4d2a26dea632bb6cc1f7a400daa117e5cd3335a140ba5cb0148aaedc",
-      "bytes": 6694,
-      "width": 192,
-      "height": 192
+  "purpose": "Original pixel characters that suggest each agent through color and a signature accessory. They are not product logos or official mascots and imply no endorsement.",
+  "rendering": "Pixel art; display with image-rendering: pixelated. User-selected local images take priority.",
+  "license_note": "All character, avatar and desk pixel art is original work of this project, generated from web/pixel-art.js. No third-party logos, avatars or mascots are distributed.",
+  "characters": {
+    "deepseek": {
+      "asset": "/assets/office/pixel-deepseek.png",
+      "sha256": "5cbf5997014d7dd5dd3ea6cd7d33b52fdc2f4d1799ceb2aad73cec603eeac1ab",
+      "bytes": 649,
+      "width": 96,
+      "height": 120,
+      "label": "DeepSeek",
+      "trait": "鲸鱼帽 · 服务器繁忙",
+      "kind": "project_original_pixel_character"
     },
     "doubao": {
-      "providers": [
-        "doubao",
-        "doubao-desktop"
-      ],
-      "asset": "/assets/office/avatar-doubao.png",
-      "fallback": "/assets/office/logo-doubao.svg",
-      "kind": "official_product_character_avatar",
-      "label": "Doubao official website character avatar",
-      "owner": "Doubao / ByteDance",
-      "source_page": "https://www.doubao.com/chat/",
-      "source_url": "https://lf-flow-web-cdn.doubao.com/obj/flow-doubao/doubao/web/doubao_avatar.png",
-      "terms_url": null,
-      "rights_note": "The public product page supplies the avatar. No general character redistribution or commercial-use license was confirmed.",
-      "sha256": "3f50295851accd33c7d68e27ad88fbbe439b783fe9e068ffdfa0d1e88c8c3268",
-      "bytes": 26799,
-      "width": 160,
-      "height": 160
+      "asset": "/assets/office/pixel-doubao.png",
+      "sha256": "f5aca1203702b43f3376d958bb2b35248ed936fc429a7325b42b802615e91edb",
+      "bytes": 597,
+      "width": 96,
+      "height": 120,
+      "label": "豆包",
+      "trait": "包子帽 · 这个我熟",
+      "kind": "project_original_pixel_character"
+    },
+    "claude": {
+      "asset": "/assets/office/pixel-claude.png",
+      "sha256": "dd856c6d1d3a1a3ca3ca6a2ff46f60b0978c1b2be738a2847ee1a8ba414f2901",
+      "bytes": 625,
+      "width": 96,
+      "height": 120,
+      "label": "Claude",
+      "trait": "陶土色贝雷帽 · 先确认需求",
+      "kind": "project_original_pixel_character"
+    },
+    "codex": {
+      "asset": "/assets/office/pixel-codex.png",
+      "sha256": "91bde0b263e1462937f7f9ae6a05048c4925c416a8e8be9ba589b6013a34dc73",
+      "bytes": 612,
+      "width": 96,
+      "height": 120,
+      "label": "Codex",
+      "trait": "终端护目镜 · 测试又跑了一遍",
+      "kind": "project_original_pixel_character"
+    },
+    "grok": {
+      "asset": "/assets/office/pixel-grok.png",
+      "sha256": "4e9980205eb1f2e913c060f636b6801ef7e440c186dec5961c7232d234f1b508",
+      "bytes": 607,
+      "width": 96,
+      "height": 120,
+      "label": "Grok",
+      "trait": "墨镜坏笑 · 就这题？",
+      "kind": "project_original_pixel_character"
+    },
+    "gemini": {
+      "asset": "/assets/office/pixel-gemini.png",
+      "sha256": "3276990a113c397db4bb0061fa583ddc7336014851d6f908dd6ed21a572c98f9",
+      "bytes": 686,
+      "width": 96,
+      "height": 120,
+      "label": "Gemini",
+      "trait": "双子双马尾 · 图文视频都懂",
+      "kind": "project_original_pixel_character"
+    },
+    "kimi": {
+      "asset": "/assets/office/pixel-kimi.png",
+      "sha256": "39125362470bc8852fdfda28db3244e844d098c922e1efb2e9294f72b3531c91",
+      "bytes": 574,
+      "width": 96,
+      "height": 120,
+      "label": "Kimi",
+      "trait": "弯月发饰 · 二十万字读完了",
+      "kind": "project_original_pixel_character"
+    },
+    "qwen": {
+      "asset": "/assets/office/pixel-qwen.png",
+      "sha256": "4ac05f821daae2426e24f2e6cac406119dfcc4a1e2d8ae602490f0e20edf08d2",
+      "bytes": 573,
+      "width": 96,
+      "height": 120,
+      "label": "千问",
+      "trait": "问号呆毛 · 再问一个",
+      "kind": "project_original_pixel_character"
+    },
+    "cursor": {
+      "asset": "/assets/office/pixel-cursor.png",
+      "sha256": "4817cfe8081c7ca81a3de93acb239d95243dfac6b989dd1aa2aebac6bbbfc7a3",
+      "bytes": 580,
+      "width": 96,
+      "height": 120,
+      "label": "Cursor",
+      "trait": "光标发卡 · 按 Tab 补全",
+      "kind": "project_original_pixel_character"
     },
     "generic": {
-      "providers": [],
-      "asset": "/assets/office/logo-generic.svg",
-      "fallback": "/assets/office/logo-generic.svg",
-      "kind": "project_original_fallback_icon",
-      "label": "Agent Office original generic assistant icon",
-      "owner": "Agent Office project",
-      "source_page": null,
-      "source_url": null,
-      "terms_url": null
+      "asset": "/assets/office/pixel-generic.png",
+      "sha256": "4426dda2b48d2808d8c00cf46e2b2ab715c82fab482e8c4f556ca82e7aeb6a85",
+      "bytes": 491,
+      "width": 96,
+      "height": 120,
+      "label": "Agent",
+      "trait": "通用小机器人",
+      "kind": "project_original_pixel_character"
     }
+  },
+  "avatars": {
+    "deepseek": {
+      "asset": "/assets/office/pixel-avatar-deepseek.png",
+      "sha256": "20296f6539cd0ac6a35274d931b19650f8dca98a178baaee4d18ca9e68601e33",
+      "bytes": 498,
+      "width": 88,
+      "height": 76,
+      "label": "DeepSeek",
+      "kind": "project_original_pixel_avatar"
+    },
+    "doubao": {
+      "asset": "/assets/office/pixel-avatar-doubao.png",
+      "sha256": "d36d44c6df887c48646212a662dedd7037da8fad33685da06df2599526a63db2",
+      "bytes": 444,
+      "width": 88,
+      "height": 76,
+      "label": "豆包",
+      "kind": "project_original_pixel_avatar"
+    },
+    "claude": {
+      "asset": "/assets/office/pixel-avatar-claude.png",
+      "sha256": "2c5dcd4af755e1c47eeb099c9f831b955157634cb0004465ffec23e983ed06d1",
+      "bytes": 432,
+      "width": 88,
+      "height": 76,
+      "label": "Claude",
+      "kind": "project_original_pixel_avatar"
+    },
+    "codex": {
+      "asset": "/assets/office/pixel-avatar-codex.png",
+      "sha256": "67191983a977075b962990485394faa2c9bd5296f5f1cdd131a9c8088db3d29e",
+      "bytes": 451,
+      "width": 88,
+      "height": 76,
+      "label": "Codex",
+      "kind": "project_original_pixel_avatar"
+    },
+    "grok": {
+      "asset": "/assets/office/pixel-avatar-grok.png",
+      "sha256": "2609d15159ac707f3345ae01313309247cc7b70fe8e00b535680a3a248a4f861",
+      "bytes": 470,
+      "width": 88,
+      "height": 76,
+      "label": "Grok",
+      "kind": "project_original_pixel_avatar"
+    },
+    "gemini": {
+      "asset": "/assets/office/pixel-avatar-gemini.png",
+      "sha256": "ce8851265950bfef0e23c54730c902acd11d9f86ed06fe057bf5b19463ff40e8",
+      "bytes": 480,
+      "width": 88,
+      "height": 76,
+      "label": "Gemini",
+      "kind": "project_original_pixel_avatar"
+    },
+    "kimi": {
+      "asset": "/assets/office/pixel-avatar-kimi.png",
+      "sha256": "988cdf3b8c5bbdb6887ff04534e10bd9da5a956fa2f83b60dcda14ac08640886",
+      "bytes": 420,
+      "width": 88,
+      "height": 76,
+      "label": "Kimi",
+      "kind": "project_original_pixel_avatar"
+    },
+    "qwen": {
+      "asset": "/assets/office/pixel-avatar-qwen.png",
+      "sha256": "f4388c2bfb234c65fbfcfe00a683b08a66411989d0008ce98ca1152d7e12d687",
+      "bytes": 438,
+      "width": 88,
+      "height": 76,
+      "label": "千问",
+      "kind": "project_original_pixel_avatar"
+    },
+    "cursor": {
+      "asset": "/assets/office/pixel-avatar-cursor.png",
+      "sha256": "28cf39f54a79864945c580b0dbcbd3693d47c40ee1166df78aa67d3bad2d909e",
+      "bytes": 443,
+      "width": 88,
+      "height": 76,
+      "label": "Cursor",
+      "kind": "project_original_pixel_avatar"
+    },
+    "generic": {
+      "asset": "/assets/office/pixel-avatar-generic.png",
+      "sha256": "40768eda26dcc1db3a2a5072207f22ef17272dff3e5a83e35949bd0452cc0b5c",
+      "bytes": 355,
+      "width": 88,
+      "height": 76,
+      "label": "Agent",
+      "kind": "project_original_pixel_avatar"
+    }
+  },
+  "desk": {
+    "asset": "/assets/office/pixel-desk.png",
+    "sha256": "22fc9d58664ce47fae1184ac9cc79c6663c7e373b4242473d5b6ebfb8d828b1b",
+    "bytes": 412,
+    "width": 176,
+    "height": 88,
+    "kind": "project_original_pixel_furniture"
   },
   "office_art": {
     "generated_on": "2026-10-13",
@@ -172,23 +246,5 @@
         "alpha": true
       }
     ]
-  },
-  "mascots": {
-    "qwen": {
-      "asset": "/assets/office/character-qwen-mascot.png",
-      "kind": "ai_adapted_from_official_mascot_reference",
-      "owner": "Qwen / Alibaba Cloud",
-      "source_page": "https://qwen.ai/ambassador",
-      "source_reference": "design/reference/qwen-capybara-official-ambassador.png",
-      "provenance": "docs/OFFICE_MASCOT_SOURCES.md",
-      "generated_on": "2026-10-13",
-      "source": "built-in imagegen",
-      "runtime_network_required": false,
-      "sha256": "cfc15e7a9128a86f152a58fe994984fcb76f3a09ee6d99e3100c2e227e6f6451",
-      "width": 1254,
-      "height": 1254,
-      "bytes": 886811,
-      "rights_note": "Character adapted from the official reference at the user request; no separate redistribution license or endorsement is claimed."
-    }
   }
 }

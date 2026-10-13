@@ -46,9 +46,9 @@ test('complete custom characters keep their own face and furniture and scale rem
   const item=scene.describe({participants:[member]}).members[0];
   assert.equal(item.appearance.character,'data:image/png;base64,AQID');assert.equal(item.appearance.furniture,'beanbag');assert.equal(item.appearance.scale,1.2);assert.equal(item.member,member);
   assert.equal(scene.characterSource(member),'data:image/png;base64,AQID');
-  assert.equal(scene.characterSource({adapter:'new-agent'}),'/assets/office/character-robot.png');
-  assert.equal(scene.characterSource({adapter:'qwen-desktop'}),'/assets/office/character-qwen-mascot.png');
-  assert.equal(scene.characterSource({adapter:'qwen-desktop',appearance:{preset:'robot'}}),'/assets/office/character-robot.png');
+  assert.equal(scene.characterSource({adapter:'new-agent'}),'/assets/office/pixel-generic.png');
+  assert.equal(scene.characterSource({adapter:'qwen-desktop'}),'/assets/office/pixel-qwen.png');
+  assert.equal(scene.characterSource({adapter:'qwen-desktop',appearance:{preset:'robot'}}),'/assets/office/pixel-generic.png');
   assert.equal(scene.describe({participants:[{id:'m'}]}).members[0].appearance.preset,'auto');
 });
 test('secretary role identifies only the selected room member without claiming background activity',()=>{

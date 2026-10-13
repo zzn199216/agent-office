@@ -96,3 +96,17 @@ body.office-view .secretary-tutorial{position:absolute;left:50%;top:50%;transfor
 @media(max-width:1050px){body.team-inspector-open .room-inspector,body.desktop-app.team-inspector-open .room-inspector{width:min(440px,100vw)}}
 @media(max-width:760px){.team-open{font-size:9px;padding:6px 7px}.team-page{padding:6px 16px 24px}.team-summary strong{font-size:17px}.team-dialog{padding:20px 18px;width:calc(100vw - 24px);max-height:calc(100dvh - 24px)}.team-dialog h2{font-size:19px}.team-dialog .dialog-actions{bottom:-20px}.team-dialog input,.team-dialog textarea,.team-dialog select{font-size:13px}.team-card-heading>strong{font-size:12px}.team-summary>.text-button{font-size:10px}.topbar:has(.team-open:not(.hidden)) .mode-toggle{max-width:82px;overflow:hidden;text-overflow:ellipsis}}
 .coordination-summary{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap}.coordination-summary>strong{font-size:12px;line-height:1.7;font-weight:500}.coordination-summary>.text-button{font-size:10px}.coordination-original{margin-top:10px}.coordination-original>summary{cursor:pointer;font-size:10px;color:#8a998d}.coordination-original>.message-content{margin-top:12px;font-size:11px;max-height:300px;overflow:auto}.chat-message:has(.coordination-summary) .message-body{background:#f6f8f4;border:1px solid #e7ede4}.chat-message:has(.coordination-summary){max-width:760px}
+/* Markdown chat messages: readable minimum sizes, inert links, scrollable code. */
+.message-content.markdown,.desktop-app .message-content.markdown{white-space:normal;font-size:14px;line-height:1.75;color:#24372b}
+.message-content.markdown>*{margin:0 0 .6em}.message-content.markdown>*:last-child{margin-bottom:0}
+.message-content.markdown .md-heading{font-size:15px;font-weight:650;margin-top:.4em}
+.message-content.markdown ul,.message-content.markdown ol{padding-left:1.4em}.message-content.markdown li{margin:.15em 0}
+.message-content.markdown code{font:12.5px/1.6 "Cascadia Code",Consolas,monospace;background:#eef2ec;border-radius:4px;padding:1px 5px}
+.message-content.markdown .md-code{background:#1f2a24;color:#e6efe8;border-radius:8px;padding:10px 12px;overflow:auto;white-space:pre;max-height:360px}
+.message-content.markdown .md-code code{background:none;padding:0;color:inherit}
+.message-content.markdown blockquote{border-left:3px solid #b9cbbd;padding-left:10px;color:#5f7466}
+.message-content.markdown hr{border:0;border-top:1px solid var(--line)}
+.message-content.markdown .md-link{color:var(--accent);text-decoration:underline dotted;cursor:help}
+.message-header,.message-footer{font-size:12px}.message-header time{font-size:11px}.message-target{font-size:12px}
+.composer-note,.composer-bottom>span{font-size:11px}
+.message-content.markdown .md-task{list-style:none;margin-left:-1.2em}.message-content.markdown .md-check{display:inline-block;width:1.2em;color:var(--accent)}

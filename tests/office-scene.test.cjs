@@ -56,35 +56,39 @@ test('member presentation is stable by ID and does not change identity, adapter 
 });
 test('custom portraits reject active SVG, external URLs, local files and traversal',()=>{
   for(const value of ['data:image/svg+xml;base64,PHN2Zz4=','javascript:alert(1)','https://tracking.example/avatar.png','file:///C:/secret.png','/assets/office/../private.png','/assets/office/sprite.svg?token=secret'])assert.equal(scene.safeImage(value),'');
-  assert.equal(scene.safeImage('/assets/office/logo-codex.svg'),'/assets/office/logo-codex.svg');
+  assert.equal(scene.safeImage('/assets/office/logo-generic.svg'),'/assets/office/logo-generic.svg');
   assert.equal(scene.safeImage('data:image/webp;base64,AQID'),'data:image/webp;base64,AQID');
   assert.equal(scene.safeImage('data:image/png;base64,'+'A'.repeat(450000)),'');
-  assert.equal(scene.avatarSource({...member,appearance:{avatar_url:'https://external/avatar.png'}}),'/assets/office/avatar-codex.png');
+  assert.equal(scene.avatarSource({...member,appearance:{avatar_url:'https://external/avatar.png'}}),'/assets/office/pixel-avatar-codex.png');
 });
 test('group proxies retain named agent branding and unknown clients have a replaceable generic badge',()=>{
   assert.equal(scene.provider({adapter:'grok-bridge',name:'Claude 桌面客户端 · Grok群入口'}),'claude');
   assert.equal(scene.provider({adapter:'grok-bridge',name:'Codex'}),'codex');
   assert.equal(scene.provider({adapter:'grok-bridge',name:'Grok 桥接 Bot'}),'grok');
   assert.equal(scene.provider({adapter:'custom-agent',name:'新工具'}),'generic');
-  assert.equal(scene.avatarSource({id:'x',appearance:{preset:'unknown',color:'var(--private)'}}),'/assets/office/logo-generic.svg');
+  assert.equal(scene.avatarSource({id:'x',appearance:{preset:'unknown',color:'var(--private)'}}),'/assets/office/pixel-avatar-generic.png');
 });
 test('expired presence does not report an idle desktop as online',()=>{
   const model=scene.describe({participants:[member],online:true,runtime:{members:[{id:member.id,presence:'online',lease_expires:'2026-10-13T07:59:00Z',worker_online:false}]}},now);
   assert.equal(model.members[0].presence.status,'stale');
 });
-test('official provider portraits are packaged offline and custom images still take priority',()=>{
-  for(const adapter of ['codex','claude-code','qwen-code','grok','cursor','doubao']){
-    const provider=adapter.split('-')[0];assert.equal(scene.avatarSource({id:adapter,adapter}),`/assets/office/avatar-${provider}.png`);
+test('original pixel portraits are packaged offline for every known agent and custom images still take priority',()=>{
+  for(const adapter of ['codex','claude-code','qwen-code','grok','cursor','doubao','deepseek','kimi-cli','gemini-cli']){
+    const provider=adapter.split('-')[0];assert.equal(scene.avatarSource({id:adapter,adapter}),`/assets/office/pixel-avatar-${provider}.png`);
+    assert.equal(scene.characterSource({id:adapter,adapter}),`/assets/office/pixel-${provider}.png`);
   }
+  assert.equal(scene.provider({adapter:'custom',name:'深度求索助手'}),'deepseek');
+  assert.equal(scene.provider({adapter:'moonshot-agent'}),'kimi');
+  assert.equal(scene.provider({adapter:'custom',name:'通义千问'}),'qwen');
   assert.equal(scene.avatarSource({id:'custom',adapter:'qwen-code',appearance:{avatar_data:'data:image/png;base64,AQID'}}),'data:image/png;base64,AQID');
-  assert.equal(scene.avatarSource({id:'proxy',adapter:'grok-bridge',name:'Claude 桌面客户端 · Grok群入口'}),'/assets/office/avatar-claude.png');
+  assert.equal(scene.avatarSource({id:'proxy',adapter:'grok-bridge',name:'Claude 桌面客户端 · Grok群入口'}),'/assets/office/pixel-avatar-claude.png');
 });
 
 test('expanded agent identities use original packaged fallback rather than missing or external portraits',()=>{
-  for(const [adapter,key]of [['gemini-cli','gemini'],['opencode','opencode'],['cline','cline'],['roo-code','roo'],['cherry-studio','cherry']]){
+  for(const [adapter,key]of [['opencode','opencode'],['cline','cline'],['roo-code','roo'],['cherry-studio','cherry']]){
     const member={id:adapter,adapter};assert.equal(scene.provider(member),key);
-    assert.equal(scene.avatarSource(member),'/assets/office/logo-generic.svg');
-    assert.equal(scene.characterSource(member),'/assets/office/character-robot.png');
+    assert.equal(scene.avatarSource(member),'/assets/office/pixel-avatar-generic.png');
+    assert.equal(scene.characterSource(member),'/assets/office/pixel-generic.png');
     assert.equal(scene.avatarSource({...member,appearance:{avatar_data:'data:image/png;base64,AQID'}}),'data:image/png;base64,AQID');
     assert.equal(scene.provider({adapter:'grok-bridge',name:adapter}),key);
   }

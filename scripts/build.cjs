@@ -22,10 +22,7 @@ async function main(){
   buildSync({entryPoints:[path.join(root,'src/main.cjs')],bundle:true,platform:'node',target:'node22',format:'cjs',outfile:bundle,minify:false});
   const blob=path.join(dist,'sea-prep.blob');const config={main:bundle,output:blob,disableExperimentalSEAWarning:true,useSnapshot:false,useCodeCache:false,assets:{'index.html':path.join(root,'web/index.html'),'app.js':path.join(root,'web/app.js'),'desktop.js':path.join(root,'web/desktop.js'),'style.css':path.join(root,'web/style.css'),'skill/SKILL.md':path.join(root,'integrations/agentroom/SKILL.md'),'skill/GROK_SKILL.md':path.join(root,'integrations/agentroom/GROK_SKILL.md')}};
   config.assets['office.js']=path.join(root,'web/office.js');config.assets['office.css']=path.join(root,'web/office.css');
-  for(const name of ['desk','plant','door','logo-codex','logo-claude','logo-qwen','logo-grok','logo-cursor','logo-doubao','logo-generic'])config.assets[`assets/office/${name}.svg`]=path.join(root,'web','assets','office',name+'.svg');
-  for(const name of ['codex','claude','qwen','grok','cursor','doubao'])config.assets[`assets/office/avatar-${name}.png`]=path.join(root,'web','assets','office',`avatar-${name}.png`);
-  for(const name of ['furniture-desk','furniture-beanbag','character-robot','character-qwen-mascot','prop-plant'])config.assets[`assets/office/${name}.png`]=path.join(root,'web','assets','office',`${name}.png`);
-  config.assets['assets/office/AVATAR_SOURCES.json']=path.join(root,'web','assets','office','AVATAR_SOURCES.json');
+  for(const name of require('../src/office-assets.cjs').OFFICE_FILES)config.assets[name]=path.join(root,'web',name);
   const configPath=path.join(dist,'sea-config.json');fs.writeFileSync(configPath,JSON.stringify(config));run(process.execPath,['--experimental-sea-config',configPath]);
   const executable=path.join(dist,'AgentRoom.exe');let image=fs.readFileSync(process.execPath);
   const pe=image.readUInt32LE(0x3c),opt=pe+24,dir=opt+(image.readUInt16LE(opt)===0x20b?112:96)+4*8;

@@ -13,9 +13,9 @@ test('replaceable original office art is transparent, offline and included in th
     assert.equal(crypto.createHash('sha256').update(bytes).digest('hex'),item.sha256);
     assert.ok(PUBLIC_FILES.has('desktop-web/'+item.asset.slice(1)),'offline desktop module is distributed and verified');
   }
-  const mascot=manifest.mascots.qwen,bytes=fs.readFileSync(path.resolve(__dirname,'../web',mascot.asset.slice(1)));
-  assert.equal(mascot.kind,'ai_adapted_from_official_mascot_reference');
-  assert.equal(mascot.runtime_network_required,false);assert.equal(bytes[25],6);
-  assert.equal(crypto.createHash('sha256').update(bytes).digest('hex'),mascot.sha256);
-  assert.ok(PUBLIC_FILES.has('desktop-web/'+mascot.asset.slice(1)));
+  assert.equal(manifest.mascots,undefined,'no adapted official mascots are distributed');
+  for(const record of [...Object.values(manifest.characters),...Object.values(manifest.avatars),manifest.desk]){
+    const bytes=fs.readFileSync(path.resolve(__dirname,'../web',record.asset.slice(1)));assert.equal(bytes[25],6,'pixel sprites keep transparency');
+    assert.ok(PUBLIC_FILES.has('desktop-web/'+record.asset.slice(1)),record.asset);
+  }
 });

@@ -2,7 +2,7 @@
 const fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypto');
 const {spawn}=require('node:child_process');
 const {RoomError,atomicWrite}=require('./util.cjs');
-const OFFICE_FILES=[...['desk','plant','door','logo-codex','logo-claude','logo-qwen','logo-grok','logo-cursor','logo-doubao','logo-generic'].map(name=>`assets/office/${name}.svg`),...['codex','claude','qwen','grok','cursor','doubao'].map(name=>`assets/office/avatar-${name}.png`),...['furniture-desk','furniture-beanbag','character-robot','character-qwen-mascot','prop-plant'].map(name=>`assets/office/${name}.png`),'assets/office/AVATAR_SOURCES.json'];
+const {OFFICE_FILES}=require('./office-assets.cjs');
 const PUBLIC_FILES=new Set(['AgentRoom.Desktop.exe','AgentRoom.Desktop.exe.config','Microsoft.Web.WebView2.Core.dll','Microsoft.Web.WebView2.WinForms.dll','WebView2Loader.dll','WEBVIEW2_LICENSE.txt','desktop-web/index.html','desktop-web/app.js','desktop-web/desktop.js','desktop-web/style.css','desktop-web/office.js','desktop-web/office.css',...OFFICE_FILES.map(name=>'desktop-web/'+name)]);
 const hash=file=>crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 function desktopManifest(source){

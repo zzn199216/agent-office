@@ -7,8 +7,10 @@
 })(typeof window === 'object' ? window : null, function () {
   'use strict';
   const ASSETS = '/assets/office/';
-  const COLORS = {codex:'#547b69',claude:'#c87958',qwen:'#8a76b7',grok:'#48545c',cursor:'#587994',doubao:'#5c9b96',gemini:'#6c86bc',opencode:'#6c727c',cline:'#637d94',roo:'#a98162',cherry:'#b97680',generic:'#8e815f'};
-  const PACKAGED_PORTRAITS = new Set(['codex','claude','qwen','grok','cursor','doubao']);
+  const COLORS = {deepseek:'#4d6bfe',kimi:'#3b3f7a',codex:'#547b69',claude:'#c87958',qwen:'#8a76b7',grok:'#48545c',cursor:'#587994',doubao:'#5c9b96',gemini:'#6c86bc',opencode:'#6c727c',cline:'#637d94',roo:'#a98162',cherry:'#b97680',generic:'#8e815f'};
+  // Original pixel characters; see web/pixel-art.js and scripts/generate-pixel-art.cjs.
+  const PIXEL_CHARACTERS = new Set(['deepseek','doubao','claude','codex','grok','gemini','kimi','qwen','cursor']);
+  const pixelKey = key => PIXEL_CHARACTERS.has(key) ? key : 'generic';
   const LABELS = {online:'在线',worker_online:'后台在线',stale:'心跳已过期',offline:'离线',unknown:'在线性未知'};
   const PRESETS = new Set(['auto','person','robot','sprite']);
   const MAX_IMAGE_LENGTH = 450000;
@@ -44,7 +46,10 @@
   }
   // Geometry is shared by the layout and walking path, never by a backend.
   // Every row has a walkway above its desks; the left aisle stays clear.
-  const GEOMETRY = Object.freeze({minimumWidth:334,maximumColumns:3,left:126,right:24,top:156,columnPitch:200,rowPitch:264,seatWidth:184,seatHeight:208,personX:92,personY:85,personHalfWidth:35,personHalfHeight:47,aisleX:64,doorX:64,doorY:116,walkwayY:4,minimumHeight:560});
+  const SKY = Object.freeze({dawn:'#f2a983',day:'#9fd3f5',dusk:'#e07a5f',night:'#1e2752'});
+  // Bubbles are one glance long: drop Markdown markup so `**bold**` or fences never show raw.
+  function plainText(text){return String(text||'').replace(/```[a-z0-9_-]*\n?/gi,' ').replace(/`([^`]*)`/g,'$1').replace(/!?\[([^\]]*)\]\([^)]*\)/g,'$1').replace(/^\s{0,3}(?:#{1,6}\s+|>\s?|[-*+]\s+|\d+[.)]\s+)/gm,'').replace(/(\*\*|__|~~)(.+?)\1/g,'$2').replace(/(^|[^*\w])[*_]([^*_\n]+)[*_](?=[^*\w]|$)/g,'$1$2').replace(/\s+/g,' ').trim();}
+  const GEOMETRY = Object.freeze({minimumWidth:334,maximumColumns:3,left:126,right:24,top:156,columnPitch:200,rowPitch:300,seatWidth:184,seatHeight:208,personX:92,personY:85,personHalfWidth:35,personHalfHeight:47,aisleX:64,doorX:64,doorY:116,walkwayY:4,minimumHeight:560});
   function allocateSlots(previous, memberIds) {
     const ids=[...new Set(memberIds || [])], next=new Map(), used=new Set();
     for(const id of ids) {
@@ -115,6 +120,8 @@
   }
   function provider(member = {}) {
     const adapter = String(member.adapter || member.provider || '').toLowerCase();
+    if (adapter.startsWith('deepseek')) return 'deepseek';
+    if (adapter.startsWith('kimi') || adapter.startsWith('moonshot')) return 'kimi';
     if (adapter.startsWith('claude')) return 'claude';
     if (adapter.startsWith('qwen')) return 'qwen';
     if (adapter.startsWith('codex')) return 'codex';
@@ -131,6 +138,9 @@
     if (name.includes('roo code') || name.includes('roo-code')) return 'roo';
     if (name.includes('cherry studio') || name.includes('cherry-studio')) return 'cherry';
     if (name.includes('豆包') || name.includes('doubao')) return 'doubao';
+    if (name.includes('deepseek') || name.includes('深度求索')) return 'deepseek';
+    if (name.includes('kimi') || name.includes('月之暗面')) return 'kimi';
+    if (name.includes('千问') || name.includes('通义')) return 'qwen';
     return adapter.startsWith('grok') ? 'grok' : 'generic';
   }
   function safeImage(value) {
@@ -147,7 +157,7 @@
     return {
       preset: PRESETS.has(value.preset) ? value.preset : 'auto',
       color: /^#[a-f0-9]{6}$/i.test(value.color || '') ? value.color : COLORS[key],
-      avatar: safeImage(value.avatar_data || value.avatar_url) || `${ASSETS}${PACKAGED_PORTRAITS.has(key)?`avatar-${key}.png`:'logo-generic.svg'}`,
+      avatar: safeImage(value.avatar_data || value.avatar_url) || `${ASSETS}pixel-avatar-${pixelKey(key)}.png`,
       character: safeImage(value.character_data || value.character_url),
       furniture: value.furniture==='beanbag'?'beanbag':'desk',
       scale: Number.isFinite(value.scale)?Math.max(.65,Math.min(1.35,value.scale)):1,
@@ -285,7 +295,7 @@
       const state=clockState(config.time_zone,config.time_mode);
       scene.dataset.phase=state.phase;scene.style.setProperty('--ao-daylight',state.daylight.toFixed(4));
       scene.style.setProperty('--ao-night',(1-state.daylight).toFixed(4));
-      scene.style.setProperty('--ao-sky-color',state.phase==='night'?'#394961':state.phase==='dusk'?'#d7b7aa':state.phase==='dawn'?'#e6d4c2':'#dce7e9');
+      scene.style.setProperty('--ao-sky-color',SKY[state.phase]||SKY.day);
       hourHand.style.transform=`rotate(${state.hourAngle}deg)`;minuteHand.style.transform=`rotate(${state.minuteAngle}deg)`;
       clockTime.textContent=state.time;clockTime.dateTime=`${state.date}T${state.time}`;clockDate.textContent=state.date.replaceAll('-','.');clockZone.textContent=state.timeZone.replaceAll('_',' ');
       clock.title=`${state.date} ${state.time} · ${state.timeZone} · 昼夜按当地时间切换`;
@@ -340,7 +350,7 @@
       const item={root,bubble,bubbleLabel,bubbleText,desk,furniture,character,figure,shape,custom,head,avatar,name,secretaryBadge,status:status.lastChild,label,customize,info:null,recent:0,messageId:null,entering:false,motion:null,motionToken:0,position:null,avatarSource:null};
       watchArt(custom,loaded=>{item.root.classList.toggle('ao-character-ready',loaded);});
       avatar.addEventListener('error',()=>{
-        const key=item.info?.appearance.provider, fallback=`${ASSETS}logo-${PACKAGED_PORTRAITS.has(key)?key:'generic'}.svg`;
+        const key=item.info?.appearance.provider, fallback=`${ASSETS}pixel-avatar-generic.png`;
         if(avatar.getAttribute('src')!==fallback)avatar.src=fallback;
       });
       function choose() {selected.clear();selected.add(info.member.id);for(const entry of items.values())entry.root.classList.toggle('ao-selected',selected.has(entry.info.member.id));callback('onSelectMember',item.info.member);}
@@ -373,11 +383,11 @@
       const title=`${member.name || 'Agent'} · ${item.status.textContent}${member.adapter?` · ${member.adapter}`:''}`;
       item.character.title=title;item.character.setAttribute('aria-label',`${title}，查看成员`);
       item.label.title=title;item.customize.title=`更换 ${member.name || 'Agent'} 的形象`;item.customize.setAttribute('aria-label',item.customize.title);
-      if(item.avatarSource!==appearance.avatar){item.avatarSource=appearance.avatar;item.avatar.src=appearance.avatar;}item.avatar.alt='';
+      item.root.classList.toggle('ao-custom-avatar',!appearance.avatar.startsWith(`${ASSETS}pixel-avatar-`));if(item.avatarSource!==appearance.avatar){item.avatarSource=appearance.avatar;item.avatar.src=appearance.avatar;}item.avatar.alt='';
       const bodySource=appearance.character||defaultCharacter(appearance);
       if(item.custom.dataset.requested!==bodySource)item.root.classList.remove('ao-character-ready');
       setArt(item.custom,bodySource);
-      const furnitureSource=appearance.furniture==='beanbag'?(config.beanbag_data||`${ASSETS}furniture-beanbag.png`):(config.desk_data||`${ASSETS}furniture-desk.png`);
+      const furnitureSource=appearance.furniture==='beanbag'?(config.beanbag_data||`${ASSETS}furniture-beanbag.png`):(config.desk_data||`${ASSETS}pixel-desk.png`);
       item.furniture.classList.toggle('ao-custom-furniture',!!(appearance.furniture==='beanbag'?config.beanbag_data:config.desk_data));
       setArt(item.desk,furnitureSource);
       item.root.classList.toggle('ao-custom-body',!!appearance.character);
@@ -385,9 +395,9 @@
       if(message) {
         item.bubble.dataset.messageId=message.id;
         item.bubbleLabel.textContent=!current.online?'历史发言':info.recent?'刚刚说':'最近发言';
-        item.bubbleText.textContent=message.text.slice(0,180);
+        const brief=plainText(message.text);item.bubbleText.textContent=brief.slice(0,180);
         item.bubble.title=`${member.name || 'Agent'}：${message.text.slice(0,600)}`;
-        item.bubble.setAttribute('aria-label',`查看 ${member.name || 'Agent'} 的原消息：${message.text.slice(0,180)}`);
+        item.bubble.setAttribute('aria-label',`查看 ${member.name || 'Agent'} 的原消息：${brief.slice(0,180)}`);
         if(initialized && !item.entering && allowSpeech && info.recent && previousMessage!==message.id){item.root.classList.add('ao-speaking');item.recent=Date.now();}
         if(!item.entering)item.messageId=message.id;
       } else {item.messageId=null;item.root.classList.remove('ao-speaking');item.recent=0;}
@@ -484,7 +494,7 @@
     return Object.freeze({update,destroy(){if(destroyed)return;destroyed=true;cancelEntrances();if(timer!==null)view.clearTimeout(timer);if(clockTimer!==null)view.clearTimeout(clockTimer);document.removeEventListener('visibilitychange',onVisibility);if(reducedMotion?.removeEventListener)reducedMotion.removeEventListener('change',onVisibility);else reducedMotion?.removeListener?.(onVisibility);observer?.disconnect();mutation?.disconnect();resize?.disconnect();scene.remove();items.clear();slots.clear();}});
   }
   function avatarSource(member = {}, appearances) {return appearance(member,appearances).avatar;}
-  function defaultCharacter(value){return `${ASSETS}${value.preset==='auto'&&value.provider==='qwen'?'character-qwen-mascot.png':'character-robot.png'}`;}
+  function defaultCharacter(value){return `${ASSETS}pixel-${value.preset==='robot'?'generic':pixelKey(value.provider)}.png`;}
   function characterSource(member={},appearances){const value=appearance(member,appearances);return value.character||defaultCharacter(value);}
-  return {mount,describe,provider,safeImage,avatarSource,characterSource,clockState,normalizeScene,SCENE_DEFAULTS,CAMERA_LIMITS,GEOMETRY,allocateSlots,layoutOffice,cameraLayout,routeToSeat,joiningMembers};
+  return {mount,describe,provider,plainText,safeImage,avatarSource,characterSource,clockState,normalizeScene,SCENE_DEFAULTS,CAMERA_LIMITS,GEOMETRY,allocateSlots,layoutOffice,cameraLayout,routeToSeat,joiningMembers};
 });
