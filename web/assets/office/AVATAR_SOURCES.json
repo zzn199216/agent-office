@@ -1,0 +1,194 @@
+{
+  "schema_version": 1,
+  "retrieved_on": "2026-10-13",
+  "runtime_network_required": false,
+  "purpose": "Identify the corresponding agent in the office and chat. These third-party marks are not the Agent Office brand and do not imply endorsement.",
+  "rendering": "Keep the supplied image, aspect ratio and colors; show it as a separate identity image on an original character. User-selected local images take priority.",
+  "license_note": "Public availability or an open-source repository license does not automatically grant rights to a company mark or character. No general commercial-reuse license is claimed for these third-party images. Consult the linked owner's terms before further distribution or promotional use.",
+  "avatars": {
+    "codex": {
+      "providers": [
+        "codex"
+      ],
+      "asset": "/assets/office/avatar-codex.png",
+      "fallback": "/assets/office/logo-codex.svg",
+      "kind": "official_organization_logo_fallback",
+      "label": "OpenAI official organization logo used to identify Codex",
+      "owner": "OpenAI",
+      "source_page": "https://github.com/openai",
+      "source_url": "https://avatars.githubusercontent.com/u/14957082?v=4&s=256",
+      "terms_url": "https://openai.com/brand/",
+      "sha256": "6025a4347a8eaed17e31eaebf7834e33ec4af26cc7f59be586ac59ba5157fa1c",
+      "bytes": 4081,
+      "width": 200,
+      "height": 200
+    },
+    "claude": {
+      "providers": [
+        "claude-code",
+        "claude-desktop"
+      ],
+      "asset": "/assets/office/avatar-claude.png",
+      "fallback": "/assets/office/logo-claude.svg",
+      "kind": "official_product_icon_fallback",
+      "label": "Claude official product icon; not a Clawd mascot illustration",
+      "owner": "Anthropic PBC",
+      "source_page": "https://apps.apple.com/us/app/claude-by-anthropic/id6473753684",
+      "official_referrer": "https://claude.com/product/claude-code",
+      "source_api": "https://itunes.apple.com/lookup?id=6473753684",
+      "source_url": "https://is1-ssl.mzstatic.com/image/thumb/Purple211/v4/d9/c0/df/d9c0df97-6ace-af90-44c9-3a86432c3462/AppIcon-0-0-1x_U007epad-0-1-85-220.png/256x256bb.png",
+      "terms_url": "https://www.anthropic.com/legal/consumer-terms",
+      "sha256": "847116f177b3f6ff7730f857a78a6fa8e863b7074dc8637f62931883d2314a8a",
+      "bytes": 37420,
+      "width": 256,
+      "height": 256
+    },
+    "qwen": {
+      "providers": [
+        "qwen-code",
+        "qwen-desktop"
+      ],
+      "asset": "/assets/office/avatar-qwen.png",
+      "fallback": "/assets/office/logo-qwen.svg",
+      "kind": "official_organization_logo_fallback",
+      "label": "Qwen official organization logo",
+      "owner": "Qwen team, Alibaba Cloud",
+      "source_page": "https://github.com/QwenLM",
+      "source_url": "https://avatars.githubusercontent.com/u/141221163?v=4&s=256",
+      "terms_url": null,
+      "rights_note": "No separate logo redistribution license was confirmed; model and code licenses must not be assumed to license the brand mark.",
+      "sha256": "25869dae20028c631830e273362ece1e54fcc6a2f81ff5399e0f05c62e8fe286",
+      "bytes": 8919,
+      "width": 256,
+      "height": 256
+    },
+    "grok": {
+      "providers": [
+        "grok",
+        "grok-host",
+        "grok-proxy"
+      ],
+      "asset": "/assets/office/avatar-grok.png",
+      "fallback": "/assets/office/logo-grok.svg",
+      "kind": "official_product_icon_fallback",
+      "label": "Grok official product icon",
+      "owner": "The Grok product owner; App Store seller X Corp.",
+      "source_page": "https://apps.apple.com/us/app/grok-ai/id6670324846",
+      "official_referrer": "https://x.ai/legal/brand-guidelines",
+      "source_api": "https://itunes.apple.com/lookup?id=6670324846",
+      "source_url": "https://is1-ssl.mzstatic.com/image/thumb/Purple221/v4/82/e4/dc/82e4dc37-21e2-eb50-435f-6238213d694e/AppIcon-0-0-1x_U007epad-0-0-0-1-0-0-0-85-220.png/256x256bb.png",
+      "terms_url": "https://x.ai/legal/brand-guidelines",
+      "rights_note": "Owner's brand guidelines restrict misleading association, use in another app's title, and alterations. The icon is only a separate identifier for a Grok member.",
+      "sha256": "796002bd2e0410216dbf8f7048ad9953655d5aa04fb37f16c0d4f61d868ec873",
+      "bytes": 31280,
+      "width": 256,
+      "height": 256
+    },
+    "cursor": {
+      "providers": [
+        "cursor",
+        "cursor-cli"
+      ],
+      "asset": "/assets/office/avatar-cursor.png",
+      "fallback": "/assets/office/logo-cursor.svg",
+      "kind": "official_product_icon_fallback",
+      "label": "Cursor official website app icon",
+      "owner": "Anysphere, Inc.",
+      "source_page": "https://cursor.com/brand",
+      "source_url": "https://cursor.com/marketing-static/icon-192x192-light.png",
+      "terms_url": "https://cursor.com/brand",
+      "sha256": "267649be4d2a26dea632bb6cc1f7a400daa117e5cd3335a140ba5cb0148aaedc",
+      "bytes": 6694,
+      "width": 192,
+      "height": 192
+    },
+    "doubao": {
+      "providers": [
+        "doubao",
+        "doubao-desktop"
+      ],
+      "asset": "/assets/office/avatar-doubao.png",
+      "fallback": "/assets/office/logo-doubao.svg",
+      "kind": "official_product_character_avatar",
+      "label": "Doubao official website character avatar",
+      "owner": "Doubao / ByteDance",
+      "source_page": "https://www.doubao.com/chat/",
+      "source_url": "https://lf-flow-web-cdn.doubao.com/obj/flow-doubao/doubao/web/doubao_avatar.png",
+      "terms_url": null,
+      "rights_note": "The public product page supplies the avatar. No general character redistribution or commercial-use license was confirmed.",
+      "sha256": "3f50295851accd33c7d68e27ad88fbbe439b783fe9e068ffdfa0d1e88c8c3268",
+      "bytes": 26799,
+      "width": 160,
+      "height": 160
+    },
+    "generic": {
+      "providers": [],
+      "asset": "/assets/office/logo-generic.svg",
+      "fallback": "/assets/office/logo-generic.svg",
+      "kind": "project_original_fallback_icon",
+      "label": "Agent Office original generic assistant icon",
+      "owner": "Agent Office project",
+      "source_page": null,
+      "source_url": null,
+      "terms_url": null
+    }
+  },
+  "office_art": {
+    "generated_on": "2026-10-13",
+    "source": "built-in imagegen",
+    "reference": "design/concepts/2026-10-13/06-minimal-editorial-office.png",
+    "runtime_network_required": false,
+    "assets": [
+      {
+        "asset": "/assets/office/furniture-desk.png",
+        "sha256": "45ad90996ace6a2ad7f6c6f6d5fcb4d4d10e3125b7ed90484e92561aa526ffe8",
+        "bytes": 1165715,
+        "width": 1536,
+        "height": 1024,
+        "alpha": true
+      },
+      {
+        "asset": "/assets/office/furniture-beanbag.png",
+        "sha256": "ccaa68a1909b658615b3fc13f7144f3eedc07a0693cc8a8db70bfb254ceff41f",
+        "bytes": 675961,
+        "width": 1254,
+        "height": 1254,
+        "alpha": true
+      },
+      {
+        "asset": "/assets/office/character-robot.png",
+        "sha256": "ebe35b9f7577ae3a990912aab7c650644d90d188693aba1c544d0ea3d251877c",
+        "bytes": 678909,
+        "width": 1254,
+        "height": 1254,
+        "alpha": true
+      },
+      {
+        "asset": "/assets/office/prop-plant.png",
+        "sha256": "7a43dd4459908de4d2a2b818c8f74b988c1584678bb95b7f158a57c1b4c51e58",
+        "bytes": 495381,
+        "width": 1086,
+        "height": 1448,
+        "alpha": true
+      }
+    ]
+  },
+  "mascots": {
+    "qwen": {
+      "asset": "/assets/office/character-qwen-mascot.png",
+      "kind": "ai_adapted_from_official_mascot_reference",
+      "owner": "Qwen / Alibaba Cloud",
+      "source_page": "https://qwen.ai/ambassador",
+      "source_reference": "design/reference/qwen-capybara-official-ambassador.png",
+      "provenance": "docs/OFFICE_MASCOT_SOURCES.md",
+      "generated_on": "2026-10-13",
+      "source": "built-in imagegen",
+      "runtime_network_required": false,
+      "sha256": "cfc15e7a9128a86f152a58fe994984fcb76f3a09ee6d99e3100c2e227e6f6451",
+      "width": 1254,
+      "height": 1254,
+      "bytes": 886811,
+      "rights_note": "Character adapted from the official reference at the user request; no separate redistribution license or endorsement is claimed."
+    }
+  }
+}

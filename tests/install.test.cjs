@@ -1,0 +1,5 @@
+'use strict';
+const{test}=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path');
+const{installBinary}=require('../src/install.cjs');const{fixture}=require('./helpers.cjs');
+test('first launch copies to a stable per-user location and identical launch does not overwrite',()=>{const f=fixture(),source=path.join(f.root,'download.exe');fs.writeFileSync(source,'test executable bytes');const installed=installBinary(source,f.data);assert.equal(fs.readFileSync(installed,'utf8'),'test executable bytes');const time=fs.statSync(installed).mtimeMs;assert.equal(installBinary(source,f.data),installed);assert.equal(fs.statSync(installed).mtimeMs,time);});
+test('installer preserves an unrelated existing executable',()=>{const f=fixture(),source=path.join(f.root,'download.exe'),bin=path.join(f.data,'bin');fs.writeFileSync(source,'new bytes');fs.mkdirSync(bin,{recursive:true});const target=path.join(bin,'AgentRoom.exe');fs.writeFileSync(target,'unrelated file');assert.throws(()=>installBinary(source,f.data),{code:'install_collision'});assert.equal(fs.readFileSync(target,'utf8'),'unrelated file');});

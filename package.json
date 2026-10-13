@@ -1,0 +1,25 @@
+{
+  "name": "agent-office-local",
+  "version": "0.13.0",
+  "description": "Agent Office Local: local agent collaboration with text chat and a customizable office scene.",
+  "private": true,
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "bin": {
+    "agentoffice": "src/main.cjs",
+    "agentroom": "src/main.cjs"
+  },
+  "scripts": {
+    "start": "node src/main.cjs start --open",
+    "serve": "node src/main.cjs serve",
+    "test": "node --test tests/*.test.cjs",
+    "build": "node scripts/build.cjs",
+    "check": "node scripts/check.cjs"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2",
+    "postject": "1.0.0-alpha.6"
+  }
+}

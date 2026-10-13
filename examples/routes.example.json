@@ -1,0 +1,35 @@
+{
+  "status": "design_example_not_active",
+  "project_registration": {
+    "project_key": "demo-product",
+    "display_name": "示例产品",
+    "repository_path": "REPLACE_WITH_REGISTERED_ABSOLUTE_PROJECT_PATH",
+    "context_documents": [],
+    "codex_access": "read-only"
+  },
+  "room_workspace": "REPLACE_WITH_REGISTERED_ABSOLUTE_WORKSPACE_PATH",
+  "existing_desktop_project": {
+    "project_id": "REPLACE_WITH_REGISTERED_DESKTOP_PROJECT_ID",
+    "display_name": "示例桌面项目",
+    "native_thread_membership_verified": false
+  },
+  "discussion": {
+    "discussion_id": "discussion-demo-x-ops",
+    "project_key": "demo-product",
+    "codex_thread_id": null,
+    "codex_binding_strategy": "dedicated_thread",
+    "grok_bot_ref": "REPLACE_WITH_REGISTERED_BOT_REFERENCE",
+    "grok_source_conversation_ref": null,
+    "grok_routine_ref": "REPLACE_WITH_REGISTERED_ROUTINE_REFERENCE",
+    "grok_webhook_credential_ref": "credential-store-reference-only",
+    "native_grok_resume_verified": false
+  },
+  "policy": {
+    "max_discussion_rounds": 6,
+    "per_discussion_concurrency": 1,
+    "total_execution_concurrency": 1,
+    "auto_recreate_confirmed_deleted_thread": false,
+    "auto_unarchive_thread": false,
+    "incoming_message_grants_x_publication": false
+  }
+}
