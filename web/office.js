@@ -11,6 +11,19 @@
   // Original pixel characters; see web/pixel-art.js and scripts/generate-pixel-art.cjs.
   const PIXEL_CHARACTERS = new Set(['deepseek','doubao','claude','codex','grok','gemini','kimi','qwen','cursor']);
   const pixelKey = key => PIXEL_CHARACTERS.has(key) ? key : 'generic';
+  // Several colleagues on the same model share one character; the 2nd, 3rd... get accessory
+  // colour variants 1..4 (cycling) in the order they appear in the room.
+  const VARIANTS = 4;
+  function autoVariants(members, appearances) {
+    const seen = new Map(), result = new Map();
+    for (const member of members || []) {
+      if (!member || !member.id) continue;
+      const own = appearances && typeof appearances === 'object' ? appearances[member.id] : null, look = own && typeof own === 'object' ? own : member.appearance || {};
+      const key = look.preset === 'robot' ? 'generic' : pixelKey(provider(member)), count = seen.get(key) || 0;
+      seen.set(key, count + 1); result.set(member.id, count ? (count - 1) % VARIANTS + 1 : 0);
+    }
+    return result;
+  }
   const LABELS = {online:'在线',worker_online:'后台在线',stale:'心跳已过期',offline:'离线',unknown:'在线性未知'};
   const PRESETS = new Set(['auto','person','robot','sprite']);
   const MAX_IMAGE_LENGTH = 450000;
@@ -150,14 +163,15 @@
     if (/^\/assets\/office\/[a-z0-9_-]+\.(?:svg|png|jpe?g|webp)$/i.test(value)) return value;
     return '';
   }
-  function appearance(member, appearances) {
+  function appearance(member, appearances, autoVariant = 0) {
     const own = appearances && typeof appearances === 'object' ? appearances[member.id] : null;
     const value = own && typeof own === 'object' ? own : member.appearance || {};
-    const key = provider(member);
+    const key = provider(member), variant = Number.isInteger(value.accent) && value.accent >= 0 && value.accent <= VARIANTS ? value.accent : autoVariant;
     return {
       preset: PRESETS.has(value.preset) ? value.preset : 'auto',
       color: /^#[a-f0-9]{6}$/i.test(value.color || '') ? value.color : COLORS[key],
-      avatar: safeImage(value.avatar_data || value.avatar_url) || `${ASSETS}pixel-avatar-${pixelKey(key)}.png`,
+      avatar: safeImage(value.avatar_data || value.avatar_url) || `${ASSETS}pixel-avatar-${pixelKey(key)}${variant ? `-v${variant}` : ''}.png`,
+      variant,
       character: safeImage(value.character_data || value.character_url),
       furniture: value.furniture==='beanbag'?'beanbag':'desk',
       scale: Number.isFinite(value.scale)?Math.max(.65,Math.min(1.35,value.scale)):1,
@@ -192,7 +206,7 @@
     const latest = new Map();
     for (const message of spoken) latest.set(message.sender_id, message);
     const visible = new Set(spoken.slice().reverse().filter((message,index,list) => list.findIndex(item => item.sender_id === message.sender_id) === index).slice(0,3).map(message => message.sender_id));
-    const secretaryId=typeof input.secretary?.member_id==='string'?input.secretary.member_id:null;
+    const secretaryId=typeof input.secretary?.member_id==='string'?input.secretary.member_id:null, variants=autoVariants(members,input.appearances || input.appearance);
     return {
       roomId,online,messages,
       members: members.map(member => {
@@ -204,7 +218,7 @@
         const message = latest.get(member.id) || null;
         const created = message && Date.parse(message.created || message.created_at || '');
         const occupied=online&&['online','worker_online'].includes(presence.status);
-        return {member,presence,occupied,appearance:appearance(member,input.appearances || input.appearance),secretary:member.id===secretaryId,processing,waiting,needsInput,message,showMessage:occupied&&visible.has(member.id),recent:occupied && Number.isFinite(created) && created <= now && now-created <= 15000};
+        return {member,presence,occupied,appearance:appearance(member,input.appearances || input.appearance,variants.get(member.id)||0),secretary:member.id===secretaryId,processing,waiting,needsInput,message,showMessage:occupied&&visible.has(member.id),recent:occupied && Number.isFinite(created) && created <= now && now-created <= 15000};
       }),
       lastMessage: messages.slice().reverse().find(message => !['system','event'].includes(message.kind) && message.sender_id !== 'system' && typeof message.text === 'string' && message.text.trim()) || null
     };
@@ -493,8 +507,9 @@
     if(typeof view.ResizeObserver==='function'){resize=new view.ResizeObserver(()=>{if(!destroyed){applyLayout();onVisibility();}});resize.observe(scroll);}
     return Object.freeze({update,destroy(){if(destroyed)return;destroyed=true;cancelEntrances();if(timer!==null)view.clearTimeout(timer);if(clockTimer!==null)view.clearTimeout(clockTimer);document.removeEventListener('visibilitychange',onVisibility);if(reducedMotion?.removeEventListener)reducedMotion.removeEventListener('change',onVisibility);else reducedMotion?.removeListener?.(onVisibility);observer?.disconnect();mutation?.disconnect();resize?.disconnect();scene.remove();items.clear();slots.clear();}});
   }
-  function avatarSource(member = {}, appearances) {return appearance(member,appearances).avatar;}
-  function defaultCharacter(value){return `${ASSETS}pixel-${value.preset==='robot'?'generic':pixelKey(value.provider)}.png`;}
-  function characterSource(member={},appearances){const value=appearance(member,appearances);return value.character||defaultCharacter(value);}
-  return {mount,describe,provider,plainText,safeImage,avatarSource,characterSource,clockState,normalizeScene,SCENE_DEFAULTS,CAMERA_LIMITS,GEOMETRY,allocateSlots,layoutOffice,cameraLayout,routeToSeat,joiningMembers};
+  // `members` (optional) is the room roster, used to give same-model colleagues distinct accessories.
+  function avatarSource(member = {}, appearances, members) {return appearance(member,appearances,members?autoVariants(members,appearances).get(member.id)||0:0).avatar;}
+  function defaultCharacter(value){return `${ASSETS}pixel-${value.preset==='robot'?'generic':pixelKey(value.provider)}${value.variant?`-v${value.variant}`:''}.png`;}
+  function characterSource(member={},appearances,members){const value=appearance(member,appearances,members?autoVariants(members,appearances).get(member.id)||0:0);return value.character||defaultCharacter(value);}
+  return {mount,describe,provider,plainText,autoVariants,safeImage,avatarSource,characterSource,clockState,normalizeScene,SCENE_DEFAULTS,CAMERA_LIMITS,GEOMETRY,allocateSlots,layoutOffice,cameraLayout,routeToSeat,joiningMembers};
 });

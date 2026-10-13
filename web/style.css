@@ -110,3 +110,78 @@ body.office-view .secretary-tutorial{position:absolute;left:50%;top:50%;transfor
 .message-header,.message-footer{font-size:12px}.message-header time{font-size:11px}.message-target{font-size:12px}
 .composer-note,.composer-bottom>span{font-size:11px}
 .message-content.markdown .md-task{list-style:none;margin-left:-1.2em}.message-content.markdown .md-check{display:inline-block;width:1.2em;color:var(--accent)}
+/* ===== Pixel office theme for the whole app =====
+   The sidebar is the office's wooden floor, the top bar is its window (sky follows local
+   time), and everything else is quiet paper with ink outlines and hard pixel shadows. */
+body.pixel-theme{--ink:#2b2d42;--muted:#6b6f80;--line:#2b2d42;--accent:#3b5bdb;--accent-dark:#2c44a8;--soft:#e6ecfb;--surface:#fffdf7;--paper:#f1f4f9;--wood:#d9a86c;--wood-dark:#b57a45;--amber:#f5c542;--sky:#9fd3f5;--px:3px 3px 0 #2b2d42;background:var(--paper);color:var(--ink)}
+html[data-phase=dawn] body.pixel-theme{--sky:#f2a983}html[data-phase=dusk] body.pixel-theme{--sky:#e07a5f}html[data-phase=night] body.pixel-theme{--sky:#1e2752}
+body.pixel-theme .sidebar{background:repeating-linear-gradient(0deg,transparent 0 34px,#c99a62 34px 36px),var(--wood);border-right:3px solid var(--ink);color:var(--ink)}
+body.pixel-theme .brand{color:var(--ink)}body.pixel-theme .brand small{color:#5b3a22}
+body.pixel-theme .brand-mark{background:var(--ink);border-radius:4px;box-shadow:3px 3px 0 #5b3a22;image-rendering:pixelated}
+body.pixel-theme .sidebar-section{color:#4a2e1a;letter-spacing:0;font-size:12px;font-weight:700}
+body.pixel-theme .sidebar .icon-button{color:#4a2e1a}body.pixel-theme .sidebar .icon-button:hover{background:#fff8e7;color:var(--ink)}
+body.pixel-theme .project-button,body.pixel-theme .room-button,body.pixel-theme .discussion-button{color:#3a2414;border-radius:4px;font-size:13px}
+body.pixel-theme .project-button::before{color:#5b3a22}
+body.pixel-theme .project-button:hover,body.pixel-theme .room-button:hover{background:#f0cf9c}
+body.pixel-theme .project-button.active,body.pixel-theme .room-button.active,body.pixel-theme .discussion-button.active{background:#fff8e7;color:var(--ink);border:2px solid var(--ink);box-shadow:var(--px)}
+body.pixel-theme .room-list-row.active{background:transparent}
+body.pixel-theme .room-list-icon{background:var(--amber)!important;color:var(--ink)!important;border:2px solid var(--ink);border-radius:3px}
+body.pixel-theme .room-button small{color:#6b4a30}
+body.pixel-theme .sidebar-footer{border-top:3px solid #b57a45;color:#4a2e1a}
+body.pixel-theme .local-dot,body.pixel-theme .local-indicator i{background:#34b36b;border-radius:0}
+/* the window */
+body.pixel-theme .topbar{position:relative;background:linear-gradient(180deg,var(--sky) 0 100%);border-bottom:3px solid var(--ink);transition:background-color 3s}
+body.pixel-theme .topbar:before{content:"";position:absolute;inset:auto 0 0 0;height:6px;background:#8a5a3b;pointer-events:none}
+body.pixel-theme .breadcrumbs,body.pixel-theme .breadcrumbs strong{color:var(--ink)}
+html[data-phase=night] body.pixel-theme .breadcrumbs,html[data-phase=night] body.pixel-theme .breadcrumbs strong,html[data-phase=night] body.pixel-theme .topbar .icon-button{color:#fff8e7}
+body.pixel-theme .breadcrumbs strong{font-size:15px;font-weight:700}
+body.pixel-theme .view-switch{background:#fff8e7;border:2px solid var(--ink);border-radius:4px;box-shadow:var(--px);padding:2px}
+body.pixel-theme .view-switch>button{color:var(--ink);border-radius:2px;font-size:12px;padding:5px 12px}
+body.pixel-theme .view-switch>button.active{background:var(--ink);color:#fff8e7;box-shadow:none}
+/* buttons */
+body.pixel-theme .primary{background:var(--accent);border:2px solid var(--ink);border-radius:4px;color:#fff;box-shadow:var(--px);font-weight:700}
+body.pixel-theme .primary:hover{background:var(--accent-dark)}
+body.pixel-theme .secondary{background:#fffdf7;border:2px solid var(--ink);border-radius:4px;color:var(--ink);box-shadow:var(--px)}
+body.pixel-theme .secondary:hover{background:#fff3c4;border-color:var(--ink)}
+body.pixel-theme :is(.primary,.secondary):active{transform:translate(2px,2px);box-shadow:1px 1px 0 var(--ink)}
+body.pixel-theme .text-button{color:var(--accent)}
+body.pixel-theme .topbar .secondary{font-size:12px;padding:7px 12px}
+/* chat */
+body.pixel-theme .content{background:transparent}
+body.pixel-theme .agent-avatar{border:2px solid var(--ink);border-radius:4px;background:#fff8e7;color:var(--ink);overflow:hidden}
+body.pixel-theme .agent-avatar img{image-rendering:pixelated;width:100%;height:100%;object-fit:cover}
+body.pixel-theme .chat-message .agent-avatar{width:34px;height:34px}
+body.pixel-theme .message-sender{color:var(--ink);font-weight:700;font-size:13px}
+body.pixel-theme .message-header time{color:var(--muted)}
+body.pixel-theme .message-body{position:relative;background:#fffdf7;border:2px solid var(--ink);border-radius:6px;box-shadow:var(--px)}
+body.pixel-theme .own-message .message-body{background:#fff3c4;border:2px solid var(--ink);border-radius:6px}
+body.pixel-theme .chat-message:not(.own-message) .message-body:before{content:"";position:absolute;left:-8px;top:10px;width:8px;height:10px;background:var(--ink);clip-path:polygon(100% 0,0 0,100% 100%)}
+body.pixel-theme .message-content.markdown{color:var(--ink)}
+body.pixel-theme .message-content.markdown code{background:#e6ecfb}
+body.pixel-theme .message-content.markdown .md-code{background:var(--ink);border-radius:4px}
+body.pixel-theme .message-content.markdown blockquote{border-left-color:var(--amber)}
+body.pixel-theme .system-message{color:var(--muted)}
+body.pixel-theme .status-pill{border:1px solid currentColor;border-radius:3px}
+body.pixel-theme .composer{background:#fffdf7;border:2px solid var(--ink);border-radius:6px;box-shadow:4px 4px 0 var(--ink)}
+body.pixel-theme .recipient-label{color:var(--muted)!important}
+body.pixel-theme .recipient-label select{background:#e6ecfb;color:var(--ink);border:2px solid var(--ink);border-radius:4px;font-weight:600}
+body.pixel-theme .room-members-bar{border-bottom:2px dashed #b9bccb}
+body.pixel-theme .member-chip{background:#fffdf7;border:2px solid var(--ink);border-radius:4px;color:var(--ink)}
+body.pixel-theme .member-chip .agent-avatar{border-radius:3px;border-width:1px}
+body.pixel-theme .add-member-button{border:2px dashed var(--ink);border-radius:4px;color:var(--ink)}
+body.pixel-theme .room-title h1{font-weight:800;letter-spacing:0}
+body.pixel-theme .eyebrow{letter-spacing:.5px;color:var(--accent)}
+body.pixel-theme .footer{border-top:2px solid var(--ink);color:var(--muted)}
+/* dialogs and side panel */
+body.pixel-theme dialog{border:3px solid var(--ink);border-radius:6px;box-shadow:6px 6px 0 var(--ink);background:#fffdf7}
+body.pixel-theme dialog::backdrop{background:#2b2d4266;backdrop-filter:none}
+body.pixel-theme input:not([type=checkbox]):not([type=range]):not([type=color]),body.pixel-theme select,body.pixel-theme textarea:not(#prompt){border:2px solid var(--ink);border-radius:4px;background:#fff}
+body.pixel-theme .room-inspector{background:#fffdf7;border-left:3px solid var(--ink)}
+body.pixel-theme .toast{background:var(--ink);border:2px solid #fff8e7;border-radius:4px;box-shadow:var(--px)}
+body.pixel-theme :focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+body.pixel-theme .setup-cards article,body.pixel-theme .connection-card,body.pixel-theme .candidate-card,body.pixel-theme .setup-block{border:2px solid var(--ink);border-radius:6px;box-shadow:var(--px);background:#fffdf7}
+body.pixel-theme main{background:var(--paper)}
+body.pixel-theme .message-content.markdown .md-code code{background:none;color:#f1f4f9;padding:0}
+body.pixel-theme .breadcrumbs>span,body.pixel-theme .breadcrumbs .slash,body.pixel-theme .topbar .icon-button{color:var(--ink)}
+html[data-phase=night] body.pixel-theme .breadcrumbs>span,html[data-phase=night] body.pixel-theme .breadcrumbs .slash{color:#fff8e7}
+body.pixel-theme .topbar .icon-button:hover{background:#fff8e7;color:var(--ink)}

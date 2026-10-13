@@ -42,6 +42,8 @@ function rasterData(value){
   const dimensions=imageDimensions(bytes,match[1]);if(!dimensions||dimensions.width<1||dimensions.height<1||dimensions.width>MAX_DIMENSION||dimensions.height>MAX_DIMENSION)throw new RoomError('图片格式或尺寸无效，请使用不超过 1024 × 1024 的静态图片。',400,'appearance_image_invalid');
   return `data:${match[1]};base64,${match[2]}`;
 }
+// Accessory colour for same-model colleagues: absent means automatic, 0 the original, 1-4 a variant.
+const validAccent=value=>Number.isInteger(value)&&value>=0&&value<=4;
 function defaultAppearance(member){
   const adapter=member.adapter==='mailbox'?(member.config?.launch_provider||member.adapter):member.adapter;
   const color=/codex/.test(adapter)?'#2e8067':/claude/.test(adapter)?'#c77955':/qwen/.test(adapter)?'#7259b8':/grok/.test(adapter)?'#34494d':'#557f9a';
@@ -51,7 +53,7 @@ function storedAppearance(store,member){
   const base=defaultAppearance(member);let stored;try{stored=store.setting('appearance.'+member.id);}catch{return base;}
   if(!stored||typeof stored!=='object'||Array.isArray(stored))return base;
   if(PRESETS.has(stored.preset))base.preset=stored.preset;if(/^#[0-9a-f]{6}$/i.test(stored.color||''))base.color=stored.color;
-  if(FURNITURE.has(stored.furniture))base.furniture=stored.furniture;if(typeof stored.scale==='number'&&Number.isFinite(stored.scale)&&stored.scale>=0.65&&stored.scale<=1.35)base.scale=stored.scale;
+  if(FURNITURE.has(stored.furniture))base.furniture=stored.furniture;if(typeof stored.scale==='number'&&Number.isFinite(stored.scale)&&stored.scale>=0.65&&stored.scale<=1.35)base.scale=stored.scale;if(validAccent(stored.accent))base.accent=stored.accent;
   for(const key of ['avatar_data','character_data'])if(stored[key]){try{base[key]=rasterData(stored[key]);}catch{}}
   return base;
 }
@@ -59,11 +61,11 @@ class AppearanceManager{
   constructor(service){this.service=service;}
   get(memberId){const member=this.service.chat.store.member(cleanText(memberId,200,'成员标识'));return storedAppearance(this.service.store,member);}
   set(input){
-    const allowed=new Set(['member_id','preset','color','furniture','scale','avatar_data','character_data','reset']);if(!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).some(key=>!allowed.has(key))||input.reset!==undefined&&typeof input.reset!=='boolean')throw new RoomError('外观设置包含不支持的字段。',400,'appearance_input_invalid');
+    const allowed=new Set(['member_id','preset','color','furniture','scale','accent','avatar_data','character_data','reset']);if(!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).some(key=>!allowed.has(key))||input.reset!==undefined&&typeof input.reset!=='boolean')throw new RoomError('外观设置包含不支持的字段。',400,'appearance_input_invalid');
     const member=this.service.chat.store.member(cleanText(input.member_id,200,'成员标识'));
     if(input.reset===true){this.service.store.db.prepare('DELETE FROM settings WHERE key=?').run('appearance.'+member.id);this.service.changed();return defaultAppearance(member);}
-    if(input.preset!==undefined&&!PRESETS.has(input.preset)||input.color!==undefined&&(typeof input.color!=='string'||!/^#[0-9a-f]{6}$/i.test(input.color))||input.furniture!==undefined&&!FURNITURE.has(input.furniture)||input.scale!==undefined&&(typeof input.scale!=='number'||!Number.isFinite(input.scale)||input.scale<0.65||input.scale>1.35))throw new RoomError('请选择有效的形象、颜色、家具和尺寸。',400,'appearance_input_invalid');
-    const value=this.get(member.id);if(input.preset!==undefined)value.preset=input.preset;if(input.color!==undefined)value.color=input.color.toLowerCase();if(input.furniture!==undefined)value.furniture=input.furniture;if(input.scale!==undefined)value.scale=input.scale;
+    if(input.preset!==undefined&&!PRESETS.has(input.preset)||input.color!==undefined&&(typeof input.color!=='string'||!/^#[0-9a-f]{6}$/i.test(input.color))||input.furniture!==undefined&&!FURNITURE.has(input.furniture)||input.scale!==undefined&&(typeof input.scale!=='number'||!Number.isFinite(input.scale)||input.scale<0.65||input.scale>1.35)||input.accent!==undefined&&input.accent!=='auto'&&!validAccent(input.accent))throw new RoomError('请选择有效的形象、颜色、家具和尺寸。',400,'appearance_input_invalid');
+    const value=this.get(member.id);if(input.preset!==undefined)value.preset=input.preset;if(input.color!==undefined)value.color=input.color.toLowerCase();if(input.furniture!==undefined)value.furniture=input.furniture;if(input.scale!==undefined)value.scale=input.scale;if(input.accent==='auto')delete value.accent;else if(input.accent!==undefined)value.accent=input.accent;
     for(const key of ['avatar_data','character_data'])if(Object.hasOwn(input,key)){const image=rasterData(input[key]);if(image)value[key]=image;else delete value[key];}
     this.service.store.setting('appearance.'+member.id,value);this.service.changed();return value;
   }

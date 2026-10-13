@@ -57,3 +57,9 @@ test('MCP communication omits graphical appearance data without changing message
   const result=await toolCall('agentroom_chat_history',{room_id:roomId},async()=>value,{env:{AGENTROOM_MEMBER_ID:memberId,AGENTROOM_ROOM_ID:roomId}});
   assert.equal(result.participants[0].id,memberId);assert.equal(result.participants[0].appearance,undefined);assert.deepEqual(result.messages,value.messages);assert.equal(value.participants[0].appearance.avatar_data,PIXEL);
 });
+test('accessory colour is automatic by default, can be pinned to a variant and returned to automatic',t=>{
+  const h=harness(t);assert.equal(h.service.appearance.get(h.member.id).accent,undefined);
+  assert.equal(h.service.appearance.set({member_id:h.member.id,accent:3}).accent,3);assert.equal(h.service.appearance.get(h.member.id).accent,3);
+  for(const accent of [5,-1,1.5,'2',null])assert.throws(()=>h.service.appearance.set({member_id:h.member.id,accent}),/有效/);
+  assert.equal(h.service.appearance.set({member_id:h.member.id,accent:'auto'}).accent,undefined);
+});

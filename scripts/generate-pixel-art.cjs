@@ -25,12 +25,19 @@ function png(grid, scale) {
 }
 function record(name, bytes) { return { asset: `/assets/office/${name}`, sha256: crypto.createHash('sha256').update(bytes).digest('hex'), bytes: bytes.length, width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20) }; }
 function write(name, grid) { const bytes = png(grid, SCALE); fs.writeFileSync(path.join(OUT, name), bytes); return record(name, bytes); }
-const avatarGrid = id => art.characterGrid(id).slice(0, 19).map(line => line.slice(1, 23));
+const avatarGrid = (id, variant) => art.characterGrid(id, variant).slice(0, 19).map(line => line.slice(1, 23));
 const characters = {}, avatars = {};
 for (const id of PIXEL_IDS) {
   const info = art.describeCharacter(id);
-  characters[id] = { ...write(`pixel-${id}.png`, art.characterGrid(id)), label: info.label, trait: info.trait, kind: 'project_original_pixel_character' };
+  const character = characters[id] = { ...write(`pixel-${id}.png`, art.characterGrid(id)), label: info.label, trait: info.trait, kind: 'project_original_pixel_character' };
   avatars[id] = { ...write(`pixel-avatar-${id}.png`, avatarGrid(id)), label: info.label, kind: 'project_original_pixel_avatar' };
+  character.variants = [];
+  for (let v = 1; v <= art.VARIANTS; v++) {
+    const accent = art.accentName(id, v);
+    characters[id].variants.push({ ...write(`pixel-${id}-v${v}.png`, art.characterGrid(id, v)), accent });
+    avatars[id].variants = avatars[id].variants || [];
+    avatars[id].variants.push({ ...write(`pixel-avatar-${id}-v${v}.png`, avatarGrid(id, v)), accent });
+  }
 }
 const desk = write('pixel-desk.png', art.deskGrid());
 const manifestPath = path.join(OUT, 'AVATAR_SOURCES.json');
@@ -41,9 +48,10 @@ const manifest = {
   runtime_network_required: false,
   purpose: 'Original pixel characters that suggest each agent through color and a signature accessory. They are not product logos or official mascots and imply no endorsement.',
   rendering: 'Pixel art; display with image-rendering: pixelated. User-selected local images take priority.',
+  variants: 'Colleagues running the same model share a character; variants -v1..-v4 recolour only its signature accessory.',
   license_note: 'All character, avatar and desk pixel art is original work of this project, generated from web/pixel-art.js. No third-party logos, avatars or mascots are distributed.',
   characters, avatars, desk: { ...desk, kind: 'project_original_pixel_furniture' },
   office_art: previous.office_art
 };
 fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
-console.log(`Wrote ${PIXEL_IDS.length * 2 + 1} pixel assets.`);
+console.log(`Wrote ${PIXEL_IDS.length * 2 * (art.VARIANTS + 1) + 1} pixel assets.`);

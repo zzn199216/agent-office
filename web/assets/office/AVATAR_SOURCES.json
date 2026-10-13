@@ -4,6 +4,7 @@
   "runtime_network_required": false,
   "purpose": "Original pixel characters that suggest each agent through color and a signature accessory. They are not product logos or official mascots and imply no endorsement.",
   "rendering": "Pixel art; display with image-rendering: pixelated. User-selected local images take priority.",
+  "variants": "Colleagues running the same model share a character; variants -v1..-v4 recolour only its signature accessory.",
   "license_note": "All character, avatar and desk pixel art is original work of this project, generated from web/pixel-art.js. No third-party logos, avatars or mascots are distributed.",
   "characters": {
     "deepseek": {
@@ -14,17 +15,85 @@
       "height": 120,
       "label": "DeepSeek",
       "trait": "鲸鱼帽 · 服务器繁忙",
-      "kind": "project_original_pixel_character"
+      "kind": "project_original_pixel_character",
+      "variants": [
+        {
+          "asset": "/assets/office/pixel-deepseek-v1.png",
+          "sha256": "3db4f323ba55105db055531dcb431987509672905f27a4922b851761e31251c1",
+          "bytes": 652,
+          "width": 96,
+          "height": 120,
+          "accent": "红"
+        },
+        {
+          "asset": "/assets/office/pixel-deepseek-v2.png",
+          "sha256": "eb1a8c9aa051747ac4dcdb58e7b0a2f82716e7de0ae919de6c1346b5476549f1",
+          "bytes": 655,
+          "width": 96,
+          "height": 120,
+          "accent": "黄"
+        },
+        {
+          "asset": "/assets/office/pixel-deepseek-v3.png",
+          "sha256": "85e325c831426077789b7fc57bf284c410f97be0312bfc8d5c706a990b35c525",
+          "bytes": 654,
+          "width": 96,
+          "height": 120,
+          "accent": "绿"
+        },
+        {
+          "asset": "/assets/office/pixel-deepseek-v4.png",
+          "sha256": "41e7d1dbfbcf702f89dab3560a79755ae24dc97a903f4c4ced3da9028a573a1d",
+          "bytes": 656,
+          "width": 96,
+          "height": 120,
+          "accent": "粉"
+        }
+      ]
     },
     "doubao": {
       "asset": "/assets/office/pixel-doubao.png",
-      "sha256": "f5aca1203702b43f3376d958bb2b35248ed936fc429a7325b42b802615e91edb",
-      "bytes": 597,
+      "sha256": "6ba895479cad34de5de7d125f96bedfc09d7b3cde8d208c20e0d34dd8c771f74",
+      "bytes": 610,
       "width": 96,
       "height": 120,
       "label": "豆包",
-      "trait": "包子帽 · 这个我熟",
-      "kind": "project_original_pixel_character"
+      "trait": "包子帽 + 红围巾 · 这个我熟",
+      "kind": "project_original_pixel_character",
+      "variants": [
+        {
+          "asset": "/assets/office/pixel-doubao-v1.png",
+          "sha256": "f0d37935db0b4e8b819ea04cb7626fc19570247d49806a8f0c107615c4b674e4",
+          "bytes": 612,
+          "width": 96,
+          "height": 120,
+          "accent": "蓝"
+        },
+        {
+          "asset": "/assets/office/pixel-doubao-v2.png",
+          "sha256": "5926caacff2bbd44fff6622ec7b7b41938780060dfb6f137ff8839b8e8cac348",
+          "bytes": 613,
+          "width": 96,
+          "height": 120,
+          "accent": "黄"
+        },
+        {
+          "asset": "/assets/office/pixel-doubao-v3.png",
+          "sha256": "ffb4b0ad09f1a63834b7c20635e2a3043b0f421c31638293cfd0650b904d6915",
+          "bytes": 611,
+          "width": 96,
+          "height": 120,
+          "accent": "绿"
+        },
+        {
+          "asset": "/assets/office/pixel-doubao-v4.png",
+          "sha256": "4c77b774b16fd0d2bbc40e55386854ddc1bf7ce14ff8c6266ca16471dea344c5",
+          "bytes": 615,
+          "width": 96,
+          "height": 120,
+          "accent": "粉"
+        }
+      ]
     },
     "claude": {
       "asset": "/assets/office/pixel-claude.png",
@@ -34,7 +103,41 @@
       "height": 120,
       "label": "Claude",
       "trait": "陶土色贝雷帽 · 先确认需求",
-      "kind": "project_original_pixel_character"
+      "kind": "project_original_pixel_character",
+      "variants": [
+        {
+          "asset": "/assets/office/pixel-claude-v1.png",
+          "sha256": "1665bd2e8398fbdd50006aa9366f4b7d29020c82cc8323189ded43ff477dbf7f",
+          "bytes": 627,
+          "width": 96,
+          "height": 120,
+          "accent": "红"
+        },
+        {
+          "asset": "/assets/office/pixel-claude-v2.png",
+          "sha256": "d2dfcfdf85a039e4d0ddafff716cf9cdd873ede74288ef86183d6e343ef721f2",
+          "bytes": 623,
+          "width": 96,
+          "height": 120,
+          "accent": "蓝"
+        },
+        {
+          "asset": "/assets/office/pixel-claude-v3.png",
+          "sha256": "4de85f1afa267ba707abd700101200d20ee07d4f7a9d03d09c3074d8db5ffba0",
+          "bytes": 626,
+          "width": 96,
+          "height": 120,
+          "accent": "绿"
+        },
+        {
+          "asset": "/assets/office/pixel-claude-v4.png",
+          "sha256": "e1eeea468e05927f068940d9124d6aea4f3829bf7f267a8d5a63cfde5ff9e4ac",
+          "bytes": 627,
+          "width": 96,
+          "height": 120,
+          "accent": "粉"
+        }
+      ]
     },
     "codex": {
       "asset": "/assets/office/pixel-codex.png",
@@ -44,7 +147,41 @@
       "height": 120,
       "label": "Codex",
       "trait": "终端护目镜 · 测试又跑了一遍",
-      "kind": "project_original_pixel_character"
+      "kind": "project_original_pixel_character",
+      "variants": [
+        {
+          "asset": "/assets/office/pixel-codex-v1.png",
+          "sha256": "d27c861572d342624c5a3343169abe973b7dbcd8bb17b8702a49919f138be073",
+          "bytes": 612,
+          "width": 96,
+          "height": 120,
+          "accent": "红"
+        },
+        {
+          "asset": "/assets/office/pixel-codex-v2.png",
+          "sha256": "3e2031b33a9d26691fd4db9118bbce655ea01a89538a884c0b50c77bc202071d",
+          "bytes": 610,
+          "width": 96,
+          "height": 120,
+          "accent": "蓝"
+        },
+        {
+          "asset": "/assets/office/pixel-codex-v3.png",
+          "sha256": "4b5a4e6d8ab0e648ab9c0f1dd08ed508eac6018dc8adeff160d669840cf96b0e",
+          "bytes": 609,
+          "width": 96,
+          "height": 120,
+          "accent": "黄"
+        },
+        {
+          "asset": "/assets/office/pixel-codex-v4.png",
+          "sha256": "a18b35d5c37a5089cc50019ff4f654b6c4493ee1001ecd4ae5d7756004162a3f",
+          "bytes": 609,
+          "width": 96,
+          "height": 120,
+          "accent": "粉"
+        }
+      ]
     },
     "grok": {
       "asset": "/assets/office/pixel-grok.png",
@@ -54,7 +191,41 @@
       "height": 120,
       "label": "Grok",
       "trait": "墨镜坏笑 · 就这题？",
-      "kind": "project_original_pixel_character"
+      "kind": "project_original_pixel_character",
+      "variants": [
+        {
+          "asset": "/assets/office/pixel-grok-v1.png",
+          "sha256": "ad01218594c30644a6c5ed60234e6e02764e8f12312ee20ee28ed17ecbc5539c",
+          "bytes": 608,
+          "width": 96,
+          "height": 120,
+          "accent": "蓝"
+        },
+        {
+          "asset": "/assets/office/pixel-grok-v2.png",
+          "sha256": "cf04febd5a65bbd2fa87333043b8e9da72f0c46729c3cfa4b22e246674999bde",
+          "bytes": 608,
+          "width": 96,
+          "height": 120,
+          "accent": "绿"
+        },
+        {
+          "asset": "/assets/office/pixel-grok-v3.png",
+          "sha256": "1966dfa877a41eec4cb3803d94f2d96047b170b4c983d59aa10d0bd8a14f1f7e",
+          "bytes": 606,
+          "width": 96,
+          "height": 120,
+          "accent": "粉"
+        },
+        {
+          "asset": "/assets/office/pixel-grok-v4.png",
+          "sha256": "e7a767f4c30588a321c7eb310677bfbac6d7107ab3526df63769491eec60e711",
+          "bytes": 607,
+          "width": 96,
+          "height": 120,
+          "accent": "紫"
+        }
+      ]
     },
     "gemini": {
       "asset": "/assets/office/pixel-gemini.png",
@@ -64,7 +235,41 @@
       "height": 120,
       "label": "Gemini",
       "trait": "双子双马尾 · 图文视频都懂",
-      "kind": "project_original_pixel_character"
+      "kind": "project_original_pixel_character",
+      "variants": [
+        {
+          "asset": "/assets/office/pixel-gemini-v1.png",
+          "sha256": "57cde37fdd8808dcd76677053f222bc49c4d011b189a8fc05271b802978e21f4",
+          "bytes": 695,
+          "width": 96,
+          "height": 120,
+          "accent": "红"
+        },
+        {
+          "asset": "/assets/office/pixel-gemini-v2.png",
+          "sha256": "5490eaffc22df05dd218400b6424e4377a6da58cfe91bbd9674c8d990d4631a5",
+          "bytes": 695,
+          "width": 96,
+          "height": 120,
+          "accent": "黄"
+        },
+        {
+          "asset": "/assets/office/pixel-gemini-v3.png",
+          "sha256": "dc4649dd94b37e36cd2c69592d926f04b26243cdb696bb7fe856783fea23cc9d",
+          "bytes": 699,
+          "width": 96,
+          "height": 120,
+          "accent": "绿"
+        },
+        {
+          "asset": "/assets/office/pixel-gemini-v4.png",
+          "sha256": "5bf27cddeb593c01030cec59db072f78f8d9446c4d027a3a26594eb581d6794a",
+          "bytes": 698,
+          "width": 96,
+          "height": 120,
+          "accent": "粉"
+        }
+      ]
     },
     "kimi": {
       "asset": "/assets/office/pixel-kimi.png",
@@ -74,7 +279,41 @@
       "height": 120,
       "label": "Kimi",
       "trait": "弯月发饰 · 二十万字读完了",
-      "kind": "project_original_pixel_character"
+      "kind": "project_original_pixel_character",
+      "variants": [
+        {
+          "asset": "/assets/office/pixel-kimi-v1.png",
+          "sha256": "4b7d1be7d5097c23db1379fa87e600117856e5fbcbc51d2db05f0377b5e757f8",
+          "bytes": 570,
+          "width": 96,
+          "height": 120,
+          "accent": "红"
+        },
+        {
+          "asset": "/assets/office/pixel-kimi-v2.png",
+          "sha256": "fb3e825e5aad84d5a634668688a736d5b7a092113d30651bc3c00e1fa1a6e46a",
+          "bytes": 573,
+          "width": 96,
+          "height": 120,
+          "accent": "蓝"
+        },
+        {
+          "asset": "/assets/office/pixel-kimi-v3.png",
+          "sha256": "d19e2c66ac66d772155b2b29765f139fb5cbcf16a7a89ade2de56eb9440d0cf0",
+          "bytes": 572,
+          "width": 96,
+          "height": 120,
+          "accent": "绿"
+        },
+        {
+          "asset": "/assets/office/pixel-kimi-v4.png",
+          "sha256": "99d15384e05445f975d82632d5d9b2c2666bc6ca6937ab1a2b1bb86ff595358e",
+          "bytes": 572,
+          "width": 96,
+          "height": 120,
+          "accent": "粉"
+        }
+      ]
     },
     "qwen": {
       "asset": "/assets/office/pixel-qwen.png",
@@ -84,7 +323,41 @@
       "height": 120,
       "label": "千问",
       "trait": "问号呆毛 · 再问一个",
-      "kind": "project_original_pixel_character"
+      "kind": "project_original_pixel_character",
+      "variants": [
+        {
+          "asset": "/assets/office/pixel-qwen-v1.png",
+          "sha256": "c02d81eeafae2fa10d7e59ffba93c6c93d5080187988a9eded4a1112fa5ddebb",
+          "bytes": 594,
+          "width": 96,
+          "height": 120,
+          "accent": "红"
+        },
+        {
+          "asset": "/assets/office/pixel-qwen-v2.png",
+          "sha256": "77434e687245972d9e1ead5f863b7e9b504145779c6e92f912fd6c92e99c491f",
+          "bytes": 595,
+          "width": 96,
+          "height": 120,
+          "accent": "蓝"
+        },
+        {
+          "asset": "/assets/office/pixel-qwen-v3.png",
+          "sha256": "51323b8ab7e277a56b33c0556901c246ad95f5358a52ffb20778f16b16e3dc29",
+          "bytes": 594,
+          "width": 96,
+          "height": 120,
+          "accent": "黄"
+        },
+        {
+          "asset": "/assets/office/pixel-qwen-v4.png",
+          "sha256": "defdb1cb3ec88ac8966422c52cf3e2fa1a4496dce8db60eb62d52504cbf8af65",
+          "bytes": 598,
+          "width": 96,
+          "height": 120,
+          "accent": "绿"
+        }
+      ]
     },
     "cursor": {
       "asset": "/assets/office/pixel-cursor.png",
@@ -94,7 +367,41 @@
       "height": 120,
       "label": "Cursor",
       "trait": "光标发卡 · 按 Tab 补全",
-      "kind": "project_original_pixel_character"
+      "kind": "project_original_pixel_character",
+      "variants": [
+        {
+          "asset": "/assets/office/pixel-cursor-v1.png",
+          "sha256": "a2a357e511395902a2145af902741b463fb15165a2f8c0f0a3534ff90ac9c186",
+          "bytes": 584,
+          "width": 96,
+          "height": 120,
+          "accent": "红"
+        },
+        {
+          "asset": "/assets/office/pixel-cursor-v2.png",
+          "sha256": "b1e6150d77b628e6ae79f8559d36d81d83b78790c49f0c613e47ff4d62dcb3af",
+          "bytes": 584,
+          "width": 96,
+          "height": 120,
+          "accent": "蓝"
+        },
+        {
+          "asset": "/assets/office/pixel-cursor-v3.png",
+          "sha256": "67f21837a59beed64efb32a3e0f0e8726e0d3bacf27c8401b650ed4aa8e3c15a",
+          "bytes": 585,
+          "width": 96,
+          "height": 120,
+          "accent": "黄"
+        },
+        {
+          "asset": "/assets/office/pixel-cursor-v4.png",
+          "sha256": "c62a0a0ed7efffcf11633b88a23e1e9694b1b8a8b11f3b4d0513570411b6b1a9",
+          "bytes": 585,
+          "width": 96,
+          "height": 120,
+          "accent": "绿"
+        }
+      ]
     },
     "generic": {
       "asset": "/assets/office/pixel-generic.png",
@@ -104,7 +411,41 @@
       "height": 120,
       "label": "Agent",
       "trait": "通用小机器人",
-      "kind": "project_original_pixel_character"
+      "kind": "project_original_pixel_character",
+      "variants": [
+        {
+          "asset": "/assets/office/pixel-generic-v1.png",
+          "sha256": "d2d40f12484a8428fb95a95803dfd2b7da3df59ad53e6def7ede1d8ca751f903",
+          "bytes": 490,
+          "width": 96,
+          "height": 120,
+          "accent": "红"
+        },
+        {
+          "asset": "/assets/office/pixel-generic-v2.png",
+          "sha256": "c78d3e763242871da59bb665ee343308f97cccff30fba416eb8148229e51b2e8",
+          "bytes": 493,
+          "width": 96,
+          "height": 120,
+          "accent": "蓝"
+        },
+        {
+          "asset": "/assets/office/pixel-generic-v3.png",
+          "sha256": "de794fc547102daab82c60d97c59a2f3647f4a241a3232c4524f3f33e52c6a33",
+          "bytes": 491,
+          "width": 96,
+          "height": 120,
+          "accent": "绿"
+        },
+        {
+          "asset": "/assets/office/pixel-generic-v4.png",
+          "sha256": "b11b7fd5b0df257d4765a460d1629b538a2d794d8747c969e8ac24f4e8c9be92",
+          "bytes": 489,
+          "width": 96,
+          "height": 120,
+          "accent": "粉"
+        }
+      ]
     }
   },
   "avatars": {
@@ -115,16 +456,84 @@
       "width": 88,
       "height": 76,
       "label": "DeepSeek",
-      "kind": "project_original_pixel_avatar"
+      "kind": "project_original_pixel_avatar",
+      "variants": [
+        {
+          "asset": "/assets/office/pixel-avatar-deepseek-v1.png",
+          "sha256": "48b291f975b51d1b26ebe8d29fd5b07d18edc9087243d2a6d5aec5ba73f7450e",
+          "bytes": 503,
+          "width": 88,
+          "height": 76,
+          "accent": "红"
+        },
+        {
+          "asset": "/assets/office/pixel-avatar-deepseek-v2.png",
+          "sha256": "a095aeb6cb50845b542392f1a8a3b484b8ccfc765fca45997e7e1c5ede7bfc11",
+          "bytes": 505,
+          "width": 88,
+          "height": 76,
+          "accent": "黄"
+        },
+        {
+          "asset": "/assets/office/pixel-avatar-deepseek-v3.png",
+          "sha256": "4468e10decea12aadbdb09887768a8fd5bc5cbc76371a953ea7ca8fc70eec24c",
+          "bytes": 503,
+          "width": 88,
+          "height": 76,
+          "accent": "绿"
+        },
+        {
+          "asset": "/assets/office/pixel-avatar-deepseek-v4.png",
+          "sha256": "8db233c4dc9e9c4e5eea8671dd7b6e22091c4b981ed8312920f62038966b86bf",
+          "bytes": 505,
+          "width": 88,
+          "height": 76,
+          "accent": "粉"
+        }
+      ]
     },
     "doubao": {
       "asset": "/assets/office/pixel-avatar-doubao.png",
-      "sha256": "d36d44c6df887c48646212a662dedd7037da8fad33685da06df2599526a63db2",
-      "bytes": 444,
+      "sha256": "4ef99760d95d9311b57c205d1a8843f05f2acd5f57d6cd6d9a0d3ac881554f51",
+      "bytes": 433,
       "width": 88,
       "height": 76,
       "label": "豆包",
-      "kind": "project_original_pixel_avatar"
+      "kind": "project_original_pixel_avatar",
+      "variants": [
+        {
+          "asset": "/assets/office/pixel-avatar-doubao-v1.png",
+          "sha256": "50ba8132633e44b3b66b5268ef495b42327ac2dea261bcd159ef28b7993ae40f",
+          "bytes": 433,
+          "width": 88,
+          "height": 76,
+          "accent": "蓝"
+        },
+        {
+          "asset": "/assets/office/pixel-avatar-doubao-v2.png",
+          "sha256": "33aee4418813a3ca194268e9e0154e5e116302df4bc36c1f3cbd61024b091948",
+          "bytes": 434,
+          "width": 88,
+          "height": 76,
+          "accent": "黄"
+        },
+        {
+          "asset": "/assets/office/pixel-avatar-doubao-v3.png",
+          "sha256": "65cdb3e1b81f10b21138a5c9fd2fc242bff3518bdb9bb7da057fe89cddf480a1",
+          "bytes": 432,
+          "width": 88,
+          "height": 76,
+          "accent": "绿"
+        },
+        {
+          "asset": "/assets/office/pixel-avatar-doubao-v4.png",
+          "sha256": "d0f8f58ac9d37820fc8ae742be76afef48987afe306083537f3d496357260fef",
+          "bytes": 434,
+          "width": 88,
+          "height": 76,
+          "accent": "粉"
+        }
+      ]
     },
     "claude": {
       "asset": "/assets/office/pixel-avatar-claude.png",
@@ -133,7 +542,41 @@
       "width": 88,
       "height": 76,
       "label": "Claude",
-      "kind": "project_original_pixel_avatar"
+      "kind": "project_original_pixel_avatar",
+      "variants": [
+        {
+          "asset": "/assets/office/pixel-avatar-claude-v1.png",
+          "sha256": "656516815192b5f4501c84baf7a353a94aec42f1c975d1d628c93302892b70cb",
+          "bytes": 433,
+          "width": 88,
+          "height": 76,
+          "accent": "红"
+        },
+        {
+          "asset": "/assets/office/pixel-avatar-claude-v2.png",
+          "sha256": "e4ba829b1698d18dfac8a7495c2088704f94276c52c90284f338f755294b49d7",
+          "bytes": 431,
+          "width": 88,
+          "height": 76,
+          "accent": "蓝"
+        },
+        {
+          "asset": "/assets/office/pixel-avatar-claude-v3.png",
+          "sha256": "351357675fc2e58ab9f5b68cb2f83ad2be1657824b84acb9ac1aeb0b7d8324ad",
+          "bytes": 435,
+          "width": 88,
+          "height": 76,
+          "accent": "绿"
+        },
+        {
+          "asset": "/assets/office/pixel-avatar-claude-v4.png",
+          "sha256": "3e70ad5c7a88402ebf4a7995f3085690603f9243fd7ffffd7bffdde7c1798902",
+          "bytes": 433,
+          "width": 88,
+          "height": 76,
+          "accent": "粉"
+        }
+      ]
     },
     "codex": {
       "asset": "/assets/office/pixel-avatar-codex.png",
@@ -142,7 +585,41 @@
       "width": 88,
       "height": 76,
       "label": "Codex",
-      "kind": "project_original_pixel_avatar"
+      "kind": "project_original_pixel_avatar",
+      "variants": [
+        {
+          "asset": "/assets/office/pixel-avatar-codex-v1.png",
+          "sha256": "8c38952357af83859506170d3e320601be20b74e4dd00eb452eecf1d2600fc36",
+          "bytes": 450,
+          "width": 88,
+          "height": 76,
+          "accent": "红"
+        },
+        {
+          "asset": "/assets/office/pixel-avatar-codex-v2.png",
+          "sha256": "4c4ef82f109ba5e7c808740d3518d7f70c0866d686367a8e9490a65d8cec74fa",
+          "bytes": 450,
+          "width": 88,
+          "height": 76,
+          "accent": "蓝"
+        },
+        {
+          "asset": "/assets/office/pixel-avatar-codex-v3.png",
+          "sha256": "49dc047b3ab06766e38a04f702d71713b42604d74b3a033353da6ce7e0842026",
+          "bytes": 452,
+          "width": 88,
+          "height": 76,
+          "accent": "黄"
+        },
+        {
+          "asset": "/assets/office/pixel-avatar-codex-v4.png",
+          "sha256": "dea5b75d38332214a1cd765758e6c0993a723fadf027af6eb11fb283fac48304",
+          "bytes": 451,
+          "width": 88,
+          "height": 76,
+          "accent": "粉"
+        }
+      ]
     },
     "grok": {
       "asset": "/assets/office/pixel-avatar-grok.png",
@@ -151,7 +628,41 @@
       "width": 88,
       "height": 76,
       "label": "Grok",
-      "kind": "project_original_pixel_avatar"
+      "kind": "project_original_pixel_avatar",
+      "variants": [
+        {
+          "asset": "/assets/office/pixel-avatar-grok-v1.png",
+          "sha256": "c3ab2b4b11eee923dbce1c47f5f8f613fd284073cbe3b65867063dc7bc80c87f",
+          "bytes": 471,
+          "width": 88,
+          "height": 76,
+          "accent": "蓝"
+        },
+        {
+          "asset": "/assets/office/pixel-avatar-grok-v2.png",
+          "sha256": "a97e153cfa450b8a4865338e91f530ec0ca172b84a5bb113800895fb645ee29d",
+          "bytes": 471,
+          "width": 88,
+          "height": 76,
+          "accent": "绿"
+        },
+        {
+          "asset": "/assets/office/pixel-avatar-grok-v3.png",
+          "sha256": "3b8569ca2b128039bd564057d4e700f24cac370ece859a1a0c5d40aef14f149a",
+          "bytes": 470,
+          "width": 88,
+          "height": 76,
+          "accent": "粉"
+        },
+        {
+          "asset": "/assets/office/pixel-avatar-grok-v4.png",
+          "sha256": "7c478a700d4e539794ca411bdfe5a9a40084ebd8d4863512c3892648bb66a7dd",
+          "bytes": 470,
+          "width": 88,
+          "height": 76,
+          "accent": "紫"
+        }
+      ]
     },
     "gemini": {
       "asset": "/assets/office/pixel-avatar-gemini.png",
@@ -160,7 +671,41 @@
       "width": 88,
       "height": 76,
       "label": "Gemini",
-      "kind": "project_original_pixel_avatar"
+      "kind": "project_original_pixel_avatar",
+      "variants": [
+        {
+          "asset": "/assets/office/pixel-avatar-gemini-v1.png",
+          "sha256": "267090530b9fee66b7ab4300f5e6872f4d90b303f047f635407d9211e9534406",
+          "bytes": 486,
+          "width": 88,
+          "height": 76,
+          "accent": "红"
+        },
+        {
+          "asset": "/assets/office/pixel-avatar-gemini-v2.png",
+          "sha256": "65d286223b67cf80157fe897f3bf8836e3329965d22fae093fd0fa2a395c59a1",
+          "bytes": 485,
+          "width": 88,
+          "height": 76,
+          "accent": "黄"
+        },
+        {
+          "asset": "/assets/office/pixel-avatar-gemini-v3.png",
+          "sha256": "fd07da5a3acd8628cfe92ae1f638587518e75367f6503b429d8a1cb25e337ce1",
+          "bytes": 488,
+          "width": 88,
+          "height": 76,
+          "accent": "绿"
+        },
+        {
+          "asset": "/assets/office/pixel-avatar-gemini-v4.png",
+          "sha256": "9c5c4faf560b13e0c35bc0b111aac2ce46295b76c35cc5c18365b54c4a52fe63",
+          "bytes": 487,
+          "width": 88,
+          "height": 76,
+          "accent": "粉"
+        }
+      ]
     },
     "kimi": {
       "asset": "/assets/office/pixel-avatar-kimi.png",
@@ -169,7 +714,41 @@
       "width": 88,
       "height": 76,
       "label": "Kimi",
-      "kind": "project_original_pixel_avatar"
+      "kind": "project_original_pixel_avatar",
+      "variants": [
+        {
+          "asset": "/assets/office/pixel-avatar-kimi-v1.png",
+          "sha256": "69ee384e499d02076f6119bd6a1f8e3d2dfa0c786cd0fc38e72c18b0e7ad04bd",
+          "bytes": 416,
+          "width": 88,
+          "height": 76,
+          "accent": "红"
+        },
+        {
+          "asset": "/assets/office/pixel-avatar-kimi-v2.png",
+          "sha256": "422a45f17f2959b16867ba8fe0c1f31c4e7920f27b854958358dfe6e2cb2a5f4",
+          "bytes": 419,
+          "width": 88,
+          "height": 76,
+          "accent": "蓝"
+        },
+        {
+          "asset": "/assets/office/pixel-avatar-kimi-v3.png",
+          "sha256": "c70ec9a6023a9f584568d8916a427903b55adc22a5fac17226418d4d74183943",
+          "bytes": 418,
+          "width": 88,
+          "height": 76,
+          "accent": "绿"
+        },
+        {
+          "asset": "/assets/office/pixel-avatar-kimi-v4.png",
+          "sha256": "7bd253bc07f14e41146820620a0891fca67661a18d2dd76b2f67fcdb3822a600",
+          "bytes": 418,
+          "width": 88,
+          "height": 76,
+          "accent": "粉"
+        }
+      ]
     },
     "qwen": {
       "asset": "/assets/office/pixel-avatar-qwen.png",
@@ -178,7 +757,41 @@
       "width": 88,
       "height": 76,
       "label": "千问",
-      "kind": "project_original_pixel_avatar"
+      "kind": "project_original_pixel_avatar",
+      "variants": [
+        {
+          "asset": "/assets/office/pixel-avatar-qwen-v1.png",
+          "sha256": "eff3b2c4d61c8019da6ccd473eccf5fa8ed6e44e96553e57973ddecd7f0bfbc2",
+          "bytes": 455,
+          "width": 88,
+          "height": 76,
+          "accent": "红"
+        },
+        {
+          "asset": "/assets/office/pixel-avatar-qwen-v2.png",
+          "sha256": "f637031f5f3d5e4f71fa7194b8c614d88cc5fb0ee8f4facb09cf4983ef9d4197",
+          "bytes": 454,
+          "width": 88,
+          "height": 76,
+          "accent": "蓝"
+        },
+        {
+          "asset": "/assets/office/pixel-avatar-qwen-v3.png",
+          "sha256": "aff098e8ce3ef0d42a92cc385dc0464f1586db4ccc2dc4b02503259979ea7f60",
+          "bytes": 455,
+          "width": 88,
+          "height": 76,
+          "accent": "黄"
+        },
+        {
+          "asset": "/assets/office/pixel-avatar-qwen-v4.png",
+          "sha256": "20cd8ee73ef952b1223acba8397efe74ee7dc8d78a7e5616af0a655649b080b3",
+          "bytes": 457,
+          "width": 88,
+          "height": 76,
+          "accent": "绿"
+        }
+      ]
     },
     "cursor": {
       "asset": "/assets/office/pixel-avatar-cursor.png",
@@ -187,7 +800,41 @@
       "width": 88,
       "height": 76,
       "label": "Cursor",
-      "kind": "project_original_pixel_avatar"
+      "kind": "project_original_pixel_avatar",
+      "variants": [
+        {
+          "asset": "/assets/office/pixel-avatar-cursor-v1.png",
+          "sha256": "1476994da95b6e334731b4f36fa0e6b476779362e7fe73ee67fabe91a153763f",
+          "bytes": 447,
+          "width": 88,
+          "height": 76,
+          "accent": "红"
+        },
+        {
+          "asset": "/assets/office/pixel-avatar-cursor-v2.png",
+          "sha256": "6a62cbfb5239c31c0e11ea4f346137406fc2c535bb9b8747fe4426bdd786c801",
+          "bytes": 446,
+          "width": 88,
+          "height": 76,
+          "accent": "蓝"
+        },
+        {
+          "asset": "/assets/office/pixel-avatar-cursor-v3.png",
+          "sha256": "0e567081c9d6e531c09438f5ba56a2df654c20ba362e089877de393d48a809fd",
+          "bytes": 448,
+          "width": 88,
+          "height": 76,
+          "accent": "黄"
+        },
+        {
+          "asset": "/assets/office/pixel-avatar-cursor-v4.png",
+          "sha256": "e60bf79c32c90ae10c6ae95e316fb4b583be770ce13b0c20c50d788f62983cd8",
+          "bytes": 448,
+          "width": 88,
+          "height": 76,
+          "accent": "绿"
+        }
+      ]
     },
     "generic": {
       "asset": "/assets/office/pixel-avatar-generic.png",
@@ -196,7 +843,41 @@
       "width": 88,
       "height": 76,
       "label": "Agent",
-      "kind": "project_original_pixel_avatar"
+      "kind": "project_original_pixel_avatar",
+      "variants": [
+        {
+          "asset": "/assets/office/pixel-avatar-generic-v1.png",
+          "sha256": "61187eb0781b10bf341756c70d8fa3b94f4520291b6d133dae544a6a34ba21f1",
+          "bytes": 355,
+          "width": 88,
+          "height": 76,
+          "accent": "红"
+        },
+        {
+          "asset": "/assets/office/pixel-avatar-generic-v2.png",
+          "sha256": "babc85a8e40a57849f4851e4e6a9e83f9e1a9e1a8d1b92a40f773a47a3ec91a9",
+          "bytes": 357,
+          "width": 88,
+          "height": 76,
+          "accent": "蓝"
+        },
+        {
+          "asset": "/assets/office/pixel-avatar-generic-v3.png",
+          "sha256": "d057bd2e5a744f45195dc92ae671f2caf54c31cf7dc5814d2cb6b464a3504326",
+          "bytes": 357,
+          "width": 88,
+          "height": 76,
+          "accent": "绿"
+        },
+        {
+          "asset": "/assets/office/pixel-avatar-generic-v4.png",
+          "sha256": "9ca173c414878a8d021d2bf9c7496085cccd8de8d9a7430b51e0a5e3bb0361a8",
+          "bytes": 352,
+          "width": 88,
+          "height": 76,
+          "accent": "粉"
+        }
+      ]
     }
   },
   "desk": {

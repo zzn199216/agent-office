@@ -166,3 +166,13 @@ test('only a new participant in the already visible online room gets a door entr
   assert.deepEqual(scene.joiningMembers(previous,{...next,memberIds:['two','one']}),[]);
   assert.deepEqual(scene.joiningMembers({...previous,memberIds:['two']},{...next,memberIds:['one','two']}),['one']);
 });
+test('colleagues on the same model share a character and cycle accessory colours in room order',()=>{
+  const roster=['Claude','Codex','Claude·审查','Claude·文档','Codex·测试','Claude 4','Claude 5','Claude 6'].map((name,index)=>({id:'m'+index,name,adapter:'mailbox'}));
+  const model=scene.describe({participants:roster});
+  assert.deepEqual(model.members.map(item=>item.appearance.variant),[0,0,1,2,1,3,4,1]);
+  assert.equal(model.members[2].appearance.avatar,'/assets/office/pixel-avatar-claude-v1.png');
+  assert.equal(scene.characterSource(roster[3],undefined,roster),'/assets/office/pixel-claude-v2.png');
+  assert.equal(scene.avatarSource(roster[0],undefined,roster),'/assets/office/pixel-avatar-claude.png');
+  const pinned=roster.map(member=>member.id==='m2'?{...member,appearance:{accent:0}}:member);
+  assert.equal(scene.describe({participants:pinned}).members[2].appearance.variant,0,'a pinned colour wins over the automatic one');
+});

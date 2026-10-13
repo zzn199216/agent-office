@@ -62,3 +62,25 @@ test('every pixel character has a distinct palette and a recognisable signature 
   const signatures = new Set(grids.map(grid => grid.flat().join(',')));
   assert.equal(signatures.size, PIXEL_IDS.length, 'characters are not palette swaps of one another');
 });
+
+test('same-model colleagues get four accessory variants that recolour only the accessory', () => {
+  const { PIXEL_VARIANTS } = require('../src/office-assets.cjs');
+  assert.equal(PIXEL_VARIANTS, art.VARIANTS);
+  for (const id of PIXEL_IDS) {
+    const base = art.characterGrid(id), names = new Set();
+    assert.equal(manifest.characters[id].variants.length, art.VARIANTS, id);
+    for (let v = 1; v <= art.VARIANTS; v++) {
+      checkPng(manifest.characters[id].variants[v - 1], `pixel-${id}-v${v}.png`, `${id} v${v}`);
+      checkPng(manifest.avatars[id].variants[v - 1], `pixel-avatar-${id}-v${v}.png`, `${id} avatar v${v}`);
+      const grid = art.characterGrid(id, v);
+      let changed = 0;
+      for (let r = 0; r < art.H; r++) for (let c = 0; c < art.W; c++) {
+        assert.equal(!!grid[r][c], !!base[r][c], `${id} v${v} keeps the same silhouette`);
+        if (grid[r][c] !== base[r][c]) changed++;
+      }
+      assert.ok(changed > 0 && changed < art.W * art.H / 4, `${id} v${v} recolours a small accessory (${changed} px)`);
+      names.add(art.accentName(id, v));
+    }
+    assert.equal(names.size, art.VARIANTS, `${id} variants have distinct colours`);
+  }
+});
