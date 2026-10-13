@@ -13,16 +13,24 @@ async function main(){
     const installed=path.join(data,'bin','AgentRoom.exe');if(!fs.existsSync(installed))throw new Error('Stable self-install failed.');
     const sourceHash=crypto.createHash('sha256').update(fs.readFileSync(exe)).digest('hex'),installedHash=crypto.createHash('sha256').update(fs.readFileSync(installed)).digest('hex');if(sourceHash!==installedHash)throw new Error('Installed binary differs.');
     const evidence={tested_at:new Date().toISOString(),version,self_install_verified:true,embedded_ui_verified:true,no_node_or_python_child_runtime_required:true,version_command_no_side_effects:true,projects:status.projects.length,url:start.url};
-    for(const provider of ['codex','claude','qwen','grok','cursor','doubao']){
-      const response=await fetch(start.url+`/assets/office/avatar-${provider}.png`);if(response.status!==200||response.headers.get('content-type')!=='image/png')throw new Error('Packaged avatar response is invalid: '+provider);
-      const actual=Buffer.from(await response.arrayBuffer()),expected=fs.readFileSync(path.join(root,'web','assets','office',`avatar-${provider}.png`));if(!actual.equals(expected))throw new Error('Packaged avatar bytes differ: '+provider);
+    const {OFFICE_FILES}=require('../src/office-assets.cjs');
+    for(const name of OFFICE_FILES){
+      const response=await fetch(start.url+'/'+name),mime={'.png':'image/png','.svg':'image/svg+xml; charset=utf-8','.json':'application/json; charset=utf-8'}[path.extname(name)];
+      if(response.status!==200||response.headers.get('content-type')!==mime)throw new Error('Packaged office asset response is invalid: '+name);
+      const actual=Buffer.from(await response.arrayBuffer()),expected=fs.readFileSync(path.join(root,'web',name));if(!actual.equals(expected))throw new Error('Packaged office asset bytes differ: '+name);
     }
-    evidence.offline_provider_avatars_verified=6;
-    for(const name of ['furniture-desk','furniture-beanbag','character-robot','character-qwen-mascot','prop-plant']){
-      const response=await fetch(start.url+`/assets/office/${name}.png`);if(response.status!==200||response.headers.get('content-type')!=='image/png')throw new Error('Packaged office module response is invalid: '+name);
-      const actual=Buffer.from(await response.arrayBuffer()),expected=fs.readFileSync(path.join(root,'web','assets','office',`${name}.png`));if(!actual.equals(expected))throw new Error('Packaged office module bytes differ: '+name);
-    }
-    evidence.offline_office_modules_verified=5;
+    evidence.public_office_assets_verified=OFFICE_FILES.length;
+    evidence.offline_provider_avatars_verified=OFFICE_FILES.filter(name=>/\/pixel-avatar-/.test(name)).length;
+    evidence.offline_pixel_characters_verified=OFFICE_FILES.filter(name=>/\/pixel-(?!avatar-|desk\.png)/.test(name)).length;
+    evidence.offline_office_modules_verified=OFFICE_FILES.filter(name=>/\/(?:pixel-desk|furniture-|character-robot|prop-plant)/.test(name)).length;
+    for(const name of ['avatar-codex.png','character-qwen-mascot.png'])if((await fetch(start.url+'/assets/office/'+name)).status!==404)throw new Error('Removed legacy art is still packaged: '+name);
+    evidence.removed_legacy_art_absent=true;
+    const {apiCall:roomApi}=require('../src/main.cjs'),managedRoom=await roomApi(data,'/api/chat/rooms',{project_id:status.projects[0].id,title:'归档恢复打包验收'});
+    const archived=await roomApi(data,`/api/chat/rooms/${managedRoom.id}/archive`,{});if(!archived.archived||archived.id!==managedRoom.id)throw new Error('Packaged archive did not retain the room identity.');
+    const restored=await roomApi(data,`/api/chat/rooms/${managedRoom.id}/restore`,{});if(restored.archived||restored.id!==managedRoom.id)throw new Error('Packaged restore did not retain the room identity.');
+    const control=JSON.parse(fs.readFileSync(path.join(data,'control.json'),'utf8')),removed=await fetch(start.url+`/api/chat/rooms/${managedRoom.id}`,{method:'DELETE',headers:{Authorization:'Bearer '+control.token,'Content-Type':'application/json'},body:'{}'});
+    if(removed.status!==200||(await removed.json()).status!=='deleted')throw new Error('Packaged controller room deletion failed.');
+    evidence.archive_restore_verified=true;evidence.controller_room_deletion_verified=true;
     if(process.argv.includes('--chat-live')){
       const {apiCall}=require('../src/main.cjs'),{CodexClient}=require('../src/codex.cjs');const api=(route,input)=>apiCall(data,route,input);
       const room=await api('/api/chat/rooms',{project_id:status.projects[0].id,title:'打包聊天室验收'}),member=await api('/api/chat/members',{name:'Codex 打包验收',adapter:'codex'});

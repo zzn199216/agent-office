@@ -24,4 +24,10 @@ function deleteRoom(service,roomId){
   if(!result.already_deleted)service.changed();
   return result;
 }
-module.exports={deleteRoom};
+// Archiving only organises the local list. It preserves ongoing work, messages,
+// participant entries and schedules. Deletion keeps its separate busy checks.
+function archiveRoom(service,roomId,archived){
+  if(service.closing||service.chat.closing)throw new RoomError('服务正在停止，请稍后管理聊天室。',503,'service_stopping');
+  const room=service.chat.store.setArchived(roomId,archived);service.changed();return room;
+}
+module.exports={deleteRoom,archiveRoom};

@@ -60,6 +60,7 @@ function createServer(service,{token,port=47831,onShutdown}={}) {
     try {
       if(service.closing&&req.method==='POST'&&pathname!=='/api/shutdown')throw new RoomError('服务正在停止，新的操作尚未开始。',503,'service_stopping');
       if(req.method==='GET' && pathname==='/api/state')return json(res,service.snapshot());
+      if(req.method==='GET'&&pathname==='/api/work-record'){const q=new URL(req.url,'http://127.0.0.1').searchParams;if([...q.keys()].some(k=>!['room_id','member_id','discussion_id'].includes(k)))throw new RoomError('工作记录查询范围无效。');const input={room_id:q.get('room_id'),member_id:q.get('member_id'),discussion_id:q.get('discussion_id')};let client=service.codex;if(input.member_id){service.chat.store.requireParticipant(input.room_id,input.member_id);const member=service.chat.store.member(input.member_id);if(member.adapter==='codex')client=service.chat.nativeClient(member);}return json(res,await require('./work-records.cjs').exportWorkRecord(service.store,service.chat.store,input,{client}));}
       if(req.method==='GET' && pathname==='/api/team')return json(res,service.team.snapshot(new URL(req.url,'http://127.0.0.1').searchParams.get('room_id')));
       if(req.method==='GET'&&pathname==='/api/connection/doctor'){const q=new URL(req.url,'http://127.0.0.1').searchParams;return json(res,require('./connection-doctor.cjs').connectionDoctor(service,{room_id:q.get('room_id'),member_id:q.get('member_id')},{online:true}));}
       if(req.method==='GET'&&pathname==='/api/appearance')return json(res,service.appearance.get(new URL(req.url,'http://127.0.0.1').searchParams.get('member_id')));
@@ -113,6 +114,8 @@ function createServer(service,{token,port=47831,onShutdown}={}) {
       if(req.method!=='POST')throw new RoomError('没有这个接口。',404);
       const input=await body(req,pathname==='/api/office'?1000000:pathname==='/api/appearance'?360000:150000);
       if(service.closing&&pathname!=='/api/shutdown')throw new RoomError('服务正在停止，新的操作尚未开始。',503,'service_stopping');
+      const roomArchive=pathname.match(/^\/api\/chat\/rooms\/([a-f0-9-]{36})\/(archive|restore)$/i);
+      if(roomArchive){const route=new URL(req.url,'http://127.0.0.1');if(route.search||!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).length)throw new RoomError('房间归档请求范围无效。',400,'room_archive_input_invalid');return json(res,require('./room-lifecycle.cjs').archiveRoom(service,roomArchive[1],roomArchive[2]==='archive'));}
       const teamRoute=pathname.match(/^\/api\/team\/(tasks|goals|meetings)\/([a-f0-9-]{36})\/(update|complete|cancel|report|discuss|close)$/i);
       if(pathname==='/api/team/cards')return json(res,service.team.card(input));
       if(pathname==='/api/team/goals')return json(res,service.team.goal(input),202);

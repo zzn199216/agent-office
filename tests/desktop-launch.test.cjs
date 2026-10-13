@@ -23,3 +23,9 @@ test('unknown existing desktop directory is preserved',t=>{
   const f=fixture(t),target=path.join(f.data,'bin','desktop');fs.mkdirSync(target,{recursive:true});fs.writeFileSync(path.join(target,'AgentRoom.Desktop.exe'),'user-owned');
   assert.throws(()=>installDesktop(f.source,f.data),e=>e.code==='desktop_install_collision');assert.equal(fs.readFileSync(path.join(target,'AgentRoom.Desktop.exe'),'utf8'),'user-owned');
 });
+test('a versioned executable gets its own complete desktop bundle and preserves the previous bundle',t=>{
+  const f=fixture(t),previous=path.join(f.data,'bin','desktop');fs.mkdirSync(previous,{recursive:true});fs.writeFileSync(path.join(previous,'keep.txt'),'old host in use');
+  const executable=path.join(f.data,'bin','versions','version-fixture','AgentRoom.exe'),target=installDesktop(f.source,f.data,{executable});
+  assert.equal(target,path.join(path.dirname(executable),'desktop'));assert.equal(desktopManifest(target).version,VERSION);assert.equal(fs.readFileSync(path.join(previous,'keep.txt'),'utf8'),'old host in use');
+  assert.throws(()=>installDesktop(f.source,f.data,{executable:path.join(f.root,'outside.exe')}),{code:'desktop_install_collision'});
+});

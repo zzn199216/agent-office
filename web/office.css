@@ -94,3 +94,11 @@
 .ao-speaking .ao-bubble{border-color:var(--ao-accent)}
 .ao-work-indicator{top:-6px}.ao-work-indicator i{width:4px;height:4px;border-radius:0;background:var(--ao-ink)}
 .ao-compose-button{background:var(--ao-ink)!important;color:#fff8e7!important}.ao-toolbar-right{border-radius:0;border:0;background:transparent;box-shadow:none;backdrop-filter:none;gap:8px}.ao-health{background:#fff8e7;border:3px solid var(--ao-ink);padding:3px 8px;font-size:11px}
+/* thinking bubble over the head while an agent works (fast dots) or has queued work (slow dots) */
+.ao-work-indicator{top:-14px;left:calc(50% + 34px);transform:none;gap:4px;padding:6px 7px;background:#fffdf5;border:3px solid var(--ao-ink);box-shadow:2px 2px 0 #0000002a;z-index:6}
+.ao-work-indicator:after{content:"";position:absolute;left:-7px;bottom:-7px;width:6px;height:6px;background:#fffdf5;border:3px solid var(--ao-ink)}
+.ao-working .ao-work-indicator,.ao-waiting .ao-work-indicator{display:flex}
+.ao-work-indicator i{width:5px;height:5px}
+.ao-waiting .ao-work-indicator i{animation:ao-thought 2.4s ease-in-out infinite;opacity:.6}
+.ao-waiting .ao-work-indicator i:nth-child(2){animation-delay:.3s}.ao-waiting .ao-work-indicator i:nth-child(3){animation-delay:.6s}
+.ao-message-visible.ao-working .ao-bubble,.ao-message-visible.ao-waiting .ao-bubble{opacity:.55}

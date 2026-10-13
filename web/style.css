@@ -185,3 +185,32 @@ body.pixel-theme .message-content.markdown .md-code code{background:none;color:#
 body.pixel-theme .breadcrumbs>span,body.pixel-theme .breadcrumbs .slash,body.pixel-theme .topbar .icon-button{color:var(--ink)}
 html[data-phase=night] body.pixel-theme .breadcrumbs>span,html[data-phase=night] body.pixel-theme .breadcrumbs .slash{color:#fff8e7}
 body.pixel-theme .topbar .icon-button:hover{background:#fff8e7;color:var(--ink)}
+
+/* typing indicator */
+.typing-row{display:flex;align-items:center;gap:10px;margin:4px 0 6px}
+.typing-row .agent-avatar{width:34px;height:34px}
+.typing-bubble{display:inline-flex;align-items:center;gap:10px;padding:9px 14px;background:#fffdf7;border:2px solid var(--ink);border-radius:6px;box-shadow:3px 3px 0 var(--ink);font-size:12px;color:var(--muted)}
+.typing-dots{display:inline-flex;gap:4px}.typing-dots i{width:6px;height:6px;background:var(--ink);opacity:.25;animation:typing-dot 1.2s infinite steps(1)}
+.typing-dots i:nth-child(2){animation-delay:.2s}.typing-dots i:nth-child(3){animation-delay:.4s}
+.typing-row:not(.busy) .typing-dots i{animation-duration:2.4s}
+.typing-row.needs-you .typing-bubble{background:#fff3c4}.typing-row.needs-you .typing-dots{display:none}
+@keyframes typing-dot{0%{opacity:.25;transform:translateY(0)}33%{opacity:1;transform:translateY(-3px)}66%{opacity:.25;transform:translateY(0)}}
+@media (prefers-reduced-motion:reduce){.typing-dots i{animation:none;opacity:.6}}
+.mention-choices button.active{background:#fff3c4;outline:2px solid var(--ink)}
+/* secretary card and other leftovers in the pixel theme */
+body.pixel-theme .secretary-tutorial{background:#fffdf7;border:3px solid var(--ink);border-radius:6px;box-shadow:6px 6px 0 var(--ink)}
+body.pixel-theme .secretary-welcome-symbol,body.pixel-theme .secretary-role-mark{background:var(--amber);color:var(--ink);border:2px solid var(--ink);border-radius:4px}
+body.pixel-theme .secretary-welcome-heading h2,body.pixel-theme #secretary-title{color:var(--ink);font-weight:800}
+body.pixel-theme .secretary-steps li span{border:2px solid var(--ink);border-radius:3px;background:#fff}
+body.pixel-theme .secretary-steps li.current span{background:var(--amber)}body.pixel-theme .secretary-steps li.done span{background:#b8f0cf}
+body.pixel-theme .secretary-candidate,body.pixel-theme .secretary-selected-person{background:#fff;border:2px solid var(--ink);border-radius:4px}
+body.pixel-theme .secretary-candidate:hover{background:#fff3c4}
+body.pixel-theme .secretary-room-entry,body.pixel-theme .suggestions button{border:2px solid var(--ink);border-radius:4px;background:#fffdf7;color:var(--ink);box-shadow:2px 2px 0 var(--ink)}
+body.pixel-theme .mention-choices{border:2px solid var(--ink);border-radius:4px;box-shadow:var(--px)}
+/* readable minimums for secondary text */
+body.pixel-theme .message-footer,body.pixel-theme .message-footer .text-button{font-size:12px}
+body.pixel-theme .reply-button{color:#6b6f80!important}body.pixel-theme .chat-message:hover .reply-button{color:var(--accent)!important}
+body.pixel-theme .composer-note,body.pixel-theme .composer-bottom>span,body.pixel-theme .local-indicator,body.pixel-theme .footer,body.pixel-theme .sidebar-footer{font-size:12px}
+body.pixel-theme .secretary-connection-note,body.pixel-theme .secretary-steps,body.pixel-theme .secretary-kicker,body.pixel-theme .secretary-tutorial-footer{font-size:12px}
+.work-record-dialog{width:min(820px,calc(100vw - 32px));max-height:85vh}.work-record-turn{border-top:1px solid var(--border);padding:14px 0}.work-record-turn>small{display:block;color:var(--muted);margin:4px 0 12px}.work-record-turn details{margin:8px 0}.work-record-turn pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:380px;overflow:auto;padding:12px;background:var(--panel);border-radius:8px;font-size:12px}
+.room-list-row{position:relative}.room-list-row .room-button{padding-right:43px}.room-actions-button{position:absolute;right:5px;top:50%;transform:translateY(-50%);width:29px;height:29px;padding:0;border:1px solid transparent;border-radius:5px;background:transparent;font-size:18px;line-height:1;cursor:pointer}.room-actions-button:hover,.room-actions-button:focus-visible{background:var(--panel);border-color:var(--border)}.archived-rooms{margin-top:10px;max-height:35vh;overflow:auto}.archived-rooms>summary{padding:8px 10px;cursor:pointer;font-size:11px;color:var(--muted)}.room-actions-dialog{width:min(430px,calc(100vw - 32px))}.room-management-actions{display:flex;flex-direction:column;gap:10px;margin:20px 0}

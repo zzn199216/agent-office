@@ -6,6 +6,7 @@ const path = require('node:path');
 const readline = require('node:readline');
 const { EventEmitter } = require('node:events');
 const { RoomError, readableError, normalizePath, redact, ownCommand, dataDirectory } = require('./util.cjs');
+const {CodexWorkspace,missingThread}=require('./codex-workspace.cjs');
 
 function detectCodex() {
   if (process.env.AGENTROOM_CODEX_PATH && fs.existsSync(process.env.AGENTROOM_CODEX_PATH)) return process.env.AGENTROOM_CODEX_PATH;
@@ -27,14 +28,17 @@ function detectCodex() {
   return null;
 }
 class CodexClient extends EventEmitter {
-  constructor(options = {}) { super(); this.executable = options.executable || detectCodex(); this.spawnArgs = options.args || []; this.mcpEnvironment=options.mcpEnvironment||{};this.dataDir=options.dataDir;this.extraInstructions=options.developerInstructions||''; this.pending = new Map(); this.nextId = 1; this.child = null; this.readyPromise = null; this.closed = false; }
+  constructor(options = {}) { super(); this.executable = options.executable || detectCodex(); this.spawnArgs = options.args || []; this.mcpEnvironment=options.mcpEnvironment||{};this.dataDir=options.dataDir;this.extraInstructions=options.developerInstructions||'';this.workspace=options.dataDir&&options.isolate!==false?new CodexWorkspace(options.dataDir,{legacyHome:options.legacyHome}):null;this.legacyHome=options.legacyHome; this.pending = new Map(); this.nextId = 1; this.child = null; this.readyPromise = null; this.closed = false; }
+  legacyClient(){return new CodexClient({executable:this.executable,args:this.spawnArgs,isolate:false,legacyHome:this.workspace?.legacyHome||this.legacyHome});}
   async ready() {
     if (this.readyPromise) return this.readyPromise;
     this.readyPromise = this.connect().catch(e => { this.readyPromise = null; throw e; }); return this.readyPromise;
   }
   async connect() {
     if (!this.executable) throw new RoomError('没有找到 Codex。请先安装并登录 Codex，再点击检查连接。', 503, 'codex_missing');
-    const child = spawn(this.executable, [...this.spawnArgs, 'app-server', '--listen', 'stdio://'], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+    if(this.workspace)await this.workspace.prepare(async()=>{const legacy=this.legacyClient();try{await legacy.ready();return (await legacy.call('config/read',{includeLayers:false})).config||{};}finally{await legacy.close();}});
+    const env=this.workspace?this.workspace.environment():this.legacyHome?{...process.env,CODEX_HOME:this.legacyHome}:process.env;
+    const child = spawn(this.executable, [...this.spawnArgs, 'app-server', '--listen', 'stdio://'], { env, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
     this.child = child; this.closed = false;
     child.on('error', e => this.disconnect(new RoomError(`Codex 无法启动：${e.code || 'unknown'}`, 503, 'codex_start_failed')));
     child.on('exit', () => this.disconnect(new RoomError('Codex 连接结束，运行中的结果需要核对。', 503, 'connection_lost')));
@@ -49,7 +53,7 @@ class CodexClient extends EventEmitter {
       } else if (m.id !== undefined && m.method) this.emit('request', m);
       else if (m.method) this.emit('notification', m);
     });
-    const info = await this.call('initialize', { clientInfo: { name: 'agentroom_local', title: 'AgentRoom', version: require('./util.cjs').VERSION } });
+    const info = await this.call('initialize', { clientInfo: { name: 'agentroom_local', title: 'AgentRoom', version: require('./util.cjs').VERSION },capabilities:{experimentalApi:true} });
     this.send({ method: 'initialized', params: {} }); return info;
   }
   disconnect(error) {
@@ -74,7 +78,7 @@ class CodexClient extends EventEmitter {
   async status() {
     const info = await this.ready();
     const account = await this.call('account/read', { refreshToken: false });
-    return { connected: true, executable: this.executable, userAgent: info.userAgent, signedIn: !!account.account, authType: account.account?.type || null };
+    return { connected: true, executable: this.executable, userAgent: info.userAgent, signedIn: !!account.account, authType: account.account?.type || null,sessionMode:this.workspace?'isolated-background':'native',...this.workspace?{sessionDirectory:this.workspace.home,legacyVisibleCount:this.workspace.legacyVisibleCount()}:{} };
   }
   async list(project) {
     await this.ready();
@@ -82,6 +86,13 @@ class CodexClient extends EventEmitter {
     return r.data.map(t => ({ id: t.id, name: t.name || '未命名讨论', source: t.source, updatedAt: t.updatedAt, status: t.status }));
   }
   async read(threadId) { await this.ready(); return (await this.call('thread/read', { threadId, includeTurns: true })).thread; }
+  async inspectBound(project,discussion){
+    if(!discussion.thread_id)throw new RoomError('这个成员还没有保存的 Codex 工作记录。',404,'work_record_missing');
+    let thread;
+    try{if(this.workspace?.migrationState(discussion.thread_id)?.verified===false){const error=new RoomError('thread not found',404,'codex_rpc_error');throw error;}thread=await this.read(discussion.thread_id);}catch(error){if(!this.workspace||!missingThread(error))throw error;const legacy=this.legacyClient();try{thread=await legacy.read(discussion.thread_id);}finally{await legacy.close();}}
+    if(!thread||thread.id!==discussion.thread_id||normalizePath(thread.cwd)!==project.canonical)throw new RoomError('工作记录与已登记项目或会话不匹配。',409,'project_mismatch');
+    return thread;
+  }
   async bind(project, discussion, onBinding) {
     await this.ready();
     const own = ownCommand();
@@ -92,7 +103,11 @@ class CodexClient extends EventEmitter {
     if(this.mcpEnvironment.AGENTROOM_MEMBER_ID)config['mcp_servers.agentroom'].enabled_tools=['agentroom_join','agentroom_chat_rooms','agentroom_chat_history','agentroom_chat_post','agentroom_chat_wait','agentroom_chat_inbox','agentroom_chat_reply','agentroom_chat_ack','agentroom_room_state','agentroom_room_ensure','agentroom_member_wake','agentroom_heartbeat',...TEAM_TOOLS];
     if (discussion.binding_state === 'creation_uncertain') throw new RoomError('上一次创建结果不明确，请先核对 Codex 会话，不会自动再建一个。', 409, 'creation_uncertain');
     if (discussion.thread_id) {
-      const t = await this.read(discussion.thread_id);
+      let t;
+      try{if(this.workspace?.migrationState(discussion.thread_id)?.verified===false)throw new RoomError('thread not found',404,'codex_rpc_error');t=await this.read(discussion.thread_id);}catch(error){
+        if(!this.workspace||!missingThread(error))throw error;
+        const legacy=this.legacyClient();try{t=await this.workspace.importThread(this,legacy,project,discussion);}finally{await legacy.close();}
+      }
       let same = false; try { same = normalizePath(t.cwd) === project.canonical; } catch {}
       if (!same) throw new RoomError('这个 Codex 会话属于其他目录，请绑定对应项目的会话。', 409, 'project_mismatch');
       await this.call('thread/resume', { threadId: discussion.thread_id, cwd: project.path, sandbox: project.access, approvalPolicy: 'on-request', excludeTurns: true, config });
@@ -108,6 +123,7 @@ class CodexClient extends EventEmitter {
     return thread.id;
   }
   async run({ project, discussion, request, onBinding, onTurn, onProgress, onApproval, signal, timeout = 300000 }) {
+    if(this.workspace){await this.ready();const account=await this.call('account/read',{refreshToken:false});if(account.requiresOpenaiAuth===true&&!account.account)throw new RoomError('AgentRoom 后台 Codex 尚未登录。请在成员接入页完成一次独立登录，再继续原会话。',503,'codex_login_required');}
     const threadId = await this.bind(project, discussion, onBinding);
     let turnId = null;
     const messages = new Map(); let finished = false; let resolveEnd; let rejectEnd;

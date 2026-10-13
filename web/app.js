@@ -21,6 +21,7 @@ let inspectorOpen = false, inspectorTab = 'members', inspectorMemberId = null, o
 let officeComposerOpen = false;
 let connectionDoctor = null, connectionDoctorBusy = false, connectionDoctorError = '', connectionDoctorRoom = null, connectionDoctorSequence = 0;
 let deleteRoomId = null, deletingRoom = false;
+let managedRoomId=null,managingRoom=false;
 let secretaryOpenRoom = null, secretaryPickingRoom = null, secretaryBusy = false, secretaryStartBusy = false, secretaryError = '', secretaryConnectRoom = null, secretaryConnectJob = null, secretaryGoalVersion = 0;
 const teamRooms = new Map(), teamRequests = new Map();
 let teamSignature = '', teamBusy = false, teamDialog = null, teamLoadError = '';
@@ -29,6 +30,8 @@ const refreshWaiters = [];
 try { for (const id of JSON.parse(localStorage.getItem('agentoffice-secretary-dismissed') || '[]')) secretaryDismissed.add(id); } catch {}
 const secretaryDefaultGoal = '帮我梳理办公室目标与 AI 分工，先告诉我你需要了解什么。';
 const textScroll = new Map(), appearanceDrafts = new Map();
+const roomRecipients = new Map();
+let recipientRoom = null, mentionIndex = 0;
 const sceneDrafts = new Map(), sceneAssets = [['background_data','背景'],['desk_data','办公桌'],['beanbag_data','懒人沙发'],['plant_data','绿植'],['door_data','入口']];
 const sceneDefaults = Object.freeze({time_zone:'auto',time_mode:'auto',auto_layout:true,columns:3,spacing:1,wall_color:'#f8f7f3',floor_color:'#faf7ef',show_window:true,show_clock:true,show_plant:true,motion:true});
 if (desktop) {
@@ -389,7 +392,7 @@ async function refresh() {
     state = await api('/api/state'); state.chat ||= {rooms:[],members:[]}; state.chat.rooms ||= []; state.chat.members ||= []; state.approvals ||= []; state.discussions ||= [];
     if (!state.projects.some(project => project.id === projectId)) projectId = state.projects[0]?.id || null;
     if (legacyId && !state.discussions.some(discussion => discussion.id === legacyId && discussion.project_id === projectId)) legacyId = null;
-    if (!state.chat.rooms.some(room => room.id === roomId && room.project_id === projectId)) roomId = state.chat.rooms.find(room => room.project_id === projectId)?.id || null;
+    if (!state.chat.rooms.some(room => room.id === roomId && room.project_id === projectId)) roomId = state.chat.rooms.find(room => room.project_id === projectId&&!room.archived)?.id || state.chat.rooms.find(room=>room.project_id===projectId)?.id || null;
     runtime = state.runtime || await api(`/api/runtime${roomId ? `?room_id=${encodeURIComponent(roomId)}` : ''}`); setWebConnected(!desktop?.offline);
     rememberSelection(); renderSidebar(); renderSettings();
     const project = state.projects.find(project => project.id === projectId); $('project-heading').textContent = project?.name || '你的协作空间';
@@ -406,10 +409,29 @@ async function refresh() {
   finally { refreshing = false; for(const resolve of refreshWaiters.splice(0))resolve(); if (refreshAgain) { refreshAgain = false; scheduleRefresh(); } }
 }
 function scheduleRefresh() { clearTimeout(refreshTimer); refreshTimer = setTimeout(() => action(refresh), 160); }
+function roomListRow(room) {
+  const selected=room.id===roomId&&!legacyId,preview=selected&&history?.messages?.length?(history.messages.at(-1).coordination?.title||plainMarkdown(history.messages.at(-1).text)).slice(0,42):room.archived?'已归档 · 历史与协作保留':'消息与成员保存在本机';
+  return `<div class="room-list-row ${selected?'active':''}"><button class="room-button ${selected?'active':''}" data-room="${escape(room.id)}" title="${escape(room.title)}"><span class="room-list-icon">#</span><span class="room-list-content"><strong>${escape(room.title)}</strong><small>${escape(preview)}</small></span></button><button type="button" class="room-actions-button" data-room-actions="${escape(room.id)}" aria-label="管理房间 ${escape(room.title)}" title="房间管理">⋯</button></div>`;
+}
+function showRoomActions(id){const target=state?.chat?.rooms?.find(room=>room.id===id);if(!target||managingRoom)return;managedRoomId=id;$('room-actions-error').textContent='';renderRoomActions();$('room-actions-dialog').showModal();}
+function renderRoomActions(){
+  const target=state?.chat?.rooms?.find(room=>room.id===managedRoomId);if(!target)return;
+  $('room-actions-name').textContent=target.title;$('room-actions-archive').textContent=target.archived?'恢复到常用列表':'归档房间';
+  $('room-actions-archive').disabled=managingRoom||!webConnected;$('room-actions-delete').disabled=managingRoom||!webConnected;
+  $('room-actions-note').textContent=webConnected?'归档只收起列表，历史、成员入口和已有协作继续保留；删除会使原入口失效。':'本机服务未连接。归档和删除入口仍在这里，开启服务后可操作。';
+  $('room-actions-start').classList.toggle('hidden',webConnected||!desktop);$('room-actions-start').disabled=desktopBusy;
+}
+async function toggleRoomArchive(){
+  const id=managedRoomId,target=state?.chat?.rooms?.find(room=>room.id===id);if(!target||managingRoom||!webConnected)return;
+  const restore=target.archived===true;managingRoom=true;renderRoomActions();
+  try{const result=await api(`/api/chat/rooms/${encodeURIComponent(id)}/${restore?'restore':'archive'}`,{});if(result.archived!==!restore)throw Error('归档结果尚未确认，请刷新列表核对。');$('room-actions-dialog').close();managedRoomId=null;await refresh();toast(restore?'房间已恢复到常用列表。':'房间已归档，历史与已有协作保留。');}
+  catch(error){$('room-actions-error').textContent=error.message;}
+  finally{managingRoom=false;renderRoomActions();}
+}
 function renderSidebar() {
   $('projects').innerHTML = state.projects.length ? state.projects.map(project => `<button class="project-button ${project.id === projectId ? 'active' : ''}" data-project="${escape(project.id)}">${escape(project.name)}</button>`).join('') : '<div class="sidebar-empty">添加一个项目开始</div>';
   const rooms = state.chat.rooms.filter(room => room.project_id === projectId);
-  $('rooms').innerHTML = rooms.length ? rooms.map(room => `<div class="room-list-row ${room.id === roomId && !legacyId ? 'active' : ''}"><button class="room-button ${room.id === roomId && !legacyId ? 'active' : ''}" data-room="${escape(room.id)}" title="${escape(room.title)}"><span class="room-list-icon">#</span><span class="room-list-content"><strong>${escape(room.title)}</strong><small>${escape(room.id === roomId && history?.messages?.length ? plainMarkdown(history.messages.at(-1).text).slice(0,42) : room.state === 'active' ? '成员正在交流' : '消息与成员保存在本机')}</small></span></button><button type="button" class="room-delete-button" data-delete-room="${escape(room.id)}" aria-label="删除聊天室 ${escape(room.title)}" title="删除聊天室" ${webConnected?'':'disabled'}>×</button></div>`).join('') : '<div class="sidebar-empty">开一个房间，邀请成员</div>';
+  const activeRooms=rooms.filter(room=>!room.archived),archivedRooms=rooms.filter(room=>room.archived);$('rooms').innerHTML=activeRooms.length?activeRooms.map(roomListRow).join(''):'<div class="sidebar-empty">暂无常用房间</div>';$('archived-rooms-list').innerHTML=archivedRooms.map(roomListRow).join('');$('archived-rooms-count').textContent=String(archivedRooms.length);$('archived-rooms').classList.toggle('hidden',!archivedRooms.length);if(archivedRooms.some(room=>room.id===roomId))$('archived-rooms').open=true;
   const old = state.discussions.filter(discussion => discussion.project_id === projectId); $('legacy-section').classList.toggle('hidden', !old.length); $('legacy-count').textContent = old.length ? String(old.length) : '';
   $('discussions').innerHTML = old.map(discussion => `<button class="discussion-button ${discussion.id === legacyId ? 'active' : ''}" data-discussion="${escape(discussion.id)}" title="${escape(discussion.title)}">${escape(discussion.title)}</button>`).join('');
   if (desktop?.offline) $('discussions').querySelectorAll('button').forEach(button => {button.disabled=true;button.title='开启服务后可查看旧讨论';});
@@ -441,20 +463,24 @@ async function confirmDeleteRoom() {
 }
 function renderSettings() {
   const codex = state.codex || {}, grok = state.grok || {}; $('codex-detail').textContent = codex.error || (codex.connected ? codex.signedIn ? '本机入口已连接' : '入口已连接，请核对登录与模型配置' : '检测本机安装与登录');
+  if(codex.sessionMode==='isolated-background'&&codex.signedIn)$('codex-detail').textContent=codex.legacyVisibleCount?'后台会话已隔离 · 部分旧条目归档待核对':'后台会话独立保存 · 按需查看工作记录';
+  if(codex.sessionMode==='isolated-background'&&codex.signedIn)$('codex-detail').textContent=codex.legacyVisibleCount?'后台会话已隔离 · 部分旧条目归档待核对':'后台会话独立保存 · 按需查看工作记录';
   $('grok-detail').textContent = grok.configured ? 'Webhook 已保存 · 回报另行验证' : '可选：房间主动通知 Grok'; $('grok-form').classList.toggle('hidden', grok.configured && !editingGrok); $('edit-grok').classList.toggle('hidden', !grok.configured); $('data-directory').textContent = state.dataDirectory || '';
-  if (document.activeElement !== $('codex-path')) $('codex-path').value = codex.executable || '';
+  if (document.activeElement !== $('codex-path') && !$('codex-path').dataset.dirty) $('codex-path').value = codex.executable || '';
 }
 function renderRoom(project) {
-  const room = history.room, participants = history.participants || [], messages = history.messages || []; $('discussion-heading').textContent = room.title; $('room-heading').textContent = room.title; $('room-eyebrow').textContent = 'LOCAL CHAT ROOM';
+  const room = history.room, participants = history.participants || [], messages = history.messages || []; $('discussion-heading').textContent = room.title+(room.archived?' · 已归档':''); $('room-heading').textContent = room.title; $('room-eyebrow').textContent = 'LOCAL CHAT ROOM';
   $('room-subtitle').textContent = `${project?.name || room.project_name || ''} · ${participants.length} 位成员 · ${project?.access === 'workspace-write' ? '允许项目修改' : '默认仅查询资料'}`;
-  $('native-thread').classList.add('hidden'); $('composer').classList.remove('hidden'); $('legacy-note').classList.add('hidden'); $('room-members-bar').classList.remove('hidden');
+  $('native-thread').classList.toggle('hidden',!participants.some(m=>['codex','native'].includes(m.adapter)&&m.native_thread_id)); $('composer').classList.remove('hidden'); $('legacy-note').classList.add('hidden'); $('room-members-bar').classList.remove('hidden');
   renderMemberChips(participants);
-  const selectedRecipient = $('recipient').value; $('recipient').innerHTML = '<option value="">房间公告</option>' + participants.map(member => `<option value="${escape(member.id)}">${escape(member.name)}</option>`).join(''); if (participants.some(member => member.id === selectedRecipient)) $('recipient').value = selectedRecipient; updateRecipientNote();
+  let selectedRecipient = roomRecipients.get(room.id);
+  if (selectedRecipient === undefined || selectedRecipient && !participants.some(member => member.id === selectedRecipient)) selectedRecipient = messages.slice().reverse().find(message => message.sender_id === 'user' && participants.some(member => member.id === message.to_member_id))?.to_member_id || '';
+  $('recipient').innerHTML = '<option value="">房间公告</option>' + participants.map(member => `<option value="${escape(member.id)}">${escape(member.name)}</option>`).join(''); $('recipient').value = selectedRecipient; recipientRoom = room.id; updateRecipientNote();
   $('empty-room').classList.toggle('hidden', messages.length > 0); $('empty-heading').textContent = participants.length ? '把一个问题带到房间里' : '邀请第一个成员';
   $('empty-description').textContent = participants.length ? '选择一位成员，或在消息里 @它。\n成员的提问与回复会留在同一条时间线上。' : '添加成员，完成握手后，就可以在这里把问题交给它。\n每个成员拥有自己的身份和工作会话。';
   $('empty-add-member').classList.toggle('hidden', participants.length > 0); $('suggestions').classList.toggle('hidden', !participants.length);
-  const signature = JSON.stringify([room.id,messages,participants.map(member=>[member.id,member.name,member.appearance]),state.chat?.activeMessages || []]);
-  if (signature !== lastTimeline) { const stream = $('chat-stream'), cached = textScroll.get(room.id), nearEnd = officeView ? cached?.atEnd !== false : stream.scrollHeight - stream.scrollTop - stream.clientHeight < 110, changedRoom = !lastTimeline.startsWith(`["${room.id}"`); $('messages').innerHTML = messages.map(message => renderMessage(message, messages)).join(''); lastTimeline = signature; if(!officeView){if(nearEnd||changedRoom)stream.scrollTop=messages.length?stream.scrollHeight:0;rememberTextScroll();}else if(changedRoom)textScroll.set(room.id,{top:0,atEnd:true}); }
+  const typing = renderTyping(messages), signature = JSON.stringify([room.id,messages,participants.map(member=>[member.id,member.name,member.appearance]),state.chat?.activeMessages || [],typing]);
+  if (signature !== lastTimeline) { const stream = $('chat-stream'), cached = textScroll.get(room.id), nearEnd = officeView ? cached?.atEnd !== false : stream.scrollHeight - stream.scrollTop - stream.clientHeight < 110, changedRoom = !lastTimeline.startsWith(`["${room.id}"`); $('messages').innerHTML = messages.map(message => renderMessage(message, messages)).join('') + typing; lastTimeline = signature; if(!officeView){if(nearEnd||changedRoom)stream.scrollTop=messages.length?stream.scrollHeight:0;rememberTextScroll();}else if(changedRoom)textScroll.set(room.id,{top:0,atEnd:true}); }
   renderApprovals(history.approvals || state.approvals.filter(approval => messages.some(message => message.request_id === approval.request_id)));
   renderService(); renderInspector(); renderSidebar(); applyRoomView(); updateOfficeScene();
 }
@@ -462,14 +488,36 @@ function renderMessage(message, messages) {
   const name = message.coordination ? '办公室安排' : senderName(message.sender_id), member = memberById(message.sender_id), target = message.to_member_id ? senderName(message.to_member_id) : '', quoted = message.reply_to && messages.find(item => item.id === message.reply_to);
   if (['system','event'].includes(message.kind) || message.sender_id === 'system') return `<div class="system-message"><span>${escape(message.text)}</span><time>${time(message.created || message.created_at)}</time></div>`;
   const running = ['queued','creating','running','processing','waiting_input','pending','delivered'].includes(message.status);
-  return `<article class="chat-message ${message.sender_id === 'user' && !message.coordination ? 'own-message' : ''}" id="message-${escape(message.id)}"><div class="message-header">${avatar(name, member?.adapter,member?.appearance,member?.id)}<button type="button" class="message-sender" ${member ? `data-open-member="${escape(member.id)}"` : 'disabled'}>${escape(name)}</button>${target ? `<span class="message-target">→ ${escape(target)}</span>` : ''}<time>${time(message.created || message.created_at)}</time></div><div class="message-body">${quoted ? `<div class="quoted-message"><strong>${escape(senderName(quoted.sender_id))}</strong><span>${escape(quoted.coordination?.title || plainMarkdown(quoted.text))}</span></div>` : ''}${messageContent(message)}${message.progress ? `<div class="progress-note">${escape(message.progress)}</div>` : ''}${message.error ? `<div class="error-note">${escape(message.error)}</div>` : ''}<div class="message-footer">${message.status && !['posted','completed','answered'].includes(message.status) ? pill(message.status) : ''}${desktop?.offline ? '' : `${messageCanReconcile(message) ? `<button class="text-button" data-reconcile-message="${escape(message.id)}">核实结果并结案</button>` : ''}<button class="text-button reply-button" data-reply="${escape(message.id)}">回复</button>${running ? `<button class="text-button danger" data-cancel-message="${escape(message.id)}">停止等待</button>` : ''}`}</div></div></article>`;
+  return `<article class="chat-message ${message.sender_id === 'user' && !message.coordination ? 'own-message' : ''}" id="message-${escape(message.id)}"><div class="message-header">${avatar(name, member?.adapter,member?.appearance)}<button type="button" class="message-sender" ${member ? `data-open-member="${escape(member.id)}"` : 'disabled'}>${escape(name)}</button>${target ? `<span class="message-target">→ ${escape(target)}</span>` : ''}<time>${time(message.created || message.created_at)}</time></div><div class="message-body">${quoted ? `<div class="quoted-message"><strong>${escape(senderName(quoted.sender_id))}</strong><span>${escape(quoted.coordination?.title || plainMarkdown(quoted.text))}</span></div>` : ''}${messageContent(message)}${message.progress ? `<div class="progress-note">${escape(message.progress)}</div>` : ''}${message.error ? `<div class="error-note">${escape(message.error)}</div>` : ''}<div class="message-footer">${message.status && !['posted','completed','answered'].includes(message.status) ? pill(message.status) : ''}${desktop?.offline ? '' : `${messageCanReconcile(message) ? `<button class="text-button" data-reconcile-message="${escape(message.id)}">核实结果并结案</button>` : ''}<button class="text-button reply-button" data-reply="${escape(message.id)}">回复</button>${running ? `<button class="text-button danger" data-cancel-message="${escape(message.id)}">停止等待</button>` : ''}`}</div></div></article>`;
+}
+function renderTyping(messages) {
+  const states = {queued:'已排队，等待接手',pending:'等待接手',delivered:'已送达，等待接手',consumed:'已读取，等待回复',creating:'正在打开工作会话',running:'正在思考',processing:'正在思考',waiting_input:'在等你确认'};
+  const active = new Set(state.chat?.activeMessages || []), approvals = history.approvals || [], replies = new Map(), owed = new Map();
+  for (const message of messages) if (message.reply_to && ['reply','acknowledgment'].includes(message.kind)) { const senders = replies.get(message.reply_to) || new Set(); senders.add(message.sender_id); replies.set(message.reply_to,senders); }
+  for (const message of messages) {
+    if (!message.to_member_id || !states[message.status] || replies.get(message.id)?.has(message.to_member_id)) continue;
+    const priority = message.status === 'waiting_input' ? 3 : ['processing','running','creating'].includes(message.status) ? 2 : 1;
+    if (priority >= (owed.get(message.to_member_id)?.priority || 0)) owed.set(message.to_member_id,{message,priority});
+  }
+  return [...owed].map(([memberId,{message}]) => {
+    const member = memberById(memberId); if (!member || !history.participants.some(person => person.id === memberId)) return '';
+    let label = states[message.status], busy = ['creating','running','processing'].includes(message.status), needsYou = message.status === 'waiting_input';
+    if (!webConnected) { label = '本机服务未连接'; busy = false; needsYou = true; }
+    else if (busy && !active.has(message.id)) { label = '处理状态待核对'; busy = false; needsYou = true; }
+    else if (needsYou && !approvals.some(approval => approval.request_id === message.id || message.request_id && approval.request_id === message.request_id)) label = '确认状态待核对';
+    return `<div class="typing-row${busy ? ' busy' : ''}${needsYou ? ' needs-you' : ''}" data-typing-member="${escape(memberId)}" role="status">${avatar(member.name,member.adapter,member.appearance,member.id)}<div class="typing-bubble"><span class="typing-dots" aria-hidden="true"><i></i><i></i><i></i></span><span>${escape(member.name)} · ${escape(label)}</span></div></div>`;
+  }).join('');
 }
 // One-line previews (sidebar, quotes) show the words, not the markup.
 function plainMarkdown(text) {
   return String(text||'').replace(/```[\w+-]*\n?/g,' ').replace(/`([^`]*)`/g,'$1').replace(/!?\[([^\]]*)\]\([^)]*\)/g,'$1').replace(/^\s{0,3}(?:#{1,6}\s+|>\s?|[-*+]\s+(?:\[[ xX]\]\s+)?|\d+[.)]\s+)/gm,'').replace(/(\*\*|__|~~)(.+?)\1/g,'$2').replace(/\s+/g,' ').trim();
 }
 function inlineMarkdown(text) {
-  return escape(text).replace(/`([^`\n]+)`/g,'<code>$1</code>').replace(/\*\*([^*\n]+)\*\*/g,'<strong>$1</strong>').replace(/(^|[\s(（])\*([^*\n]+)\*(?=[\s).,，。!?！？)]|$)/g,'$1<em>$2</em>').replace(/~~([^~\n]+)~~/g,'<del>$1</del>').replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g,'<span class="md-link" title="$2">$1</span>');
+  const escaped=escape(text),code=[];let marker='\u0000';
+  while(escaped.includes(marker))marker+='\u0000';
+  const protectedText=escaped.replace(/(`+)(.*?)\1(?!`)/g,(_,fence,content)=>{code.push(`<code>${content}</code>`);return marker+(code.length-1)+marker;});
+  const formatted=protectedText.replace(/\*\*([^*\n]+)\*\*/g,'<strong>$1</strong>').replace(/(^|[\s(（])\*([^*\n]+)\*(?=[\s).,，。!?！？)]|$)/g,'$1<em>$2</em>').replace(/~~([^~\n]+)~~/g,'<del>$1</del>').replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g,'<span class="md-link" title="$2">$1</span>');
+  return formatted.replace(new RegExp(marker+'(\\d+)'+marker,'g'),(_,index)=>code[Number(index)]);
 }
 // Agents answer in Markdown. Everything is escaped before the small, inert subset below is
 // applied: no raw HTML, no images and no navigable links (the desktop shell blocks new windows).
@@ -498,7 +546,7 @@ function messageCanReconcile(message) { return ['uncertain','outcome_uncertain',
 function renderLegacy(project) {
   const discussion = history.discussion; $('discussion-heading').textContent = discussion.title; $('room-heading').textContent = discussion.title; $('room-eyebrow').textContent = 'SAVED DISCUSSION'; $('room-subtitle').textContent = `${project?.name || ''} · 之前保存的讨论`;
   $('room-members-bar').classList.add('hidden'); $('composer').classList.add('hidden'); $('legacy-note').classList.remove('hidden'); $('empty-room').classList.toggle('hidden', history.requests.length > 0); $('empty-heading').textContent = '这段讨论还没有消息'; $('empty-description').textContent = '可以创建聊天室，邀请更多成员一起交流。'; $('empty-add-member').classList.add('hidden'); $('suggestions').classList.add('hidden');
-  $('native-thread').classList.toggle('hidden', !discussion.thread_id); if (discussion.thread_id) $('native-thread').href = `codex://threads/${encodeURIComponent(discussion.thread_id)}`;
+  $('native-thread').classList.toggle('hidden', !discussion.thread_id);
   $('messages').innerHTML = history.requests.map(request => `<article class="exchange"><div class="message-header">${avatar(request.sender === 'user' ? '你' : request.sender)}<strong>${escape(request.sender === 'user' ? '你' : request.sender)}</strong><time>${time(request.created)}</time></div><pre class="message-content">${escape(request.prompt)}</pre><div class="message-header">${avatar(request.recipient, request.recipient)}<strong>${escape(request.recipient)}</strong>${pill(request.status)}</div><pre class="message-content">${escape(request.answer || request.progress || '')}</pre>${request.error ? `<div class="error-note">${escape(request.error)}</div>` : ''}${request.delivery ? `<div class="delivery-line">${pill(request.delivery.status)}${request.delivery.answer ? `<pre>${escape(request.delivery.answer)}</pre>` : ''}</div>` : ''}</article>`).join('');
   lastTimeline = ''; renderApprovals(state.approvals.filter(approval => history.requests.some(request => request.id === approval.request_id)));
   applyRoomView();
@@ -524,6 +572,28 @@ function renderCandidates() {
   $('discovered-agents').innerHTML = candidates.length ? candidates.map(candidate => `<button type="button" class="candidate-card ${candidate.id === selectedCandidate ? 'selected' : ''}" data-candidate="${escape(candidate.id)}" ${candidate.support === 'unsupported' ? 'disabled' : ''}>${avatar(candidate.name,candidate.adapter)}<div><strong>${escape(candidate.name)}</strong><span>${candidate.support === 'unsupported' ? `${candidate.running || candidate.installed ? '已发现' : '未发现本机安装'} · 接口待接入` : candidate.id === 'mailbox' ? '通用接入' : candidate.running ? '进程正在运行 · 通信另行验证' : candidate.installed ? '已安装' : '未发现本机安装'}${candidate.setup_note ? ` · ${escape(candidate.setup_note)}` : ''}</span></div><span class="candidate-check">${candidate.support === 'unsupported' ? '—' : candidate.id === selectedCandidate ? '✓' : '＋'}</span></button>`).join('') : '<div class="setup-note">暂未发现可直接连接的工具。可以添加通用成员，再把接入说明交给你的 agent。</div>';
 }
 function selectCandidate(id) { const candidate = candidates.find(item => item.id === id); if (!candidate || candidate.support === 'unsupported') return; selectedCandidate = id; $('member-name').value = candidate.name || ''; $('member-adapter').value = candidate.adapter || 'mailbox'; $('candidate-note').textContent = candidate.setup_note || (candidate.adapter === 'codex' || candidate.adapter === 'native' ? '会在后台创建独立工作会话，发送握手并验证回复。' : '会生成这个成员的专属通信说明。需要目标工具加载配置并确认接入。'); renderCandidates(); }
+let workRecordSequence=0;
+async function loadWorkRecord(){
+  const sequence=++workRecordSequence; $('work-record-content').replaceChildren();
+  if(desktop?.offline){$('work-record-note').textContent='服务已关闭。开启服务后可在此读取完整记录，也可让助手使用 work-record 命令只读查看。';return;}
+  const query=legacyId?`discussion_id=${encodeURIComponent(legacyId)}`:`room_id=${encodeURIComponent(roomId)}&member_id=${encodeURIComponent($('work-record-member').value)}`;
+  $('work-record-note').textContent='正在读取已有记录…';
+  try{const record=await api('/api/work-record?'+query);if(sequence!==workRecordSequence||!$('work-record-dialog').open)return;
+    const labels={agentMessage:'成员回答',userMessage:'收到的任务',commandExecution:'命令与结果',mcpToolCall:'工具调用',fileChange:'文件变更',webSearch:'检索记录'};
+    $('work-record-note').textContent=`${record.member_name} · ${record.turns.length} 轮工作 · 只读记录`;
+    const statuses={completed:'已完成',failed:'失败',interrupted:'已停止',inProgress:'处理中'};
+    $('work-record-content').innerHTML=record.turns.map((turn,index)=>`<section class="work-record-turn"><strong>第 ${index+1} 轮工作 · ${escape(statuses[turn.status]||'状态待核对')}</strong>${turn.items.map(item=>`<details><summary>${escape(labels[item.type]||item.type)}</summary><pre>${escape(item.text??JSON.stringify(item,null,2))}</pre></details>`).join('')}</section>`).join('')||'<p>会话已保存，尚无完成的工作轮次。</p>';
+  }catch(error){if(sequence===workRecordSequence)$('work-record-note').textContent=error.message;}
+}
+function showWorkRecord(){
+  const members=(history?.participants||[]).filter(m=>['codex','native'].includes(m.adapter)&&m.native_thread_id);
+  $('work-record-member-label').classList.toggle('hidden',!!legacyId);
+  $('work-record-member').innerHTML=members.map(m=>`<option value="${escape(m.id)}">${escape(m.name)}</option>`).join('');
+  if(!legacyId&&!members.length)return;
+  $('work-record-dialog').showModal();loadWorkRecord();
+}
+$('native-thread').onclick=showWorkRecord;
+$('work-record-member').onchange=loadWorkRecord;
 function renderExistingMembers() { const joined = new Set(legacyId ? [] : history?.participants?.map(member => member.id) || []), available = state.chat.members.filter(member => !joined.has(member.id)); $('existing-members-section').classList.toggle('hidden', !available.length); $('existing-members').innerHTML = available.map(member => { const status = memberStatus(member); return `<button type="button" class="existing-member" data-join-member="${escape(member.id)}">${avatar(member.name,member.adapter)}<span><strong>${escape(member.name)}</strong><small>${escape(status.label)}</small></span><span>加入 ↗</span></button>`; }).join(''); }
 async function connectMember(id, knownMember) { if (!roomId || legacyId) throw new Error('先创建或打开一个聊天室。'); await api(`/api/chat/rooms/${encodeURIComponent(roomId)}/join`, {member_id:id}); await refresh(); $('member-dialog').close(); if ((memberById(id) || knownMember)?.adapter === 'grok-bridge') { await showBridge(id); return; } const result = await api(`/api/chat/members/${encodeURIComponent(id)}/connect`, {room_id:roomId}); await refresh(); selectedSetupMember = id; setupData = result; renderSetup(); if (!$('member-setup-dialog').open) $('member-setup-dialog').showModal(); }
 async function showMemberSetup(id) { if (!webConnected) return showResume(id); if (memberById(id)?.adapter === 'grok-bridge') return showBridge(id); selectedSetupMember = id; $('member-grok-key').value = ''; $('member-grok-url').value = ''; setupData = await api(`/api/chat/members/${encodeURIComponent(id)}/setup?room_id=${encodeURIComponent(roomId)}`); renderSetup(); $('member-setup-dialog').showModal(); }
@@ -541,9 +611,17 @@ function renderSetup() {
   if (needsInvite) { const note = document.createElement('p'); note.className = 'small-note'; note.textContent = '下方保留兼容邀请方式。长期接入请使用上方“复制恢复入口”，无需每次重新领取邀请。'; $('member-setup-content').prepend(note); const copyButton = $('member-setup-content').querySelector('[data-copy-setup="instructions"]'); if (copyButton) copyButton.textContent = '生成兼容邀请'; }
   $('retry-member-connect').textContent = status.tone === 'connecting' ? '连接中…' : needsInvite ? '生成兼容邀请' : '重新验证连接'; $('retry-member-connect').disabled = status.tone === 'connecting'; $('leave-member').classList.toggle('hidden', !roomId || legacyId);
 }
-function updateRecipientNote() { const target = memberById($('recipient').value), observed = target && memberPresence(target); $('recipient-note').textContent = target ? observed.canWake ? `交给 ${target.name} · 可按需拉起工作会话` : ['online','worker_online'].includes(observed.status) ? `交给 ${target.name} · ${observed.label}` : `消息会保留 · ${target.name} ${observed.label}` : '公告会保存到房间，不自动唤醒成员'; }
+function updateRecipientNote() { if (recipientRoom === roomId) roomRecipients.set(roomId,$('recipient').value); const target = memberById($('recipient').value), observed = target && memberPresence(target); $('recipient-note').textContent = target ? observed.canWake ? `交给 ${target.name} · 可按需拉起工作会话` : ['online','worker_online'].includes(observed.status) ? `交给 ${target.name} · ${observed.label}` : `消息会保留 · ${target.name} ${observed.label}` : '公告会保存到房间，不自动唤醒成员'; }
 function setReply(message) { replyTo = message?.id || null; $('reply-preview').classList.toggle('hidden', !message); if (message) { $('reply-to-name').textContent = `回复 ${senderName(message.sender_id)}`; $('reply-to-text').textContent = plainMarkdown(message.text); if (message.sender_id !== 'user' && history.participants?.some(member => member.id === message.sender_id)) $('recipient').value = message.sender_id; updateRecipientNote(); if(document.body.classList.contains('office-view'))toggleOfficeComposer(true);else $('prompt').focus(); } updateOfficeComposerPresentation(); }
-function renderMentions() { const text = $('prompt').value.slice(0,$('prompt').selectionStart), match = text.match(/@([^\s@]*)$/u), members = match ? (history?.participants || []).filter(member => member.name.toLowerCase().includes(match[1].toLowerCase())) : []; $('mention-choices').classList.toggle('hidden', !members.length); $('mention-choices').innerHTML = members.map(member => `<button type="button" data-mention="${escape(member.id)}">${avatar(member.name,member.adapter)}<span>@${escape(member.name)}</span></button>`).join(''); }
+function mentionedMember(text) {
+  const named = (history?.participants || []).filter(member => text.toLocaleLowerCase().startsWith('@' + member.name.toLocaleLowerCase()) && /^(?:\s|[，。,:：!?！？]|$)/u.test(text.slice(member.name.length + 1))).sort((a,b) => b.name.length - a.name.length);
+  if (!named.length) return null;
+  const matches = named.filter(member => member.name.length === named[0].name.length);
+  if (matches.length > 1) { const selected = matches.find(member => member.id === $('recipient').value); if (selected) return selected; throw new Error('房间里有同名成员，请在收件人列表中选定要交给哪一位。'); }
+  return matches[0];
+}
+function moveMention(step) { const buttons = [...$('mention-choices').querySelectorAll('[data-mention]')]; if (!buttons.length) return; mentionIndex = (mentionIndex + step + buttons.length) % buttons.length; buttons.forEach((button,index) => button.classList.toggle('active',index === mentionIndex)); }
+function renderMentions() { mentionIndex = 0; const text = $('prompt').value.slice(0,$('prompt').selectionStart), match = text.match(/@([^\s@]*)$/u), members = match ? (history?.participants || []).filter(member => member.name.toLowerCase().includes(match[1].toLowerCase())) : []; $('mention-choices').classList.toggle('hidden', !members.length); $('mention-choices').innerHTML = members.map((member,index) => `<button type="button" class="${index ? '' : 'active'}" data-mention="${escape(member.id)}">${avatar(member.name,member.adapter,member.appearance,member.id)}<span>@${escape(member.name)}</span></button>`).join(''); }
 function installDesktopChrome() {
   if (!desktop) return;
   const card = document.createElement('section'); card.id = 'desktop-service'; card.className = 'desktop-service'; card.setAttribute('aria-label','协作服务');
@@ -563,6 +641,7 @@ function currentServiceBusy() {
 }
 function renderService() {
   const readOnly = !webConnected;
+  renderRoomActions();
   document.querySelectorAll('[data-delete-room]').forEach(button=>{button.disabled=readOnly;});
   for (const id of ['add-project','add-room','mobile-add-project','mobile-add-room','launch-add-project','welcome-project','welcome-room','welcome-members','room-member-add','empty-add-member','inspector-add-member','send-button','prompt','recipient','scan-agents','onboarding-refresh','launch-refresh']) {
     const control = $(id); if (!control) continue;
@@ -714,13 +793,13 @@ function renderSecretary() {
   }).join('') : '<p class="secretary-no-members">办公室还没有成员。接入一位你常用的 AI，再选择它当秘书。</p>';
   $('secretary-add-ai').textContent = members.length ? '＋ 接入另一位 AI' : '接入一位 AI ↗'; $('secretary-add-ai').disabled = !webConnected || secretaryBusy;
   $('secretary-selected').classList.toggle('hidden',!selected.member_id || secretaryPickingRoom === roomId);
-  $('secretary-selected-person').innerHTML = selected.member_id ? `${avatar(selected.name || member?.name || 'AI',member?.adapter || '',member?.appearance,member?.id)}<div><strong>${escape(selected.name || member?.name || 'AI 秘书')}</strong><span>${escape(secretaryStatusText(selected))}</span></div><button type="button" class="text-button" data-secretary-change ${secretaryBusy || secretaryStartBusy || !webConnected ? 'disabled' : ''}>更换</button>` : '';
-  $('secretary-connection-note').textContent = !webConnected ? '开启本机服务后，可以选择秘书和交代目标。当前仅查看已保存的记录。' : selected.member_id && !ready ? '角色已保存，但通信尚未接通。先完成这位 AI 的接入，再交代目标。' : ready && !selected.can_wake ? '这位秘书使用信箱模式。你交代目标后，它需要在自己的窗口领取并回答。' : ready ? '点击开始后，会保存协作目标并交给秘书组织。' : '每次只接入你选择的 AI，秘书会和你讨论成员及分工。';
+  $('secretary-selected-person').innerHTML = selected.member_id ? `${avatar(selected.name || member?.name || 'AI',member?.adapter || '',member?.appearance)}<div><strong>${escape(selected.name || member?.name || 'AI 秘书')}</strong><span>${escape(secretaryStatusText(selected))}</span></div><button type="button" class="text-button" data-secretary-change ${secretaryBusy || secretaryStartBusy || !webConnected ? 'disabled' : ''}>更换</button>` : '';
+  $('secretary-connection-note').textContent = !webConnected ? '开启本机服务后，可以选择秘书和交代目标。当前仅查看已保存的记录。' : selected.member_id && !ready ? '角色已保存，通信尚未接通。目标可以先写好，接通后再点「让秘书开始」。' : ready && !selected.can_wake ? '这位秘书使用信箱模式。你交代目标后，它需要在自己的窗口领取并回答。' : ready ? '点击开始后，会保存协作目标并交给秘书组织。' : '每次只接入你选择的 AI，秘书会和你讨论成员及分工。';
   const stored = secretaryDrafts.get(roomId);
   if ($('secretary-goal').dataset.room !== roomId) { $('secretary-goal').dataset.room = roomId; $('secretary-goal').value = stored?.value ?? selected.goal ?? secretaryDefaultGoal; secretaryGoalVersion++; }
   else if (!stored?.dirty && selected.goal && document.activeElement !== $('secretary-goal')) $('secretary-goal').value = selected.goal;
   const settledGoal = started && ['failed','cancelled','uncertain','outcome_uncertain','resolved'].includes(selected.message_status) && $('secretary-goal').value.trim() === selected.goal;
-  $('secretary-goal').disabled = !ready || !webConnected || secretaryStartBusy; $('secretary-start').disabled = !ready || !webConnected || secretaryBusy || secretaryStartBusy || !$('secretary-goal').value.trim() || settledGoal;
+  $('secretary-goal').disabled = !webConnected || secretaryStartBusy; $('secretary-goal').placeholder = ready ? '告诉秘书你想做什么' : '可以先写下目标；秘书接通后点「让秘书开始」。'; $('secretary-start').disabled = !ready || !webConnected || secretaryBusy || secretaryStartBusy || !$('secretary-goal').value.trim() || settledGoal;
   $('secretary-start').textContent = secretaryStartBusy ? '正在交代…' : settledGoal ? '请先查看原委托' : started ? '交代这个目标' : '让秘书开始 ↗';
   $('secretary-check-connection').classList.toggle('hidden',!selected.member_id || ready); $('secretary-check-connection').disabled = !webConnected || !member;
   $('secretary-reply').classList.toggle('hidden',!started); $('secretary-reply-label').textContent = replied ? '秘书已回应' : secretaryStatusText(selected);
@@ -853,7 +932,7 @@ function renderInspector() {
   const room = history?.room || (state.chat?.rooms || []).find(item => item.id === roomId), members = history?.participants || [], project = state.projects.find(item => item.id === projectId);
   $('inspector-room-name').textContent = room?.title || '你的协作空间'; $('inspector-project-name').textContent = project?.name || '选择一个项目，开始协作';
   if(!members.some(member=>member.id===inspectorMemberId)){inspectorMemberId=members[0]?.id||null;appearanceDraft=null;appearanceDirty=false;appearanceUploadVersion++;}
-  $('inspector-members').innerHTML = members.length ? members.map(member => {const presence=memberPresence(member);return `<button type="button" class="inspector-member" data-inspector-member="${escape(member.id)}">${avatar(member.name,member.adapter,member.appearance,member.id)}<div><strong>${escape(member.name)}${currentSecretary().member_id === member.id ? ' <span class="secretary-inline-badge">秘书</span>' : ''}</strong><span><i class="member-dot ${presence.status}"></i>${escape(presence.label)}</span><small>${presence.canWake ? '可按需后台处理' : '本人窗口领取消息'}</small></div><span class="inspector-member-arrow">›</span></button>`;}).join('') : '<p class="inspector-empty">房间成员会显示在这里。<br>只接入你选择的 agent。</p>';
+  $('inspector-members').innerHTML = members.length ? members.map(member => {const presence=memberPresence(member);return `<button type="button" class="inspector-member" data-inspector-member="${escape(member.id)}">${avatar(member.name,member.adapter,member.appearance)}<div><strong>${escape(member.name)}${currentSecretary().member_id === member.id ? ' <span class="secretary-inline-badge">秘书</span>' : ''}</strong><span><i class="member-dot ${presence.status}"></i>${escape(presence.label)}</span><small>${presence.canWake ? '可按需后台处理' : '本人窗口领取消息'}</small></div><span class="inspector-member-arrow">›</span></button>`;}).join('') : '<p class="inspector-empty">房间成员会显示在这里。<br>只接入你选择的 agent。</p>';
   const bridge = members.find(member => member.adapter === 'grok-bridge'), proxies=launchSession&&room?.id&&launchSession.room_id===room.id?launchSession.proxies||[]:[], linked = proxies.filter(proxy=>proxy.native_group_status==='host_reported').length || members.filter(member=>member.native_group_status==='host_reported').length, groupRef=proxies.find(proxy=>proxy.native_group_ref)?.native_group_ref || (launchSession&&room?.id&&launchSession.room_id===room.id?launchSession.native_sync?.group_ref:null);
   $('inspector-bridge-detail').textContent = bridge ? `已有 ${bridge.name} 桥接入口。群里的问题和成员回复可以回到同一房间。` : linked ? 'Grok 已报告加群。原群状态与本机通信分别记录。' : '给 Grok Bot 接入说明后，可以在你指定的群里与这些成员交流。';
   $('inspector-bridge').disabled = !webConnected;
@@ -861,7 +940,7 @@ function renderInspector() {
   $('inspector-room-details').innerHTML=detailRows([['房间',room?.title],['成员',String(members.length)+' 位'],['保存消息',String(history?.messages?.length||0)+' 条'],['房间标识',room?.id],['记录位置',state.dataDirectory],['服务',webConnected?'本机服务运行中':'服务未连接，查看本机记录']]);
   $('inspector-native-detail').textContent=groupRef ? `Grok 已报告群引用：${groupRef}。${linked} 位成员已报告加群，原群状态仍需核对；桥接的请求和回复保存在本机。` : linked ? `${linked} 位成员已报告加群。通过本机桥接投递的消息保留在这里。` : bridge ? `已配置 ${bridge.name}。完整 Grok 群消息暂不自动同步，桥接的请求与回复会留在本机。` : '还未绑定 Grok 群聊。可在连接页查看桥接入口。';
   const member=members.find(item=>item.id===inspectorMemberId), presence=member?memberPresence(member):null;
-  $('inspector-selected-member').innerHTML=member?`${avatar(member.name,member.adapter,member.appearance,member.id)}<h3>${escape(member.name)}</h3><p>${escape(presence.label)} · ${escape(presence.canWake?'可按需后台处理':'本人窗口领取消息')}</p><p>${escape(memberStatus(member).label)}</p>`:'<p class="inspector-description">先在成员页选择一位成员。</p>';
+  $('inspector-selected-member').innerHTML=member?`${avatar(member.name,member.adapter,member.appearance)}<h3>${escape(member.name)}</h3><p>${escape(presence.label)} · ${escape(presence.canWake?'可按需后台处理':'本人窗口领取消息')}</p><p>${escape(memberStatus(member).label)}</p>`:'<p class="inspector-description">先在成员页选择一位成员。</p>';
   $('inspector-member-connect').disabled=!member||!webConnected;$('inspector-member-recovery').disabled=!member;
   renderAppearance(members,member);renderScene();applyInspector();renderSecretary();renderConnectionDoctor();renderTeam();
 }
@@ -974,7 +1053,7 @@ function renderAppearance(members=history?.participants||[],member=members.find(
   select.value=member?.id||'';
   const key=member?.id&&roomId?`${roomId}:${member.id}`:null,look=member?.appearance||{},signature=JSON.stringify(look);
   let stored=key?appearanceDrafts.get(key):null;
-  if(!stored||(!stored.dirty&&!appearanceBusy&&!appearanceUploading&&stored.signature!==signature)) {stored={room_id:roomId,member_id:member?.id,preset:['auto','person','robot','sprite'].includes(look.preset)?look.preset:'auto',furniture:look.furniture==='beanbag'?'beanbag':'desk',accent:Number.isInteger(look.accent)?String(look.accent):'auto',scale:Number.isFinite(look.scale)?Math.max(.65,Math.min(1.35,look.scale)):1,color:/^#[0-9a-f]{6}$/i.test(look.color||'')?look.color:'#3a8a72',avatar_data:safeRaster(look.avatar_data),character_data:safeRaster(look.character_data),dirty:false,signature,status:''};if(key)appearanceDrafts.set(key,stored);}
+  if(!stored||(!stored.dirty&&!appearanceBusy&&!appearanceUploading&&stored.signature!==signature)) {stored={room_id:roomId,member_id:member?.id,preset:['auto','person','robot','sprite'].includes(look.preset)?look.preset:'auto',furniture:look.furniture==='beanbag'?'beanbag':'desk',scale:Number.isFinite(look.scale)?Math.max(.65,Math.min(1.35,look.scale)):1,color:/^#[0-9a-f]{6}$/i.test(look.color||'')?look.color:'#3a8a72',avatar_data:safeRaster(look.avatar_data),character_data:safeRaster(look.character_data),dirty:false,signature,status:''};if(key)appearanceDrafts.set(key,stored);}
   if(appearanceDraft!==stored){appearanceDraft=stored;appearanceDirty=stored.dirty;appearanceUploadVersion++;$('appearance-avatar').value='';$('appearance-character').value='';}
   const draft=appearanceDraft||{};$('appearance-preset').value=draft.preset||'auto';$('appearance-furniture').value=draft.furniture||'desk';$('appearance-accent').value=draft.accent||'auto';$('appearance-scale').value=draft.scale||1;$('appearance-scale-value').textContent=Math.round((draft.scale||1)*100)+'%';$('appearance-color').value=draft.color||'#3a8a72';
   const image=safeRaster(draft.character_data)||(draft.preset==='auto'?window.AgentOfficeScene?.characterSource?.({...member,appearance:draftLook(draft)},undefined,history?.participants):null);
@@ -1174,7 +1253,11 @@ $('connector-fields-dialog').addEventListener('close',()=>{connectorFields=null;
 $('connector-fields-dialog').onclick=event=>{const button=event.target.closest('[data-connector-copy]');if(!button||!connectorFields)return;action(async()=>{const name=button.dataset.connectorCopy,value=connectorFields[name];if(value===undefined)return;if(name==='headers'&&!Object.keys(value).length){toast('这个连接器不需要标头。');return;}await navigator.clipboard.writeText(typeof value==='string'?value:JSON.stringify(value,null,2));toast('已复制。只填写到这个 AI 本人的连接器设置。');});};
 $('connector-copy-all').onclick=()=>action(async()=>{if(!connectorFields)return;const fields=connectorFields;await navigator.clipboard.writeText(`名称：${fields.name}\n连接方式：${fields.transport}\nURL：${fields.url}\n标头：${Object.keys(fields.headers).length?JSON.stringify(fields.headers,null,2):'无需填写'}`);toast('字段已复制。按名称、连接方式、URL 分别填写，不作为 JSON 导入。');});
 $('projects').onclick = event => { const button = event.target.closest('[data-project]'); if (button) { projectId = button.dataset.project; roomId = null; legacyId = null; document.body.classList.remove('mobile-sidebar-open');syncSidebarToggle();setReply(null); action(refresh); } };
-$('rooms').onclick = event => { const remove=event.target.closest('[data-delete-room]');if(remove){showDeleteRoom(remove.dataset.deleteRoom);return;}const button = event.target.closest('[data-room]'); if (button) { roomId = button.dataset.room; legacyId = null;document.body.classList.remove('mobile-sidebar-open');syncSidebarToggle();setReply(null); setProfessionalView(true); action(refresh); } };
+const onRoomListClick = event => { const manage=event.target.closest('[data-room-actions]');if(manage){showRoomActions(manage.dataset.roomActions);return;}const button = event.target.closest('[data-room]'); if (button) { roomId = button.dataset.room; legacyId = null;document.body.classList.remove('mobile-sidebar-open');syncSidebarToggle();setReply(null); setProfessionalView(true); action(refresh); } };
+$('rooms').onclick=onRoomListClick;$('archived-rooms-list').onclick=onRoomListClick;
+$('room-actions-archive').onclick=()=>action(toggleRoomArchive);
+$('room-actions-delete').onclick=()=>{const id=managedRoomId;$('room-actions-dialog').close();managedRoomId=null;showDeleteRoom(id);};
+$('room-actions-start').onclick=()=>action(()=>changeService('start_service'));
 $('delete-room-confirm').onclick=()=>action(confirmDeleteRoom);
 $('discussions').onclick = event => { const button = event.target.closest('[data-discussion]'); if (button) { legacyId = button.dataset.discussion; setReply(null); action(refresh); } };
 $('room-members').onclick = event => { const button = event.target.closest('[data-member]'); if (button) openInspector('connections',button.dataset.member); };
@@ -1209,7 +1292,9 @@ $('browse-folder').onclick = () => action(async () => { const button = $('browse
 $('project-form').onsubmit = event => { event.preventDefault(); action(async () => { const project = await api('/api/projects',{name:$('project-name').value,path:$('project-path').value,access:$('project-write').checked ? 'workspace-write' : 'read-only'}); projectId = project.id; roomId = null; legacyId = null; $('project-dialog').close(); await refresh(); showRoom(); }); };
 $('room-form').onsubmit = event => { event.preventDefault(); action(async () => { const room = await api('/api/chat/rooms',{project_id:projectId,title:$('room-name').value}); roomId = room.id; legacyId = null; setReply(null); $('room-dialog').close(); await refresh(); $('prompt').focus(); }); };
 $('check-codex').onclick = () => action(async () => { const button = $('check-codex'); button.disabled = true; button.textContent = '检查中…'; try { const result = await api('/api/codex/check',{}); toast(result.connected ? '本机 Codex 入口已连接。' : result.error); await refresh(); } finally { button.disabled = false; button.textContent = '检查连接'; } });
-$('save-codex-path').onclick = () => action(async () => { await api('/api/codex/path',{path:$('codex-path').value}); await refresh(); toast('Codex 路径已保存。'); });
+$('scene-time-zone').onfocus = () => $('scene-time-zone').select();
+$('codex-path').oninput = () => { $('codex-path').dataset.dirty = '1'; };
+$('save-codex-path').onclick = () => action(async () => { const input = $('codex-path'), submitted = input.value; await api('/api/codex/path',{path:submitted}); if (input.value === submitted) delete input.dataset.dirty; await refresh(); toast('Codex 路径已保存。'); });
 $('edit-grok').onclick = () => { editingGrok = true; $('grok-form').classList.remove('hidden'); $('grok-url').focus(); };
 $('grok-form').onsubmit = event => { event.preventDefault(); action(async () => { await api('/api/grok/configure',{url:$('grok-url').value,key:$('grok-key').value}); $('grok-key').value = ''; $('grok-url').value = ''; editingGrok = false; await refresh(); toast('连接已保存，成员接入仍需单独验证。'); }); };
 async function copy(kind) { const data = await api('/api/onboarding'); await navigator.clipboard.writeText(kind === 'grok' ? data.grokInstructions : kind === 'mcp' ? JSON.stringify(data.mcp,null,2) : data.skill); toast('已复制。'); }
@@ -1217,13 +1302,20 @@ $('copy-grok-setup').onclick = () => action(() => copy('grok')); $('copy-mcp').o
 $('recipient').onchange = updateRecipientNote; $('cancel-reply').onclick = () => setReply(null);
 document.querySelectorAll('[data-prompt]').forEach(button => button.onclick = () => { $('prompt').value = button.dataset.prompt; if (!$('recipient').value && history?.participants?.length) $('recipient').value = history.participants[0].id; updateRecipientNote(); $('prompt').focus(); });
 $('composer').onsubmit = event => { event.preventDefault(); if (submitting) return; action(async () => {
-  const text = $('prompt').value.trim(); if (!text || !roomId || legacyId) return; const target = $('recipient').value || null, submittedRoom=roomId, fingerprint = JSON.stringify([submittedRoom,target,text,replyTo]);
+  const text = $('prompt').value.trim(); if (!text || !roomId || legacyId) return; const named = mentionedMember(text); if (named) { $('recipient').value = named.id; updateRecipientNote(); } const target = $('recipient').value || null, submittedRoom=roomId, fingerprint = JSON.stringify([submittedRoom,target,text,replyTo]);
   if (!pendingSubmission || pendingSubmission.fingerprint !== fingerprint) pendingSubmission = {fingerprint,key:crypto.randomUUID()}; submitting = true; $('send-button').disabled = true;
   try { await api('/api/chat/messages',{room_id:submittedRoom,sender_id:'user',to_member_id:target,text,idempotency_key:pendingSubmission.key,reply_to:replyTo}); pendingSubmission = null; const unchanged=JSON.stringify([roomId,$('recipient').value||null,$('prompt').value.trim(),replyTo])===fingerprint; if(unchanged){$('prompt').value = ''; $('mention-choices').classList.add('hidden'); setReply(null); if(document.body.classList.contains('office-view'))toggleOfficeComposer(false);} await refresh(); if(!officeView)$('chat-stream').scrollTop = $('chat-stream').scrollHeight; }
   finally { submitting = false; $('send-button').disabled = !webConnected;updateOfficeComposerPresentation(); }
 }); };
 $('prompt').oninput = ()=>{renderMentions();updateOfficeComposerPresentation();};
-$('prompt').onkeydown = event => { if (event.key === 'Escape') {const choicesOpen=!$('mention-choices').classList.contains('hidden');$('mention-choices').classList.add('hidden');if(!choicesOpen && document.body.classList.contains('office-view'))toggleOfficeComposer(false);} if (event.key === 'Enter' && !event.shiftKey && !event.isComposing && event.keyCode !== 229 && $('mention-choices').classList.contains('hidden')) { event.preventDefault(); $('composer').requestSubmit(); } };
+$('prompt').onkeydown = event => {
+  if (event.isComposing || event.keyCode === 229) return;
+  const picking = !$('mention-choices').classList.contains('hidden');
+  if (picking && ['ArrowDown','ArrowUp'].includes(event.key)) { event.preventDefault(); moveMention(event.key === 'ArrowDown' ? 1 : -1); return; }
+  if (picking && !event.shiftKey && ['Tab','Enter'].includes(event.key)) { event.preventDefault(); $('mention-choices').querySelector('[data-mention].active')?.click(); return; }
+  if (event.key === 'Escape') { $('mention-choices').classList.add('hidden'); if (!picking && document.body.classList.contains('office-view')) toggleOfficeComposer(false); }
+  if (event.key === 'Enter' && !event.shiftKey && $('mention-choices').classList.contains('hidden')) { event.preventDefault(); $('composer').requestSubmit(); }
+};
 $('mention-choices').onclick = event => { const button = event.target.closest('[data-mention]'); if (!button) return; const member = memberById(button.dataset.mention), input = $('prompt'), before = input.value.slice(0,input.selectionStart), after = input.value.slice(input.selectionEnd), value = before.replace(/@([^\s@]*)$/u,() => `@${member.name} `); input.value = value + after; input.focus(); input.setSelectionRange(value.length,value.length); $('recipient').value = member.id; updateRecipientNote(); $('mention-choices').classList.add('hidden'); };
 $('messages').onclick = event => { const button = event.target.closest('button'); if (!button) return; if(button.dataset.openMember)openInspector('connections',button.dataset.openMember);if(button.hasAttribute('data-open-team')){openInspector('team');action(()=>refreshTeam());}if (button.dataset.reconcileMessage) openTeamDialog('message_reconcile',button.dataset.reconcileMessage); if (button.dataset.reply) setReply(history.messages.find(message => message.id === button.dataset.reply)); if (button.dataset.cancelMessage) action(async () => { await api(`/api/chat/messages/${encodeURIComponent(button.dataset.cancelMessage)}/cancel`,{}); await refresh(); }); };
 $('approval-panel').onclick = event => action(async () => { const button = event.target.closest('button'); if (!button) return; if (button.dataset.approve) await api(`/api/approvals/${encodeURIComponent(button.dataset.approve)}`,{decision:button.dataset.decision}); if (button.dataset.inputSubmit) { const answers = {}; button.closest('[data-approval]').querySelectorAll('[data-question]').forEach(input => answers[input.dataset.question] = input.value); await api(`/api/approvals/${encodeURIComponent(button.dataset.inputSubmit)}`,{answers}); } if (button.dataset.formSubmit) { const content = {}; button.closest('[data-approval]').querySelectorAll('[data-form-field]').forEach(input => content[input.dataset.formField] = input.dataset.fieldType === 'boolean' ? input.checked : input.dataset.fieldType === 'array' ? input.value.split(',').map(item => item.trim()).filter(Boolean) : input.value); await api(`/api/approvals/${encodeURIComponent(button.dataset.formSubmit)}`,{content}); } await refresh(); });

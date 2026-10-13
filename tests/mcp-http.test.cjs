@@ -132,7 +132,9 @@ test('real HTTP MCP tools complete an addressed mailbox question and reply witho
   assert.notEqual(posted.data.result.isError, true);
   const message = posted.data.result.structuredContent;
   const inbox = await h.invoke(h.second.card, second, 'agentroom_chat_inbox');
-  assert.ok(JSON.stringify(inbox.data.result.structuredContent).includes(message.id));
+  assert.equal(Array.isArray(inbox.data.result.structuredContent), false);
+  assert.deepEqual(inbox.data.result.structuredContent.items, JSON.parse(inbox.data.result.content[0].text));
+  assert.equal(inbox.data.result.structuredContent.items[0].id, message.id);
   const replied = await h.invoke(h.second.card, second, 'agentroom_chat_reply', { message_id: message.id, text: 'Actual fixture answer', idempotency_key: 'one-answer' });
   assert.notEqual(replied.data.result.isError, true);
   const waited = await h.invoke(h.first.card, first, 'agentroom_chat_wait', { message_id: message.id, seconds: 0 });

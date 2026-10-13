@@ -26,3 +26,7 @@ test('manual clients and arbitrary scripts cannot be used as background login en
   await assert.rejects(f.actions.perform({operation:'login_client',run_id:f.job.id}),error=>error.code==='client_runtime_missing');assert.equal(f.launched.length,0);
   f.job.next_actions=[];await assert.rejects(f.actions.perform({operation:'login_client',run_id:f.job.id}),error=>error.code==='onboarding_action_unavailable');assert.equal(f.launched.length,0);
 });
+test('Codex first login uses the isolated home without changing the parent environment',async t=>{
+  const f=fixture(t),executable=path.join(f.root,'codex.exe'),home=path.join(f.root,'private-codex'),parent=process.env.CODEX_HOME;fs.writeFileSync(executable,'metadata only');f.job.provider='codex';f.service.store.setting=()=>({executable,executable_args:[]});let ready=0;f.service.codex={ready:async()=>{ready++;},workspace:{environment:()=>({...process.env,CODEX_HOME:home})}};
+  await f.actions.perform({run_id:f.job.id,operation:'login_client'});assert.equal(ready,1);assert.equal(f.launched[0].options.env.CODEX_HOME,home);assert.equal(process.env.CODEX_HOME,parent);assert.match(Buffer.from(f.launched[0].args.at(-1),'base64').toString('utf16le'),/login/);
+});

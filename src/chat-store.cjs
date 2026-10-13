@@ -10,7 +10,7 @@ class ChatStore {
     this.db = store.db;
     this.savepoint = 0;
     this.readOnly = options.readOnly === true;
-    if(options.readOnly){this.hasRoomTombstones=!!this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='chat_room_tombstones'").get();return;}
+    if(options.readOnly){this.hasRoomTombstones=!!this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='chat_room_tombstones'").get();this.hasRoomArchives=!!this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='chat_room_archives'").get();return;}
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS chat_members (
         id TEXT PRIMARY KEY, name TEXT NOT NULL, adapter TEXT NOT NULL,
@@ -48,6 +48,9 @@ class ChatStore {
         room_id TEXT NOT NULL REFERENCES chat_rooms(id), nonce_hash TEXT NOT NULL,
         status TEXT NOT NULL DEFAULT 'pending', expires TEXT NOT NULL, created TEXT NOT NULL,
         completed TEXT
+      );
+      CREATE TABLE IF NOT EXISTS chat_room_archives (
+        room_id TEXT PRIMARY KEY REFERENCES chat_rooms(id), archived_at TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS chat_messages_room ON chat_messages(room_id,seq);
       CREATE INDEX IF NOT EXISTS chat_messages_inbox ON chat_messages(to_member_id,status,seq);
@@ -89,6 +92,7 @@ class ChatStore {
       INSERT OR IGNORE INTO chat_exports(room_id,revision) SELECT id,1 FROM chat_rooms;
     `);
     this.hasRoomTombstones = true;
+    this.hasRoomArchives = true;
   }
   transaction(fn) {
     // SAVEPOINT also works when a caller already entered Store.transaction().
@@ -132,12 +136,22 @@ class ChatStore {
     if (entries.length) this.db.prepare(`UPDATE chat_members SET ${entries.map(([key]) => `${key}=?`).join(',')},updated=? WHERE id=?`).run(...entries.map(([, value]) => value), now(), memberId);
     return this.member(memberId);
   }
-  rooms() { return this.db.prepare(`SELECT r.*,p.name AS project_name,p.path AS project_path FROM chat_rooms r JOIN projects p ON p.id=r.project_id ${this.hasRoomTombstones?'WHERE NOT EXISTS(SELECT 1 FROM chat_room_tombstones d WHERE d.room_id=r.id)':''} ORDER BY r.updated DESC,r.id`).all(); }
+  archiveState(row){const archive=this.hasRoomArchives?this.db.prepare('SELECT archived_at FROM chat_room_archives WHERE room_id=?').get(row.id):null;return {...row,archived:!!archive,archived_at:archive?.archived_at||null};}
+  rooms() { return this.db.prepare(`SELECT r.*,p.name AS project_name,p.path AS project_path FROM chat_rooms r JOIN projects p ON p.id=r.project_id ${this.hasRoomTombstones?'WHERE NOT EXISTS(SELECT 1 FROM chat_room_tombstones d WHERE d.room_id=r.id)':''} ORDER BY r.updated DESC,r.id`).all().map(row=>this.archiveState(row)); }
   room(roomId) {
     const row = this.db.prepare('SELECT r.*,p.name AS project_name,p.path AS project_path FROM chat_rooms r JOIN projects p ON p.id=r.project_id WHERE r.id=?').get(roomId);
     if (!row) throw new RoomError('聊天室不存在。', 404);
     if(this.hasRoomTombstones&&this.db.prepare('SELECT 1 FROM chat_room_tombstones WHERE room_id=?').get(roomId))throw new RoomError('这个聊天室已删除，旧接入入口不能恢复或创建替代聊天室。',410,'room_deleted');
-    return row;
+    return this.archiveState(row);
+  }
+  setArchived(roomId,archived){
+    if(this.readOnly)throw new RoomError('只读检查不能归档或恢复聊天室。',403,'read_only_state');
+    if(typeof archived!=='boolean'||typeof roomId!=='string'||!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(roomId))throw new RoomError('房间归档请求无效。',400,'room_archive_input_invalid');
+    return this.store.transaction(()=>{const room=this.room(roomId);if(room.archived===archived)return room;
+      if(archived)this.db.prepare('INSERT INTO chat_room_archives(room_id,archived_at) VALUES(?,?)').run(roomId,now());
+      else this.db.prepare('DELETE FROM chat_room_archives WHERE room_id=?').run(roomId);
+      return this.room(roomId);
+    });
   }
   deleteRoom(roomId, checkBusy = () => {}) {
     if(this.readOnly)throw new RoomError('只读检查不能删除聊天室。',403,'read_only_state');

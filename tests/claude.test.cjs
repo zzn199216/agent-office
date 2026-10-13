@@ -14,10 +14,13 @@ const fs=require('node:fs'); const args=process.argv.slice(2), env=process.env;
 const at=name=>args.indexOf(name)<0?undefined:args[args.indexOf(name)+1];
 const mode=env.FAKE_CLAUDE_MODE||'success';
 if(args.includes('--version')){process.stdout.write(env.FAKE_CLAUDE_VERSION||'2.1.300 (Claude Code)');process.exit(0);}
-if(args[0]==='auth'&&args[1]==='status'){console.log(JSON.stringify({loggedIn:env.FAKE_CLAUDE_AUTH!=='false',authMethod:'claude.ai',email:'private@example.invalid',token:'sk-ant-never-return-status'}));process.exit(env.FAKE_CLAUDE_AUTH==='false'?1:0);}
+const credentialMatches=!env.FAKE_CLAUDE_EXPECT_KEY||(env.ANTHROPIC_AUTH_TOKEN||env.ANTHROPIC_API_KEY)===env.FAKE_CLAUDE_EXPECT_KEY;
+if(args[0]==='auth'&&args[1]==='status'){const authenticated=env.FAKE_CLAUDE_AUTH!=='false'&&credentialMatches;console.log(JSON.stringify({loggedIn:authenticated,authMethod:'claude.ai',email:'private@example.invalid',token:'sk-ant-never-return-status'}));process.exit(authenticated?0:1);}
 let input='';process.stdin.setEncoding('utf8');process.stdin.on('data',x=>input+=x);process.stdin.on('end',()=>{
 const config=JSON.parse(fs.readFileSync(at('--mcp-config'),'utf8'));
-fs.appendFileSync(env.FAKE_CLAUDE_LOG,JSON.stringify({args,cwd:process.cwd(),config,input,resumeInterrupted:env.CLAUDE_CODE_RESUME_INTERRUPTED_TURN})+'\n');
+fs.appendFileSync(env.FAKE_CLAUDE_LOG,JSON.stringify({args,cwd:process.cwd(),config,input,resumeInterrupted:env.CLAUDE_CODE_RESUME_INTERRUPTED_TURN,credentialMatches,baseUrl:env.ANTHROPIC_BASE_URL,model:env.ANTHROPIC_MODEL,opus:env.ANTHROPIC_DEFAULT_OPUS_MODEL,unexpectedUserEnv:env.CLAUDE_TEST_UNTRUSTED_ENV})+'\n');
+if(!credentialMatches){console.log('missing runtime credential');process.exit(1);}
+if(mode==='requires-upfront'&&config.mcpServers.agentroom.alwaysLoad!==true){console.log('join tool not loaded in restricted session');process.exit(1);}
 if(mode==='no-init'){console.log('not a protocol event');process.exit(0);}
 if(mode==='hang-before-init'){setInterval(()=>{},1000);return;}
 const session=mode==='wrong-session'?'34e8a2f4-2535-495b-b60a-6fdf334bb01a':(at('--resume')||'4ca2b4d5-8a9f-4f54-a9aa-ec5ad0b44d43');
@@ -27,14 +30,16 @@ if(mode==='hang'){setInterval(()=>{},1000);return;}
 process.stderr.write('sk-ant-never-return-stderr Bearer private-stderr\n');
 console.log(JSON.stringify({type:'stream_event',session_id:session,event:{delta:{type:'text_delta',text:'检查中文 sk-ant-progress-secret'}}}));
 console.log(JSON.stringify({type:'assistant',session_id:session,parent_tool_use_id:'tool-child',message:{content:[{type:'text',text:'subagent answer is not final'}]}}));
-console.log(JSON.stringify({type:'result',subtype:mode==='denied'?'error_during_execution':'success',is_error:mode==='denied',session_id:session,uuid:'06fbd02b-3e61-4ba8-8e90-0249880706a3',result:mode==='denied'?'操作被拒绝':'中文实际回答 sk-ant-final-secret Bearer secret crsr_test-secret',permission_denials:mode==='denied'?[{tool_name:'Bash',tool_input:{command:'private-command'}}]:[]}));
+if(mode==='echo-key'){console.log(JSON.stringify({type:'stream_event',session_id:session,event:{delta:{type:'text_delta',text:env.FAKE_CLAUDE_EXPECT_KEY}}}));}
+const keyError=mode==='key-error';
+console.log(JSON.stringify({type:'result',subtype:mode==='denied'||keyError?'error_during_execution':'success',is_error:mode==='denied'||keyError,session_id:session,uuid:'06fbd02b-3e61-4ba8-8e90-0249880706a3',result:mode==='echo-key'||keyError?env.FAKE_CLAUDE_EXPECT_KEY:mode==='denied'?'操作被拒绝':'中文实际回答 sk-ant-final-secret Bearer secret crsr_test-secret',permission_denials:mode==='denied'?[{tool_name:'Bash',tool_input:{command:'private-command'}}]:[]}));
 process.exit(mode==='denied'?1:0);
 });
 `;
 function clientFixture(t, options = {}) {
   const f = fixture(), fake = path.join(f.root, 'fake-claude.cjs'), log = path.join(f.root, 'argv.jsonl');
   fs.writeFileSync(fake, FAKE);
-  const environment = { ...process.env, FAKE_CLAUDE_LOG: log, ...options.env };
+  const environment = { ...process.env, CLAUDE_CONFIG_DIR: path.join(f.root, '.claude'), FAKE_CLAUDE_LOG: log, ...options.env };
   const client = new ClaudeClient({ executable: process.execPath, args: [fake], dataDir: f.data, mcpEnvironment: { AGENTROOM_MEMBER_ID: 'fixture-member' }, env: environment });
   t.after(() => client.close());
   const project = { id: id(), name: '中文测试项目', path: f.project, canonical: normalizePath(f.project), access: 'read-only' };
@@ -50,8 +55,56 @@ test('Claude metadata checks do not start a model session or disclose auth data'
   assert.equal(v.calls().length, 0); assert.doesNotMatch(JSON.stringify(health), /private@example|sk-ant|token/);
   assert.equal(versionSupported(MIN_VERSION), true); assert.equal(versionSupported('2.1.258'), false); assert.equal(versionSupported('unknown'), false);
 });
+
+function userSettings(v, settings) {
+  const directory = v.environment.CLAUDE_CONFIG_DIR;
+  fs.mkdirSync(directory, { recursive: true });
+  fs.writeFileSync(path.join(directory, 'settings.json'), JSON.stringify(settings));
+}
+
+test('restricted Claude forwards user gateway credentials and models without loading other settings', async t => {
+  const key = 'gateway-fixture-private-key', v = clientFixture(t, { env: { FAKE_CLAUDE_EXPECT_KEY: key, ANTHROPIC_AUTH_TOKEN: 'stale-shell-key' } });
+  userSettings(v, { env: { ANTHROPIC_AUTH_TOKEN: key, ANTHROPIC_BASE_URL: 'https://gateway.invalid', ANTHROPIC_MODEL: 'gateway-sonnet', ANTHROPIC_DEFAULT_OPUS_MODEL: 'gateway-opus', CLAUDE_TEST_UNTRUSTED_ENV: 'must-not-load', NODE_OPTIONS: '--require untrusted.js' }, hooks: { SessionStart: [{ command: 'must-not-run' }] }, permissions: { defaultMode: 'bypassPermissions' }, enabledPlugins: { untrusted: true } });
+  fs.mkdirSync(path.join(v.project.path, '.claude'));
+  fs.writeFileSync(path.join(v.project.path, '.claude', 'settings.json'), JSON.stringify({ env: { ANTHROPIC_AUTH_TOKEN: 'project-controlled-key', ANTHROPIC_BASE_URL: 'https://project.invalid' } }));
+  const health = await v.client.status(); await v.run(); const call = v.calls()[0];
+  assert.equal(health.signedIn, true); assert.equal(call.credentialMatches, true);
+  assert.equal(call.baseUrl, 'https://gateway.invalid'); assert.equal(call.model, 'gateway-sonnet'); assert.equal(call.opus, 'gateway-opus'); assert.equal(call.unexpectedUserEnv, undefined);
+  assert.ok(call.args.includes('--restricted')); assert.ok(call.args.includes('--strict-mcp-config'));
+  assert.doesNotMatch(JSON.stringify({ call, health }), /gateway-fixture-private-key|stale-shell-key|project-controlled-key|must-not-run|untrusted/);
+  const settings = JSON.parse(call.args[call.args.indexOf('--settings') + 1]);
+  assert.equal(settings.disableAllHooks, true); assert.equal(settings.env, undefined); assert.equal(settings.permissions.defaultMode, undefined);
+});
+
+test('Claude reloads API keys between turns and redacts arbitrary gateway keys in progress and results', async t => {
+  const key = 'opaque-fixture-key-first', v = clientFixture(t, { env: { FAKE_CLAUDE_EXPECT_KEY: key, FAKE_CLAUDE_MODE: 'echo-key' } });
+  userSettings(v, { env: { ANTHROPIC_API_KEY: key } });
+  const first = await v.run(); assert.equal(first.answer, '[密钥已隐藏]'); assert.doesNotMatch(v.progress.join('\n'), /opaque-fixture-key/);
+  v.environment.FAKE_CLAUDE_EXPECT_KEY = 'opaque-fixture-key-rotated';
+  userSettings(v, { env: { ANTHROPIC_API_KEY: v.environment.FAKE_CLAUDE_EXPECT_KEY } });
+  const second = await v.run(); assert.equal(second.answer, '[密钥已隐藏]'); assert.equal(v.calls().length, 2);
+  v.environment.FAKE_CLAUDE_MODE = 'key-error';
+  await assert.rejects(v.run(), error => error.code === 'turn_failed' && !error.message.includes('opaque-fixture-key') && error.message.includes('[密钥已隐藏]'));
+});
+
+test('Claude reads the default home profile and keeps inherited credentials when settings are absent', async t => {
+  const key = 'home-profile-key', v = clientFixture(t, { env: { FAKE_CLAUDE_EXPECT_KEY: key } });
+  delete v.environment.CLAUDE_CONFIG_DIR; v.environment.USERPROFILE = v.f.root; v.environment.HOME = v.f.root;
+  fs.mkdirSync(path.join(v.f.root, '.claude')); fs.writeFileSync(path.join(v.f.root, '.claude', 'settings.json'), JSON.stringify({ env: { ANTHROPIC_AUTH_TOKEN: key } }));
+  await v.run(); assert.equal(v.calls()[0].credentialMatches, true);
+  const inherited = clientFixture(t, { env: { ANTHROPIC_AUTH_TOKEN: key, FAKE_CLAUDE_EXPECT_KEY: key } });
+  await inherited.run(); assert.equal(inherited.calls()[0].credentialMatches, true);
+});
+
+test('invalid user API settings stop before spawning a model without exposing parser text or credentials', async t => {
+  for (const text of ['{"env":{"ANTHROPIC_AUTH_TOKEN":"private-key-that-parser-may-quote"}, BROKEN}', JSON.stringify({ env: { ANTHROPIC_AUTH_TOKEN: 42 } })]) {
+    const v = clientFixture(t); fs.mkdirSync(v.environment.CLAUDE_CONFIG_DIR); fs.writeFileSync(path.join(v.environment.CLAUDE_CONFIG_DIR, 'settings.json'), text);
+    await assert.rejects(v.run(), error => error.code === 'claude_auth_unknown' && !error.message.includes('private-key-that-parser-may-quote'));
+    assert.equal(v.calls().length, 0); assert.deepEqual(v.states, []);
+  }
+});
 test('Claude uses actual stream session identity, isolated MCP and exact read-only permissions', async t => {
-  const v = clientFixture(t), answer = await v.run(), call = v.calls()[0];
+  const v = clientFixture(t, { env: { FAKE_CLAUDE_MODE: 'requires-upfront' } }), answer = await v.run(), call = v.calls()[0];
   assert.equal(answer.threadId, SESSION); assert.equal(answer.answer, '中文实际回答 [密钥已隐藏] Bearer [密钥已隐藏] [密钥已隐藏]');
   assert.deepEqual(v.states, [{ state: 'creating', thread: undefined }, { state: 'bound', thread: SESSION }]);
   const get = name => call.args[call.args.indexOf(name) + 1];
@@ -60,7 +113,7 @@ test('Claude uses actual stream session identity, isolated MCP and exact read-on
   assert.ok(call.args.includes('--restricted')); assert.ok(call.args.includes('--strict-mcp-config')); assert.ok(call.args.includes('--disable-slash-commands'));
   assert.ok(!call.args.includes('--bare')); assert.ok(!call.args.includes('--dangerously-skip-permissions')); assert.ok(!call.args.includes('--session-id')); assert.ok(!call.args.includes('--continue'));
   assert.equal(normalizePath(call.cwd), v.project.canonical); assert.equal(call.resumeInterrupted, '0');
-  assert.deepEqual(Object.keys(call.config.mcpServers), ['agentroom']); assert.equal(call.config.mcpServers.agentroom.env.AGENTROOM_MEMBER_ID, 'fixture-member');
+  assert.deepEqual(Object.keys(call.config.mcpServers), ['agentroom']); assert.equal(call.config.mcpServers.agentroom.alwaysLoad, true); assert.equal(call.config.mcpServers.agentroom.env.AGENTROOM_MEMBER_ID, 'fixture-member');
   assert.match(call.input, /中文问题/); assert.ok(!call.args.some(arg => arg.includes('中文问题')));
   assert.doesNotMatch(v.progress.join('\n'), /progress-secret|stderr|subagent answer/);
   assert.equal(fs.existsSync(get('--mcp-config')), false);

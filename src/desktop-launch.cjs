@@ -17,8 +17,9 @@ function desktopManifest(source){
   }
   return value;
 }
-function installDesktop(source,dir){
-  const manifest=desktopManifest(source),target=path.join(dir,'bin','desktop');
+function installDesktop(source,dir,options={}){
+  const manifest=desktopManifest(source),bin=path.resolve(dir,'bin'),target=options.executable?path.join(path.dirname(path.resolve(options.executable)),'desktop'):path.join(bin,'desktop'),relative=path.relative(bin,target);
+  if(relative==='..'||relative.startsWith('..'+path.sep)||path.isAbsolute(relative))throw new RoomError('桌面组件必须安装在本机程序目录内。',403,'desktop_install_collision');
   if(path.resolve(source).toLowerCase()===path.resolve(target).toLowerCase())return target;
   const marker=path.join(target,'installed.json');if(fs.existsSync(target)&&fs.lstatSync(target).isSymbolicLink())throw new RoomError('桌面组件目录不能使用未知链接。',403,'desktop_install_collision');
   if(fs.existsSync(target)&&fs.readdirSync(target).length){let owned;try{owned=JSON.parse(fs.readFileSync(marker,'utf8')).app==='AgentRoom.desktop';}catch{}if(!owned)throw new RoomError('桌面安装目录已有其他文件，没有覆盖。',409,'desktop_install_collision');}
@@ -38,14 +39,16 @@ async function launchDesktop(dir,options={}){
   const source=options.sourceArgs?.length?path.resolve(__dirname,'../dist/AgentRoom.exe'):options.source||process.execPath;
   if(!fs.existsSync(source))throw new RoomError('请先构建桌面软件包。',409,'desktop_bundle_missing');
   const desktop=path.join(path.dirname(source),'desktop');desktopManifest(desktop);
-  const installed=require('./install.cjs').installBinary(source,dir),host=installDesktop(desktop,dir);
-  await startMenuShortcut(installed);
-  const request={command:path.join(host,'AgentRoom.Desktop.exe'),args:['--agentroom',installed,'--data-dir',dir],options:{windowsHide:false,shell:false,detached:true,stdio:'ignore',cwd:host}};
+  const installed=require('./install.cjs').installBinary(source,dir),host=installDesktop(desktop,dir,{executable:installed});
+  if(!options.diagnosticsDirectory)await startMenuShortcut(installed);
+  const args=['--agentroom',installed,'--data-dir',dir];
+  if(options.diagnosticsDirectory){args.push('--diagnostics',path.resolve(options.diagnosticsDirectory));if(options.check===true)args.push('--check');}
+  const request={command:path.join(host,'AgentRoom.Desktop.exe'),args,options:{windowsHide:false,shell:false,detached:true,stdio:'ignore',cwd:host}};
   await new Promise((resolve,reject)=>{const child=spawn(request.command,request.args,request.options);child.on('error',reject);child.on('spawn',()=>{child.unref();resolve();});});
 }
 async function showDesktopError(error){
   if(process.platform!=='win32')return;
   const script="[Console]::InputEncoding=[Text.UTF8Encoding]::new($false); Add-Type -AssemblyName System.Windows.Forms; $r=[Console]::In.ReadToEnd()|ConvertFrom-Json; [Windows.Forms.MessageBox]::Show([string]$r.message,'Agent Office',[Windows.Forms.MessageBoxButtons]::OK,[Windows.Forms.MessageBoxIcon]::Warning)|Out-Null";
-  const child=spawn('powershell.exe',['-NoProfile','-NonInteractive','-Command',script],{windowsHide:true,shell:false,stdio:['pipe','ignore','ignore']});child.on('error',()=>{});child.stdin.on('error',()=>{});child.stdin.end(JSON.stringify({message:require('./util.cjs').readableError(error)}));child.unref();
+  await new Promise(resolve=>{const child=spawn('powershell.exe',['-NoProfile','-NonInteractive','-Command',script],{windowsHide:false,shell:false,stdio:['pipe','ignore','ignore']});child.once('error',resolve);child.once('close',resolve);child.stdin.on('error',()=>{});child.stdin.end(JSON.stringify({message:require('./util.cjs').readableError(error)}));});
 }
 module.exports={PUBLIC_FILES,desktopManifest,installDesktop,startMenuShortcut,launchDesktop,showDesktopError};

@@ -4,6 +4,17 @@ const scene=require('../web/office.js');
 const now=Date.parse('2026-10-13T08:00:00Z');
 const member={id:'code-one',name:'Codex 开发',adapter:'codex',status:'ready',presence:'online'};
 const online={members:[{id:member.id,presence:'online',worker_online:true,lease_expires:'2026-10-13T08:01:00Z'}],service:{online:true}};
+
+test('office waits for a read mailbox request and clears only its correlated response',()=>{
+  const request={id:'request-a',room_id:'room-a',sender_id:'user',to_member_id:member.id,status:'consumed',kind:'message',text:'question'};
+  const unrelated={id:'unrelated',room_id:'room-a',sender_id:member.id,kind:'message',text:'independent announcement'};
+  const describe=messages=>scene.describe({roomId:'room-a',participants:[member],runtime:online,online:true,messages},now).members[0];
+  assert.equal(describe([request,unrelated]).waiting,true);
+  const answer={...unrelated,id:'answer',kind:'reply',reply_to:request.id};
+  assert.equal(describe([request,unrelated,answer]).waiting,false);
+  assert.equal(describe([{...request,status:'processing'},answer]).processing,false);
+  assert.equal(describe([request,{...answer,sender_id:'another-member'}]).waiting,true);
+});
 test('office shows only participants in the selected room, including offline and unverified members',()=>{
   const model=scene.describe({roomId:'room-a',participants:[member,{...member,name:'duplicate'},{id:'awaiting',name:'等待接入',status:'pending'},{id:'offline',name:'离线成员',presence:'offline'}],messages:[],online:false},now);
   assert.deepEqual(model.members.map(item=>item.member.id),['code-one','awaiting','offline']);

@@ -133,7 +133,7 @@ class LaunchManager{
       }
       if(session.install_clients&&['codex','claude-code','claude-desktop'].includes(candidate.provider)){
         const own=ownCommand();let result;
-        try{result=await (this.options.installer||installClient)({provider:candidate.provider,executable:candidate.executable,executable_args:candidate.executable_args||[],command:own.command,args:own.args,entry_file:backendEntry.file},this.options.installerOptions||{});}catch(e){result={status:'needs_setup',installed:false,connected:false,reason:redact(e.message).slice(0,1000)};}
+        try{if(candidate.provider==='codex'&&!this.options.installer)result={status:'managed_session',installed:false,needs_reload:false,connected:false,configuration_file:null,reason:'成员通信随专属后台会话加载，真实握手另行验证；无需修改个人 Codex MCP 配置。'};else result=await (this.options.installer||installClient)({provider:candidate.provider,executable:candidate.executable,executable_args:candidate.executable_args||[],command:own.command,args:own.args,entry_file:backendEntry.file},this.options.installerOptions||{});}catch(e){result={status:'needs_setup',installed:false,connected:false,reason:redact(e.message).slice(0,1000)};}
         this.db.prepare('UPDATE launch_proxies SET installation=?,updated=? WHERE id=?').run(JSON.stringify(result),now(),proxy.id);
       }
       if(this.closing)return;

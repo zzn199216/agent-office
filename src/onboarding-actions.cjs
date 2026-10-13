@@ -28,9 +28,12 @@ class OnboardingActions{
     // The program and argv come from a known adapter, not browser command text.
     const command=shellCommand(cli.executable,[...cli.args,...(job.provider==='claude-code'?['auth','login']:job.provider==='codex'?['login']:[])]);
     const script=`$Host.UI.RawUI.WindowTitle='AgentRoom - ${job.provider} 首次配置'; Write-Host '完成自己的模型服务登录或配置后，返回 AgentRoom 点击继续接入。'; ${command}`;
-    const request={command:'powershell.exe',args:['-NoProfile','-NoExit','-EncodedCommand',Buffer.from(script,'utf16le').toString('base64')],options:{cwd:fs.existsSync(project.path)?project.path:path.dirname(cli.executable),windowsHide:false,detached:true,shell:false,stdio:'ignore'}};
+    let environment=process.env;
+    if(job.provider==='codex'){const client=memberClient(this.service,job);await client.ready();environment=client.workspace.environment();}
+    const request={command:'powershell.exe',args:['-NoProfile','-NoExit','-EncodedCommand',Buffer.from(script,'utf16le').toString('base64')],options:{env:environment,cwd:fs.existsSync(project.path)?project.path:path.dirname(cli.executable),windowsHide:false,detached:true,shell:false,stdio:'ignore'}};
     const launched=this.options.launcher?await this.options.launcher(request):await new Promise((resolve,reject)=>{const child=spawn(request.command,request.args,request.options);child.once('error',reject);child.once('spawn',()=>{child.unref();resolve({pid:child.pid});});});
     if(launched?.pid)this.terminals.set(job.id,{pid:launched.pid});return {job,action:{kind:'login_client',launched:true,instruction:'首次配置窗口已打开。请在该工具自己的入口完成登录或模型配置；完成后点击继续接入。'}};
   }
 }
+function memberClient(service,job){return job.member_id?service.chat.nativeClient(service.chat.store.member(job.member_id)):service.codex;}
 module.exports={OnboardingActions};

@@ -205,15 +205,17 @@
     const spoken = messages.filter(message => !['system','event'].includes(message.kind) && !['user','system'].includes(message.sender_id) && members.some(member => member.id === message.sender_id) && typeof message.text === 'string' && message.text.trim());
     const latest = new Map();
     for (const message of spoken) latest.set(message.sender_id, message);
+    const answered = new Map();
+    for (const message of messages) if (message.reply_to && ['reply','acknowledgment'].includes(message.kind)) { const senders = answered.get(message.reply_to) || new Set(); senders.add(message.sender_id); answered.set(message.reply_to,senders); }
     const visible = new Set(spoken.slice().reverse().filter((message,index,list) => list.findIndex(item => item.sender_id === message.sender_id) === index).slice(0,3).map(message => message.sender_id));
     const secretaryId=typeof input.secretary?.member_id==='string'?input.secretary.member_id:null, variants=autoVariants(members,input.appearances || input.appearance);
     return {
       roomId,online,messages,
       members: members.map(member => {
         const presence = participantPresence(member,input.runtime,online,now);
-        const requests = messages.filter(message => message.to_member_id === member.id);
+        const requests = messages.filter(message => message.to_member_id === member.id && !answered.get(message.id)?.has(member.id));
         const processing = presence.worker && requests.some(message => ['processing','running'].includes(message.status));
-        const waiting = requests.some(message => ['queued','delivered','pending'].includes(message.status));
+        const waiting = requests.some(message => ['queued','delivered','pending','consumed'].includes(message.status));
         const needsInput = requests.some(message => ['waiting_input','uncertain'].includes(message.status));
         const message = latest.get(member.id) || null;
         const created = message && Date.parse(message.created || message.created_at || '');
@@ -387,7 +389,7 @@
       if(!info.occupied&&item.entering)settleEntrance(item,false);
       item.root.classList.toggle('ao-vacant',!info.occupied);item.root.dataset.occupied=String(info.occupied);
       item.character.hidden=!info.occupied;
-      item.root.classList.toggle('ao-working',info.occupied&&!item.entering&&info.processing);
+      item.root.classList.toggle('ao-working',info.occupied&&!item.entering&&info.processing&&!info.needsInput);item.root.classList.toggle('ao-waiting',info.occupied&&!item.entering&&!info.processing&&!info.needsInput&&info.waiting);
       item.root.classList.toggle('ao-offline',!current.online || ['offline','stale','unknown'].includes(presence.status));
       item.root.classList.toggle('ao-message-visible',!item.entering&&info.showMessage && !!message);
       item.root.classList.toggle('ao-selected',selected.has(member.id));
