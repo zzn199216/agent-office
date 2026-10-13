@@ -1,4 +1,6 @@
 'use strict';
+// MCP clients require structuredContent to be an object: wrap lists, omit scalars.
+const structured = value => Array.isArray(value) ? { items: value } : value && typeof value === 'object' ? value : undefined;
 const crypto = require('node:crypto');
 const { tools, toolCall } = require('./mcp.cjs');
 const { memberTools } = require('./member-policy.cjs');
@@ -124,7 +126,7 @@ function createMcpHttp(service, options = {}) {
           if (!allowedTools(card).some(tool => tool.name === name)) throw new RoomError('这个成员入口不提供该工具。', 403, 'mcp_tool_forbidden');
           if (args?.room_id && args.room_id !== card.room_id) throw new RoomError('这个入口只授权给原聊天室。', 403, 'resume_scope_mismatch');
           const value = await toolCall(name, args, boundApi(card), contextFor(card));
-          result = { content: [{ type: 'text', text: JSON.stringify(value) }], structuredContent: value };
+          result = { content: [{ type: 'text', text: JSON.stringify(value) }], structuredContent: structured(value) };
         } catch (error) {
           const message = readableError(error).replaceAll(card.secret, '[credential]');
           result = { isError: true, content: [{ type: 'text', text: message }] };

@@ -1,4 +1,6 @@
 'use strict';
+// MCP clients require structuredContent to be an object: wrap lists, omit scalars.
+const structured = value => Array.isArray(value) ? { items: value } : value && typeof value === 'object' ? value : undefined;
 const readline = require('node:readline');
 const { id,RoomError } = require('./util.cjs');
 const { memberTools, PROXY_TOOLS, TEAM_TOOLS, TEAM_SECRETARY_TOOLS } = require('./member-policy.cjs');
@@ -167,7 +169,7 @@ function runMcp(api,input=process.stdin,output=process.stdout){
       else if(!initialized)throw new Error('Initialize the MCP connection first.');
       else if(req.method==='tools/list')result={tools:memberTools(tools,await api.mcpContext?.()||{})};
       else if(req.method==='tools/call'){
-        try{const value=await toolCall(req.params?.name,req.params?.arguments || {},api,await api.mcpContext?.()||{});result={content:[{type:'text',text:JSON.stringify(value)}],structuredContent:value};}
+        try{const value=await toolCall(req.params?.name,req.params?.arguments || {},api,await api.mcpContext?.()||{});result={content:[{type:'text',text:JSON.stringify(value)}],structuredContent:structured(value)};}
         catch(e){result={isError:true,content:[{type:'text',text:e.message}]};}
       }else{send({jsonrpc:'2.0',id:req.id,error:{code:-32601,message:'Method not found'}});return;}
       send({jsonrpc:'2.0',id:req.id,result});
