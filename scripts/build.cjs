@@ -38,6 +38,7 @@ async function main(){
   fs.copyFileSync(path.join(root,'docs','USER_GUIDE.md'),path.join(release,'USER_GUIDE.md'));fs.copyFileSync(path.join(root,'docs','GROK_GROUP_BRIDGE.md'),path.join(release,'GROK_GROUP_BRIDGE.md'));
   fs.copyFileSync(path.join(root,'docs','BRIDGE_SETUP.md'),path.join(release,'BRIDGE_SETUP.md'));fs.copyFileSync(path.join(root,'docs','DURABLE_ROOM.md'),path.join(release,'DURABLE_ROOM.md'));
   fs.copyFileSync(path.join(root,'docs','ZERO_TOUCH_RESEARCH.md'),path.join(release,'ZERO_TOUCH_RESEARCH.md'));
+  fs.copyFileSync(path.join(root,'docs','AGENT_INSTALLATION.md'),path.join(release,'AGENT_INSTALLATION.md'));
   fs.copyFileSync(path.join(root,'docs','QWEN_DESKTOP_RESEARCH.md'),path.join(release,'QWEN_DESKTOP_RESEARCH.md'));
   fs.copyFileSync(path.join(root,'docs','DOUBAO_DESKTOP_RESEARCH.md'),path.join(release,'DOUBAO_DESKTOP_RESEARCH.md'));
   fs.copyFileSync(path.join(root,'docs','OFFICE_APPEARANCE.md'),path.join(release,'OFFICE_APPEARANCE.md'));
