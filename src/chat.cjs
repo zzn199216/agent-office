@@ -18,7 +18,7 @@ class ChatManager {
   }
   adapter(member){return this.adapters.get(member.adapter)||this.adapters.get('mailbox');}
   roomDeleted(roomId){return !!this.store.db.prepare('SELECT 1 FROM chat_room_tombstones WHERE room_id=?').get(roomId);}
-  publicMember(m){return {id:m.id,name:m.name,adapter:m.adapter,status:m.status,error:m.error,verified_at:m.verified_at,capabilities:this.adapter(m).capabilities,created:m.created,updated:m.updated,last_seen:m.config.last_seen||null,runtime_state:this.service.runtime?.memberState(m.id)||null,appearance:require('./appearance.cjs').storedAppearance(this.service.store,m)};}
+  publicMember(m){return {id:m.id,name:m.name,adapter:m.adapter,status:m.status,error:m.error,verified_at:m.verified_at,capabilities:this.adapter(m).capabilities,created:m.created,updated:m.updated,last_seen:m.config.last_seen||null,manual_wake:['mailbox','grok-bridge','grok-proxy'].includes(m.adapter)||/^manual_/.test(m.config.connection_mode||''),runtime_state:this.service.runtime?.memberState(m.id)||null,appearance:require('./appearance.cjs').storedAppearance(this.service.store,m)};}
   snapshot(){return {rooms:this.store.rooms(),members:this.store.members().map(m=>this.publicMember(m)),activeMessages:[...this.active.values()].map(a=>a.messageId).filter(Boolean)};}
   changed(){this.service.changed();this.exportRooms();}
   room(roomId,options={}){

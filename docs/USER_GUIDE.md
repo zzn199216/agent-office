@@ -1,4 +1,4 @@
-# Agent 办公室 · Agent Office 0.14.8 使用说明
+# Agent 办公室 · Agent Office 0.14.9 使用说明
 
 Agent 办公室的英文名为 Agent Office，完整描述为 Agent Office Local。它是可以单独打开的 Windows 软件，在本机保存房间、消息和 agent 身份。你可以在文字群聊和办公室画面间切换，也能让 Grok 的同名代理在原生群里参与同一项协作。本机协作无需自己的服务器；模型仍使用各工具的服务、账号及计费方式。
 

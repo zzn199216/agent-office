@@ -547,6 +547,8 @@ function renderTyping(messages) {
   for (const message of messages) if (message.reply_to && ['reply','acknowledgment'].includes(message.kind)) { const senders = replies.get(message.reply_to) || new Set(); senders.add(message.sender_id); replies.set(message.reply_to,senders); }
   for (const message of messages) {
     if (!message.to_member_id || !states[message.status] || replies.get(message.id)?.has(message.to_member_id)) continue;
+    // A read message nobody answered for half an hour is not "typing"; its own footer still shows the status.
+    if (message.status === 'consumed' && Date.now() - Date.parse(message.updated || message.created || 0) > 30 * 60e3) continue;
     const priority = message.status === 'waiting_input' ? 3 : ['processing','running','creating'].includes(message.status) ? 2 : 1;
     if (priority >= (owed.get(message.to_member_id)?.priority || 0)) owed.set(message.to_member_id,{message,priority});
   }
@@ -556,6 +558,8 @@ function renderTyping(messages) {
     if (!webConnected) { label = '本机服务未连接'; busy = false; needsYou = true; }
     else if (busy && !active.has(message.id)) { label = '处理状态待核对'; busy = false; needsYou = true; }
     else if (needsYou && !approvals.some(approval => approval.request_id === message.id || message.request_id && approval.request_id === message.request_id)) label = '确认状态待核对';
+    // Desktop clients only act when someone types in their own window, so say so instead of implying they will pick it up.
+    else if (member.manual_wake && ['queued','pending','delivered'].includes(message.status)) { label = `${label} · 它不会自己接手，请到它的窗口里说「用 AgentOffice 查看我的收件箱」`; needsYou = true; }
     return `<div class="typing-row${busy ? ' busy' : ''}${needsYou ? ' needs-you' : ''}" data-typing-member="${escape(memberId)}" role="status">${avatar(member.name,member.adapter,member.appearance,member.id)}<div class="typing-bubble"><span class="typing-dots" aria-hidden="true"><i></i><i></i><i></i></span><span>${escape(member.name)} · ${escape(label)}</span></div></div>`;
   }).join('');
 }
