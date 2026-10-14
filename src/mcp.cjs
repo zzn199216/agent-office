@@ -147,7 +147,7 @@ async function dispatchTool(name,args,api,context={}){
     case'agentroom_chat_history':{if(context.connection?.default_room_id===null&&!args.room_id)return {member_id:member,room:null,participants:[],messages:[],status:'no_conversation',detail:'人物已连接 AO，目前没有加入会话。请在 AO 将这位同事加入会话，无需更换 MCP。'};if(!room&&!args.room_id)throw new RoomError('请先连接 AO 的成员入口，再读取当前会话。',403,'mcp_member_required');return api(`/api/chat/rooms/${encodeURIComponent(args.room_id||room)}`);}
     case'agentroom_chat_post':return api('/api/chat/messages',{...args,room_id:room,sender_id:member});
     case'agentroom_chat_wait':return api(`/api/chat/messages/${encodeURIComponent(args.message_id)}/wait?seconds=${Math.min(25,args.seconds??25)}${member?'&member_id='+encodeURIComponent(member):''}`);
-    case'agentroom_chat_inbox':{const value=await api(`/api/chat/inbox?member_id=${encodeURIComponent(member)}${args.room_id?'&room_id='+encodeURIComponent(args.room_id):''}`);return Array.isArray(value?.items)?value.items:value;}
+    case'agentroom_chat_inbox':{const inboxRoom=args.room_id||(context.proxy?home:null),value=await api(`/api/chat/inbox?member_id=${encodeURIComponent(member)}${inboxRoom?'&room_id='+encodeURIComponent(inboxRoom):''}`);return Array.isArray(value?.items)?value.items:value;}
     case'agentroom_chat_image':return api(`/api/chat/images/${encodeURIComponent(args.image_id)}?room_id=${encodeURIComponent(room)}&member_id=${encodeURIComponent(member)}&format=base64`);
     case'agentroom_chat_reply':return api(`/api/chat/messages/${encodeURIComponent(args.message_id)}/reply`,{member_id:member,text:args.text,idempotency_key:args.idempotency_key});
     case'agentroom_chat_ack':return api(`/api/chat/messages/${encodeURIComponent(args.message_id)}/ack`,{member_id:member});
@@ -165,6 +165,7 @@ async function dispatchTool(name,args,api,context={}){
 async function toolResult(name,value,api,context={}){
   if(name==='agentroom_chat_image')return {content:[{type:'text',text:JSON.stringify({id:value.id,name:value.name,mime:value.mime})},{type:'image',mimeType:value.mime,data:value.data}]};
   const result={content:[{type:'text',text:JSON.stringify(value)}],structuredContent:structured(value)};
+  if(name==='agentroom_chat_rooms'&&context.connection){const connection={...context.connection,queried_at:new Date().toISOString()};result.structuredContent={...result.structuredContent,connection};result.content[0].text=JSON.stringify({...value,connection});}
   if(name==='agentroom_chat_inbox'){
     const messages=Array.isArray(value)?value:value?.items||[];let count=0,total=0;
     if(context.connection){

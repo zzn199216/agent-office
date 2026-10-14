@@ -122,6 +122,13 @@ class OnboardingManager{
     this.set(row.id,{launch_session_id:launch.id,stage:'connecting'});
     const work=this.service.launch.jobs.get(launch.id);if(work)await work;
     if(this.closing)return;
+    if(['qwen-desktop','doubao','grok-bot'].includes(row.provider)&&this.options.desktopConnector){
+      const prepared=this.snapshot(this.row(row.id));
+      if(prepared.member_id){
+        try{await this.options.desktopConnector({member_id:prepared.member_id,room_id:row.room_id,provider:row.provider});this.set(row.id,{status:'ready',stage:'ready_automatic',error:null});return;}
+        catch(error){this.set(row.id,{status:'needs_action',stage:'awaiting_native_desktop',error:safeText(error.message)});return;}
+      }
+    }
     this.set(row.id,{status:'needs_action',stage:'awaiting_connection'});
   }
   state(input={}){
@@ -153,7 +160,7 @@ class OnboardingManager{
     const base={id:row.id,run_id:row.id,room_id:row.room_id,requested_provider:row.requested_provider,provider:row.provider,name:NAMES[row.provider]||row.provider,mode:row.mode,
       status:row.status,stage:row.stage,launch_session_id:row.launch_session_id,install_client:!!row.install_client,install_runtime:!!row.install_runtime,
       created:row.created,updated:row.updated,goal:row.goal||'',error:row.error?safeText(row.error):null,runtime:json(row.runtime_result,null),
-      local_verified:false,can_wake:false,response_mode:BRIDGE.has(row.provider)?'manual_bridge':DESKTOP.has(row.provider)?'manual_mailbox':'managed_native',native_group_status:'not_prepared',grok_verified:false,next_actions:[],policy:this.service.launch.policy()};
+      local_verified:false,can_wake:false,protocol_verified:false,model_reply_verified:false,runner_ready:false,native_conversation_loaded:false,automatic_reply_verified:false,error_stage:null,readiness:'unverified',connection_evidence:null,response_mode:BRIDGE.has(row.provider)?'manual_bridge':DESKTOP.has(row.provider)?'manual_mailbox':'managed_native',native_group_status:'not_prepared',grok_verified:false,next_actions:[],policy:this.service.launch.policy()};
     // A pure SQLite read deliberately bypasses launch.state(), which historically
     // renews or issues entry cards for unfinished desktop handshakes.
     const session=row.launch_session_id?this.db.prepare('SELECT * FROM launch_sessions WHERE id=? AND room_id=?').get(row.launch_session_id,row.room_id):null;
@@ -163,10 +170,17 @@ class OnboardingManager{
       let member=null;try{if(selected?.prepared_member_id){this.service.chat.store.requireParticipant(row.room_id,selected.prepared_member_id);member=this.service.chat.store.member(selected.prepared_member_id);if(member.adapter!=='grok-bridge')member=null;}}catch{}
       if(member){
         const credentialStatus=this.credentialState(row.room_id,member),verified=!!member.verified_at&&credentialStatus==='active'&&!member.error&&!['connecting','connection_failed','awaiting_handshake'].includes(member.status);
+        const evidence=this.service.runtime.memberState(member.id).connection_evidence||null;
         Object.assign(base,{name:member.name,member_id:member.id,credential_status:credentialStatus,local_verified:verified,native_group_status:'not_requested'});
+        Object.assign(base,{connection_evidence:evidence,protocol_verified:evidence?.protocol_verified===true,model_reply_verified:evidence?.model_reply_verified===true,
+          runner_ready:evidence?.runner_online===true,native_conversation_loaded:evidence?.native_conversation_loaded===true,
+          automatic_reply_verified:evidence?.automatic_reply_verified===true,error_stage:evidence?.last_error?.stage||null,
+          readiness:evidence?.verification_level|| (verified?'registration_verified':'unverified')});
+        if(this.service.desktop?.canWake(member.id)){Object.assign(base,{status:'ready',stage:'ready_automatic',local_verified:true,can_wake:true,response_mode:'managed_desktop',runner_ready:true,error:null,detail:base.automatic_reply_verified?'本人对话已核对实际自动回复。':'本人对话已接通；首条消息将核对实际自动回复。'});return base;}
         if(['interrupted','error'].includes(row.status)||session?.error){base.status='error';base.stage='error';base.error=safeText(session?.error||row.error||'本机桥接入口准备失败。');base.next_actions=[action('verify','重试准备入口',{operation:'retry'})];return base;}
         if(!['active','pending'].includes(credentialStatus)){base.status='needs_action';base.stage='awaiting_credential';base.detail='既有 Grok 成员的长期入口不可用，需你明确重新授权接入。';base.next_actions=[action('verify','重新授权接入',{operation:'retry'})];return base;}
         if(verified){base.status='ready';base.stage='ready_mailbox';base.error=null;base.detail='已验证 Grok 本人窗口的本机入口；已有的 Webhook 和固定路由设置保持原样。应用进程不证明执行宿主在线，原生群状态另行核对。';return base;}
+        if(row.stage==='awaiting_native_desktop'){base.detail='本人对话未接通；检查客户端是否开启本机连接，再点击连接本人对话。';base.next_actions=[action('verify','连接本人对话',{operation:'native_desktop_connect'})];return base;}
         base.status='needs_action';base.stage='awaiting_bridge_handshake';base.detail='入口已准备；在选定的已有 Grok Bot 窗口执行一次长期本机命令。应用开着不代表执行宿主连通，不能以说明或配置代替实际握手。';base.next_actions=[action('self_handshake','在已有 Grok Bot 窗口启用',{operation:'copy_handshake_prompt'})];return base;
       }
       if(row.status==='running'&&this.jobs.has(row.id)||session?.status==='preparing'){base.status='running';return base;}
@@ -181,7 +195,13 @@ class OnboardingManager{
       const credentialValid=member.adapter==='mailbox'?credentialStatus==='active':['active','pending'].includes(credentialStatus);
       const verified=!!member.verified_at&&credentialValid&&!nativeConnecting&&!['connection_failed','awaiting_handshake','connecting'].includes(member.status)&&!member.error;
       const runtime=this.service.runtime.memberState(member.id);
+      const evidence=runtime.connection_evidence||null;
       Object.assign(base,{name:proxy.name,proxy_id:proxy.id,member_id:member.id,local_verified:verified,can_wake:runtime.can_wake===true,
+        protocol_verified:evidence?.protocol_verified===true,model_reply_verified:evidence?.model_reply_verified===true,
+        runner_ready:evidence?.runner_online===true,native_conversation_loaded:evidence?.native_conversation_loaded===true,
+        automatic_reply_verified:evidence?.automatic_reply_verified===true,connection_evidence:evidence,
+        error_stage:evidence?.last_error?.stage||null,
+        readiness:evidence?.verification_level|| (verified?'registration_verified':'unverified'),
         native_group_status:proxy.native_group_status||'pending',response_mode:member.adapter==='mailbox'?'manual_mailbox':'managed_native',
         credential_status:credentialStatus,
         installation:installation?{status:installation.status||'needs_setup',installed:installation.installed===true,needs_reload:installation.needs_reload===true,needs_import:installation.needs_import===true,...['form','json'].includes(installation.import_kind)?{import_kind:installation.import_kind}:{},detail:installation.detail?safeText(installation.detail):null}:null});
@@ -189,6 +209,7 @@ class OnboardingManager{
     if(['interrupted','error'].includes(row.status)){
       base.next_actions=[action('verify','重试接入',{operation:'retry'})];return base;
     }
+    if(member&&this.service.desktop?.canWake(member.id)){Object.assign(base,{status:'ready',stage:'ready_automatic',local_verified:true,can_wake:true,response_mode:'managed_desktop',runner_ready:true,error:null,detail:base.automatic_reply_verified?'本人对话已核对实际自动回复。':'本人对话已接通；首条消息将核对实际自动回复。',next_actions:[]});return base;}
     if(row.stage==='requires_explicit_backend_selection'||row.mode==='managed'&&DESKTOP.has(row.provider)){
       const alternative=MANAGED_ALTERNATIVE[row.provider];base.status='needs_action';base.stage=row.stage;
       base.next_actions=alternative?[action('verify',`如需后台回答，请明确选择 ${NAMES[alternative]}`,{operation:'select_provider',provider:alternative})]:[action('verify','使用所选客户端的本人窗口协作入口',{operation:'select_provider',provider:row.provider,mode:'desktop'})];return base;
@@ -196,7 +217,7 @@ class OnboardingManager{
     if(base.local_verified){
       if(base.can_wake||base.response_mode==='manual_mailbox'){
         base.status='ready';base.stage=base.can_wake?'ready_automatic':'ready_mailbox';base.error=null;
-        base.detail=base.can_wake?member.config?.connection_verification==='local_mcp'?'本机 MCP 通信与登录已核对，可后台接收任务；模型回复时会单独显示等待进度。':'已验证，可在后台处理群里的委托。':'已接入消息信箱；需在本人窗口领取和回复，不能后台唤醒。';
+        base.detail=base.can_wake?base.automatic_reply_verified?'已核对实际任务回复，可在后台处理群里的委托。':base.protocol_verified||member.config?.connection_verification==='local_mcp'?'本机 MCP 通信与登录已核对；实际模型回复尚待任务验证，回复时会单独显示等待进度。':'接入记录可用；首次实际任务后核对自动回复能力。':'已接入消息信箱；需在本人窗口领取和回复，不能后台唤醒。';
         if(base.native_group_status==='pending')base.next_actions=[action('open_native_group','加入你指定的 Grok 群',{operation:'native_group_handoff'})];
         return base;
       }
@@ -209,6 +230,7 @@ class OnboardingManager{
       base.status='needs_action';base.stage='awaiting_credential';base.detail=credentialStatus==='revoked'?'此成员的通信入口已撤销，需要你明确重新接入。':'此成员的通信入口不可用，需要你明确重新接入。';
       base.next_actions=[action('verify','重新授权接入',{operation:'retry'})];return base;
     }
+    if(row.stage==='awaiting_native_desktop'&&member){base.detail='本人对话未接通；检查客户端是否开启本机连接，再点击连接本人对话。';base.next_actions=[action('verify','连接本人对话',{operation:'native_desktop_connect'})];return base;}
     if(row.stage==='awaiting_auth'||member?.error&&AUTH.test(member.error)){
       base.status='needs_action';base.stage='awaiting_auth';base.error=member?.error||row.error?safeText(member?.error||row.error):null;
       if(row.provider==='claude-code'){let config;try{config=require('./claude.cjs').configurationInfo(this.options.env||process.env);}catch{}base.configuration=config?{file:config.file,api_mode:config.api_mode,credential_configured:config.credential_configured}:null;}

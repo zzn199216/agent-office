@@ -94,7 +94,7 @@ test('setup MCP connect requires explicit user setup and rejects bound member ca
 });
 test('HTTP desktop onboarding reports import and mailbox readiness without claiming a background model',async t=>{
   const v=await setup(t),start=await v.api('/api/onboarding/start',{provider:'qwen-desktop',room_id:v.room.id,install_client:true});
-  const state=await v.finish(start);assert.equal(state.stage,'awaiting_import');assert.equal(state.can_wake,false);assert.equal(state.local_verified,false);assert.equal(v.clients.length,0);
+  const state=await v.finish(start);assert.equal(state.stage,'awaiting_native_desktop');assert.equal(state.can_wake,false);assert.equal(state.local_verified,false);assert.equal(v.clients.length,0);
   const config=await v.api('/api/launch/client-config',{session_id:state.launch_session_id,provider:'qwen-desktop'}),url=config.config.mcpServers.agentroom.url;
   const parts=new URL(url).pathname.split('/'),card=v.service.resume.credential(parts[2]),raw=fs.readFileSync(path.join(v.data,'entries',`${card.member_id}-${card.room_id}.json`),'utf8');
   assert.equal(JSON.stringify(state).includes(parts[3]),false);assert.equal(JSON.stringify(state).includes('/mcp/'),false);

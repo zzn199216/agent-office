@@ -114,7 +114,8 @@ async function main(args=process.argv.slice(2)){
     try{
       if(entry)memberScope.room_id=disk.resume.inspect(entry.card).room_id;else disk.chat.requireParticipant(memberScope.room_id,memberScope.member_id);
       if(route)policy.assertMemberRoute(disk,memberScope,route,input,{allowJoin:!entry});
-      return {env:{...process.env,AGENTROOM_MEMBER_ID:memberScope.member_id,AGENTROOM_ROOM_ID:memberScope.room_id},proxy:!!policy.proxyFor(disk,memberScope),allowJoin:!entry,secretary:disk.store.setting('secretary.'+memberScope.room_id)?.member_id===memberScope.member_id,connection:policy.memberConnection(disk,memberScope)};
+      const proxy=policy.proxyFor(disk,memberScope),roomId=proxy?.room_id||memberScope.room_id;
+      return {env:{...process.env,AGENTROOM_MEMBER_ID:memberScope.member_id,AGENTROOM_ROOM_ID:roomId},proxy:!!proxy,allowJoin:!entry,secretary:disk.store.setting('secretary.'+roomId)?.member_id===memberScope.member_id,connection:policy.memberConnection(disk,memberScope)};
     }finally{disk.close();}
   };
   const guard=memberScope?inspectScope:undefined;

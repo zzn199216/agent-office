@@ -172,7 +172,20 @@ test('read-only state inspects an actual read-only SQLite handle without DDL, id
     assert.throws(() => runtime.configureWakeAdapter('codex', true), { code: 'read_only_state' });
     assert.throws(() => runtime.releaseSession(s.grok.id), { code: 'read_only_state' });
     assert.throws(() => runtime.releaseWorker('missing'), { code: 'read_only_state' });
+    assert.throws(() => runtime.recordConnectionEvidence(s.codex.id, { event: 'protocol_verified' }), { code: 'read_only_state' });
+    assert.equal(runtime.connectionState(s.codex.id).verification_level,'registered_only');
   } finally { readonly.db.close(); }
+});
+
+test('older read-only databases expose unknown connection proof without schema writes', t => {
+  const s=setup(t);s.store.db.exec('DROP TABLE connection_session_evidence');
+  const readonly=readOnlyChat(s);
+  try {
+    const runtime=new RuntimeState(readonly.chat,{readOnly:true});
+    assert.equal(runtime.connectionState(s.codex.id).protocol_verified,false);
+    assert.deepEqual(runtime.connectionState(s.codex.id).sessions,[]);
+    assert.equal(s.store.db.prepare("SELECT count(*) AS n FROM sqlite_master WHERE name='connection_session_evidence'").get().n,0);
+  } finally {readonly.db.close();}
 });
 
 test('read-only state refuses an uninitialized instance without inventing a replacement UUID', t => {

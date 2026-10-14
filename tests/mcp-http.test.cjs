@@ -301,3 +301,114 @@ test('having no room keeps the identity connection alive without exposing delete
   const fresh = h.service.chat.addRoom({ title: '重新入座', project_id: h.project.id }); h.service.chat.join(fresh.id, h.first.person.id);
   assert.equal((await h.send(h.first.card, { jsonrpc: '2.0', id: 4, method: 'tools/list' }, session)).response.status, 200);
 });
+
+function joinedSecondRoom(h) {
+  const room=h.service.chat.addRoom({title:'Current native room B',project_id:h.project.id});
+  h.service.chat.join(room.id,h.first.person.id);h.service.chat.join(room.id,h.second.person.id);
+  return room;
+}
+function activeDesktop(h,room,extra = {}) {
+  h.service.chat.active.set(h.first.person.id,{abort:new AbortController(),roomId:room.id,desktop:true,...extra});
+  return ()=>h.service.chat.active.delete(h.first.person.id);
+}
+function successful(result) {assert.equal(result.response.status,200);assert.notEqual(result.data.result?.isError,true,result.raw);return result.data.result.structuredContent;}
+
+test('native turn in another joined room defaults rooms, history, teams and posts to its active room',async t=>{
+  const h=await setup(t),session=await h.initialize(h.first.card),room=joinedSecondRoom(h),url=h.endpoint(h.first.card);
+  h.service.chat.store.post({room_id:h.room.id,text:'home room A record',idempotency_key:'native-home-a'});
+  h.service.chat.store.post({room_id:room.id,text:'native room B record',idempotency_key:'native-current-b'});
+  const stop=activeDesktop(h,room);
+  try {
+    const rooms=successful(await h.invoke(h.first.card,session,'agentroom_chat_rooms'));
+    assert.equal(rooms.current_room_id,room.id);assert.equal(rooms.connection.default_room_id,room.id);assert.equal(rooms.connection.member_id,h.first.person.id);assert.equal(rooms.connection.instance_id,h.first.card.instance_id);assert.deepEqual(new Set(rooms.rooms.map(item=>item.id)),new Set([h.room.id,room.id]));
+    const history=successful(await h.invoke(h.first.card,session,'agentroom_chat_history'));
+    assert.equal(history.room.id,room.id);assert.deepEqual(history.messages.map(message=>message.text),['native room B record']);
+    assert.equal(successful(await h.invoke(h.first.card,session,'agentroom_team_state')).room_id,room.id);
+    const posted=successful(await h.invoke(h.first.card,session,'agentroom_chat_post',{text:'native implicit B post',idempotency_key:'native-implicit-b'}));
+    assert.equal(posted.room_id,room.id);assert.equal(posted.sender_id,h.first.person.id);assert.deepEqual(h.service.chat.store.messages(h.room.id).map(message=>message.text),['home room A record']);
+    assert.equal(h.endpoint(h.first.card),url);assert.equal(h.service.resume.credential(h.first.card.credential_id).room_id,h.room.id);assert.equal(h.codex.calls.length,0);
+  } finally {stop();}
+  const returnedHome=successful(await h.invoke(h.first.card,session,'agentroom_chat_rooms'));assert.equal(returnedHome.current_room_id,h.room.id);assert.equal(returnedHome.connection.default_room_id,h.room.id);
+  const homePost=successful(await h.invoke(h.first.card,session,'agentroom_chat_post',{text:'after native turn returns to credential default A',idempotency_key:'native-finished-home-a'}));assert.equal(homePost.room_id,h.room.id);assert.equal(h.endpoint(h.first.card),url);
+});
+
+test('native active room does not narrow a no-argument inbox across joined rooms or consume messages',async t=>{
+  const h=await setup(t),session=await h.initialize(h.first.card),room=joinedSecondRoom(h);
+  const home=h.service.chat.store.post({room_id:h.room.id,to_member_id:h.first.person.id,text:'queued A question',idempotency_key:'native-inbox-a'}),current=h.service.chat.store.post({room_id:room.id,to_member_id:h.first.person.id,text:'queued B question',idempotency_key:'native-inbox-b'});
+  const stop=activeDesktop(h,room);
+  try {
+    const inbox=successful(await h.invoke(h.first.card,session,'agentroom_chat_inbox'));
+    assert.deepEqual(inbox.items.map(message=>message.id),[home.id,current.id]);assert.equal(inbox.connection.default_room_id,room.id);assert.deepEqual(new Set(inbox.connection.rooms.map(item=>item.id)),new Set([h.room.id,room.id]));
+    for(const message of [home,current])assert.equal(h.service.chat.store.message(message.id).status,'queued');assert.equal(h.codex.calls.length,0);
+  } finally {stop();}
+});
+
+test('no native desktop turn and ordinary active work retain the credential home room default',async t=>{
+  const h=await setup(t),session=await h.initialize(h.first.card),room=joinedSecondRoom(h);
+  h.service.chat.store.post({room_id:h.room.id,text:'retained home A',idempotency_key:'retained-home-a'});h.service.chat.store.post({room_id:room.id,text:'other room B',idempotency_key:'retained-other-b'});
+  const check=async()=>{const rooms=successful(await h.invoke(h.first.card,session,'agentroom_chat_rooms'));assert.equal(rooms.current_room_id,h.room.id);assert.equal(rooms.connection.default_room_id,h.room.id);assert.equal(successful(await h.invoke(h.first.card,session,'agentroom_chat_history')).room.id,h.room.id);assert.equal(successful(await h.invoke(h.first.card,session,'agentroom_team_state')).room_id,h.room.id);};
+  await check();const stop=activeDesktop(h,room,{desktop:false});try{await check();}finally{stop();}assert.equal(h.codex.calls.length,0);
+});
+
+test('a native active room that was deleted or left fails closed without falling back to another seat',async t=>{
+  for(const operation of ['deleted','left'])await t.test(operation,async sub=>{
+    const h=await setup(sub),session=await h.initialize(h.first.card),room=joinedSecondRoom(h);
+    h.service.chat.store.post({room_id:h.room.id,text:'must not expose home A after active room loss',idempotency_key:'lost-active-home-a'});
+    const stop=activeDesktop(h,room);
+    try {
+      if(operation==='deleted')h.service.chat.store.deleteRoom(room.id,()=>{},{force:true});else h.service.chat.store.leave(room.id,h.first.person.id);
+      for(const [name,args] of [['agentroom_chat_rooms',{}],['agentroom_chat_history',{}],['agentroom_chat_inbox',{}],['agentroom_team_state',{}],['agentroom_chat_post',{text:'must not silently post in A',idempotency_key:'lost-active-post'}]]) {
+        const result=await h.invoke(h.first.card,session,name,args);assert.equal(result.response.status,200);assert.equal(result.data.result?.isError,true,result.raw);assert.equal(result.data.result?.structuredContent,undefined);assert.equal(result.raw.includes('must not expose home A'),false);
+      }
+      assert.deepEqual(h.service.chat.store.messages(h.room.id).map(message=>message.text),['must not expose home A after active room loss']);assert.equal(h.codex.calls.length,0);
+    } finally {stop();}
+  });
+});
+
+test('a fixed proxy ignores native active-room override and retains its original room restriction',async t=>{
+  const h=await setup(t),session=await h.initialize(h.first.card),room=joinedSecondRoom(h);
+  h.service.store.db.prepare('INSERT INTO launch_proxies(id,room_id,provider,name,backend_member_id,proxy_member_id,created,updated) VALUES(?,?,?,?,?,?,?,?)').run(id(),h.room.id,'fixture-provider','Fixed fixture proxy',h.second.person.id,h.first.person.id,now(),now());
+  h.service.chat.store.post({room_id:h.room.id,text:'fixed proxy home record',idempotency_key:'proxy-home-record'});h.service.chat.store.post({room_id:room.id,text:'private outside proxy scope',idempotency_key:'proxy-other-record'});
+  const stop=activeDesktop(h,room);
+  try {
+    const rooms=successful(await h.invoke(h.first.card,session,'agentroom_chat_rooms'));assert.equal(rooms.current_room_id,h.room.id);assert.equal(rooms.connection.default_room_id,h.room.id);assert.equal(rooms.connection.room_scope,'fixed_proxy');assert.deepEqual(rooms.rooms.map(item=>item.id),[h.room.id]);
+    assert.equal(successful(await h.invoke(h.first.card,session,'agentroom_chat_history')).room.id,h.room.id);
+    const denied=await h.invoke(h.first.card,session,'agentroom_chat_history',{room_id:room.id});assert.equal(denied.data.result.isError,true);assert.equal(denied.raw.includes('private outside proxy scope'),false);
+    const posted=successful(await h.invoke(h.first.card,session,'agentroom_chat_post',{to_member_id:h.second.person.id,text:'fixed backend at A',idempotency_key:'proxy-fixed-post'}));assert.equal(posted.room_id,h.room.id);assert.equal(posted.to_member_id,h.second.person.id);assert.equal(h.codex.calls.length,0);
+  } finally {stop();}
+});
+
+test('fixed proxy HTTP inbox defaults only to its stored room and refuses another joined room',async t=>{
+  const h=await setup(t),session=await h.initialize(h.first.card),other=joinedSecondRoom(h);
+  h.service.store.db.prepare('INSERT INTO launch_proxies(id,room_id,provider,name,backend_member_id,proxy_member_id,created,updated) VALUES(?,?,?,?,?,?,?,?)').run(id(),h.room.id,'fixture-provider','Inbox fixed proxy',h.second.person.id,h.first.person.id,now(),now());
+  const home=h.service.chat.store.post({room_id:h.room.id,to_member_id:h.first.person.id,text:'fixed original room task',idempotency_key:'proxy-inbox-home'}),outside=h.service.chat.store.post({room_id:other.id,to_member_id:h.first.person.id,text:'private second room pending task',idempotency_key:'proxy-inbox-outside'});
+  const stop=activeDesktop(h,other);
+  try {
+    const inbox=successful(await h.invoke(h.first.card,session,'agentroom_chat_inbox'));
+    assert.deepEqual(inbox.items.map(message=>message.id),[home.id]);assert.equal(inbox.connection.default_room_id,h.room.id);assert.equal(inbox.connection.room_scope,'fixed_proxy');assert.deepEqual(inbox.connection.rooms.map(room=>room.id),[h.room.id]);
+    const denied=await h.invoke(h.first.card,session,'agentroom_chat_inbox',{room_id:other.id});assert.equal(denied.data.result.isError,true);assert.equal(denied.raw.includes(outside.text),false);
+    assert.equal(h.service.chat.store.message(home.id).status,'queued');assert.equal(h.service.chat.store.message(outside.id).status,'queued');assert.equal(h.codex.calls.length,0);
+  } finally {stop();}
+});
+
+test('a fixed proxy whose credential is rehomed after origin loss cannot acquire another room',async t=>{
+  for(const operation of ['left','deleted'])await t.test(operation,async sub=>{
+    const h=await setup(sub),session=await h.initialize(h.first.card),other=joinedSecondRoom(h),url=h.endpoint(h.first.card);
+    h.service.store.db.prepare('INSERT INTO launch_proxies(id,room_id,provider,name,backend_member_id,proxy_member_id,created,updated) VALUES(?,?,?,?,?,?,?,?)').run(id(),h.room.id,'fixture-provider','Persisted fixed proxy',h.second.person.id,h.first.person.id,now(),now());
+    h.service.chat.store.post({room_id:other.id,to_member_id:h.first.person.id,text:'private newly default room pending',idempotency_key:'proxy-rehome-outside'});
+    if(operation==='left')h.service.chat.store.leave(h.room.id,h.first.person.id);else h.service.chat.store.deleteRoom(h.room.id,()=>{},{force:true});
+    assert.equal(h.service.resume.credential(h.first.card.credential_id).room_id,other.id,'reproduce the identity credential rehome without replacing its imported URL');
+    for(const [name,args] of [['agentroom_chat_rooms',{}],['agentroom_chat_history',{}],['agentroom_chat_history',{room_id:other.id}],['agentroom_chat_inbox',{}],['agentroom_chat_inbox',{room_id:other.id}],['agentroom_chat_post',{text:'must not post outside fixed room',idempotency_key:'proxy-rehome-post'}]]){
+      const denied=await h.invoke(h.first.card,session,name,args);assert.equal(denied.data.result?.isError,true,denied.raw);assert.equal(denied.raw.includes('private newly default'),false);assert.equal(denied.data.result.structuredContent,undefined);
+    }
+    assert.deepEqual(h.service.chat.store.messages(other.id).map(message=>message.text),['private newly default room pending']);assert.equal(h.codex.calls.length,0);assert.equal(h.endpoint(h.first.card),url);
+    if(operation==='left'){
+      h.service.chat.join(h.room.id,h.first.person.id);
+      const home=h.service.chat.store.post({room_id:h.room.id,to_member_id:h.first.person.id,text:'back at fixed original room',idempotency_key:'proxy-rejoin-home'});
+      const rooms=successful(await h.invoke(h.first.card,session,'agentroom_chat_rooms'));assert.equal(rooms.current_room_id,h.room.id);assert.equal(rooms.connection.default_room_id,h.room.id);assert.equal(rooms.connection.room_scope,'fixed_proxy');assert.deepEqual(rooms.rooms.map(room=>room.id),[h.room.id]);
+      assert.equal(successful(await h.invoke(h.first.card,session,'agentroom_chat_history')).room.id,h.room.id);
+      assert.deepEqual(successful(await h.invoke(h.first.card,session,'agentroom_chat_inbox')).items.map(message=>message.id),[home.id]);
+      const sent=successful(await h.invoke(h.first.card,session,'agentroom_chat_post',{to_member_id:h.second.person.id,text:'fixed backend after rejoin',idempotency_key:'proxy-rejoin-post'}));assert.equal(sent.room_id,h.room.id);assert.equal(sent.to_member_id,h.second.person.id);
+    }
+  });
+});

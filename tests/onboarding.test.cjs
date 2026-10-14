@@ -76,6 +76,22 @@ test('one explicit button prepares exactly the named provider and classifies aut
   assert.equal(state.status,'ready');assert.equal(state.stage,'ready_automatic');assert.equal(state.local_verified,true);assert.equal(state.can_wake,true);
   assert.equal(state.native_group_status,'pending');assert.equal(state.grok_verified,false);
   assert.equal(state.next_actions[0].kind,'open_native_group');assert.equal(state.policy.automatic_sync,false);
+  assert.equal(state.automatic_reply_verified,false);assert.equal(state.model_reply_verified,false);assert.equal(state.native_conversation_loaded,false);
+});
+test('onboarding distinguishes protocol readiness from actual reply evidence without launching another attempt',async t=>{
+  const v=setup(t),first=await completed(v);
+  let evidence={protocol_verified:true,model_reply_verified:false,runner_online:false,native_conversation_loaded:false,automatic_reply_verified:false,verification_level:'protocol_verified',last_error:null,sessions:[]};
+  v.service.runtime.memberState=memberId=>({can_wake:v.capabilities.get(memberId)===true,connection_evidence:evidence});
+  const before=v.calls.length,changes=v.changes,state=v.manager.state({run_id:first.id});
+  assert.equal(state.stage,'ready_automatic','existing transport availability status is compatible');
+  assert.equal(state.readiness,'protocol_verified');assert.equal(state.protocol_verified,true);assert.equal(state.model_reply_verified,false);
+  assert.equal(state.automatic_reply_verified,false);assert.match(state.detail,/实际模型回复尚待任务验证/);
+  evidence={...evidence,model_reply_verified:true,automatic_reply_verified:true,verification_level:'reply_verified'};
+  const answered=v.manager.state({run_id:first.id});assert.equal(answered.automatic_reply_verified,true);assert.equal(answered.readiness,'reply_verified');
+  assert.equal(answered.native_conversation_loaded,false,'a CLI reply does not load a desktop current dialogue');
+  evidence={...evidence,model_reply_verified:false,automatic_reply_verified:false,last_error:{stage:'model',code:'quota_required',observed_at:now()}};
+  assert.equal(v.manager.state({run_id:first.id}).error_stage,'model');
+  assert.equal(v.calls.length,before);assert.equal(v.changes,changes,'evidence reads do not mutate credentials or start an executor');
 });
 test('fast repeat clicks reuse a durable pending run without widening install permission',async t=>{
   let resolve;const gate=new Promise(r=>{resolve=r;});const v=setup(t,{gate});

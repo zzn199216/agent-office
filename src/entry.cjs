@@ -68,6 +68,7 @@ class RoomEntry {
   async wake(roomId,memberId,callerId){const {chat,runtime}=this.service;chat.store.requireParticipant(roomId,memberId);if(callerId)chat.store.requireParticipant(roomId,callerId);const m=chat.store.member(memberId),s=runtime.memberState(memberId);
     if(!s.can_wake)return {status:'needs_external_entry',member:chat.publicMember(m),detail:'这个工具没有本机后台唤醒适配器。请让它在自己的会话调用已有恢复入口；记录与消息仍保留。'};
     if(chat.active.has(memberId)||s.worker_online)return {status:'already_running',member:chat.publicMember(m)};
+    if(m.status==='ready'&&m.verified_at&&chat.store.binding(roomId,memberId).thread_id)return {status:'available_idle',member:chat.publicMember(m),detail:'这位成员的原生会话已验证；新消息会按需继续原会话，无需再次邀请握手。',native_thread_id:chat.store.binding(roomId,memberId).thread_id};
     const result=await chat.connect(memberId,roomId);return {...result,status:result.status||'connecting',native_thread_id:chat.store.binding(roomId,memberId).thread_id};
   }
 }

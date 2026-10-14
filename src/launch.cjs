@@ -126,7 +126,7 @@ class LaunchManager{
         if(this.service.chat.active.has(backend.id))throw new RoomError('该成员正在工作，等待本轮结束后重试接入。',409,'launch_busy');
         const client=this.service.chat.clients.get(backend.id);this.service.chat.clients.delete(backend.id);if(client)await client.close();
         if(this.service.chat.roomDeleted(room.id))return;
-        this.service.chat.store.updateMember(backend.id,{config:{...backend.config,executable:candidate.executable,executable_args:candidate.executable_args||[]}});backend=this.service.chat.store.member(backend.id);carried=false;
+        this.service.chat.store.updateMember(backend.id,{status:'connecting',config:{...backend.config,executable:candidate.executable,executable_args:candidate.executable_args||[]}});backend=this.service.chat.store.member(backend.id);carried=false;
       }
       const proxy=this.proxy(room,candidate,backend),backendEntry=manual?this.service.entry.primary(backend.id,room.id):this.service.entry.issue(backend.id,room.id,{repair_invalid:true});
       this.service.entry.issue(proxy.proxy_member_id,room.id,{repair_invalid:true});

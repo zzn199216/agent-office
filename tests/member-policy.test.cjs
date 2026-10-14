@@ -74,6 +74,7 @@ test('member route policy denies aggregate legacy reads, missing scope and contr
   const h=await setup(t),disk={store:h.service.store,chat:h.service.chat.store},scope=h.card;
   for(const route of ['/api/state','/api/chat/state','/api/inbox',`/api/discussions/${h.discussion.id}`,'/api/runtime','/api/team',`/api/team?room_id=${h.otherRoom.id}`])assert.throws(()=>assertMemberRoute(disk,scope,route),{code:'resume_scope_mismatch'},route);
   for(const route of ['/api/team/goals','/api/team/schedule'])assert.throws(()=>assertMemberRoute(disk,scope,route,{room_id:h.room.id,caller_member_id:h.member.id}),{code:'resume_scope_mismatch'});
+  assert.throws(()=>assertMemberRoute(disk,scope,'/api/desktop/connect',{room_id:h.room.id,member_id:h.member.id,provider:'qwen-desktop'}),{code:'resume_scope_mismatch'});
   assert.doesNotThrow(()=>assertMemberRoute(disk,scope,`/api/team?room_id=${h.room.id}`));
   assert.throws(()=>assertMemberRoute(disk,scope,'/api/team/cards',{room_id:h.room.id,caller_member_id:h.member.id,member_id:h.outsider.id}),{code:'resume_scope_mismatch'});
   assert.throws(()=>assertMemberRoute(disk,scope,`/api/team/tasks/${id()}/update`,{room_id:h.room.id,caller_member_id:h.member.id,action:'reconcile'}),{code:'resume_scope_mismatch'});

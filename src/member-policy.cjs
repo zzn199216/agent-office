@@ -18,12 +18,15 @@ const SETUP_TOOLS = new Set(['agentroom_group_prepare','agentroom_group_report',
 const UUID = '[a-f0-9-]{36}';
 function proxyFor(disk, scope) {
   const exists = disk.store.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='launch_proxies'").get();
-  return exists ? disk.store.db.prepare('SELECT backend_member_id FROM launch_proxies WHERE room_id=? AND proxy_member_id=?').get(scope.room_id, scope.member_id) : null;
+  // An identity credential may be rehomed after leaving/deleting its room.
+  // That must not erase a proxy's persisted room and backend restrictions.
+  return exists ? disk.store.db.prepare('SELECT room_id,backend_member_id FROM launch_proxies WHERE proxy_member_id=? ORDER BY (room_id=?) DESC,created,id LIMIT 1').get(scope.member_id, scope.room_id) || null : null;
 }
 function memberConnection(disk, scope) {
-  const proxy = proxyFor(disk, scope);
-  const rooms = disk.chat.rooms().filter(room => disk.chat.joined(room.id, scope.member_id) && (!proxy || room.id === scope.room_id)).map(room => ({ id: room.id, title: room.title }));
-  return { server_version: VERSION, instance_id: scope.instance_id || disk.runtime?.instanceId, member_id: scope.member_id, default_room_id: rooms.some(room=>room.id===scope.room_id)?scope.room_id:null, room_scope: proxy ? 'fixed_proxy' : 'joined_rooms', rooms };
+  const proxy = proxyFor(disk, scope), home = proxy?.room_id || scope.room_id;
+  if (proxy && !disk.chat.joined(home, scope.member_id)) throw new RoomError('固定代理已经离开原房间，未切换到其他房间。', 403, 'proxy_not_bound');
+  const rooms = disk.chat.rooms().filter(room => disk.chat.joined(room.id, scope.member_id) && (!proxy || room.id === home)).map(room => ({ id: room.id, title: room.title }));
+  return { server_version: VERSION, instance_id: scope.instance_id || disk.runtime?.instanceId, member_id: scope.member_id, default_room_id: rooms.some(room=>room.id===home)?home:null, room_scope: proxy ? 'fixed_proxy' : 'joined_rooms', rooms };
 }
 function memberTools(tools, { env = process.env, proxy = false, allowJoin = true } = {}) {
   const member = env.AGENTROOM_MEMBER_ID, room = env.AGENTROOM_ROOM_ID;
@@ -59,13 +62,15 @@ function assertMemberRoute(disk, home, route, input, { allowJoin = false } = {})
   const member = home.member_id, url = new URL(route, 'http://127.0.0.1'), p = url.pathname, q = url.searchParams;
   disk.chat.member(member);
   const denied = () => { throw new RoomError('请求超出了当前成员的房间授权；管理操作请使用本机控制界面。', 403, 'resume_scope_mismatch'); };
+  const fixedProxy = proxyFor(disk, home);
+  if (fixedProxy && !disk.chat.joined(fixedProxy.room_id, member)) denied();
   // A member's own inbox across all of its rooms needs no room at all.
-  if (input === undefined && p === '/api/chat/inbox' && q.get('member_id') === member && !q.has('room_id')) return;
+  if (input === undefined && p === '/api/chat/inbox' && q.get('member_id') === member && !q.has('room_id')) { if (fixedProxy) denied(); return; }
   if (input === undefined && p === `/api/chat/members/${member}/rooms`) return;
   if (p === `/api/chat/members/${member}/heartbeat` && input && Object.keys(input).length===0) return;
   if (p === '/api/resume/accept' && input?.card?.member_id===member && input.card.instance_id===home.instance_id && input.card.credential_id===home.credential_id) return;
   const room = requestRoom(disk, home, p, q, input);
-  if (room !== home.room_id && proxyFor(disk, home)) denied();
+  if (fixedProxy && room !== fixedProxy.room_id) denied();
   const joining = (p === '/api/chat/join' || /^\/api\/chat\/invitations\//.test(p)) && allowJoin;
   if (!joining) { try { disk.chat.requireParticipant(room, member); } catch { denied(); } }
   const scope = { ...home, room_id: room };
@@ -74,7 +79,7 @@ function assertMemberRoute(disk, home, route, input, { allowJoin = false } = {})
   const imageRoute = p.match(new RegExp(`^/api/chat/images/(${UUID})$`, 'i'));
   const invitationRoute = p.match(new RegExp(`^/api/chat/invitations/(${UUID})$`, 'i'));
   const bridgeRoute = p.match(new RegExp(`^/api/bridge/entries/(${UUID})(?:/(wait|report))?$`, 'i'));
-  const proxy = proxyFor(disk, scope);
+  const proxy = fixedProxy || proxyFor(disk, scope);
   let message;
   if(imageRoute){
     const image=disk.chat.images.metadata(imageRoute[1]);

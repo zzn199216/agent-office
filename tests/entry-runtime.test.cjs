@@ -158,7 +158,7 @@ test('unknown tools retain their inbox and report needs_external_entry rather th
   assert.equal(h.clients.length, 0);
 });
 
-test('a native worker can be relaunched using the persisted thread and uncertain requests remain excluded', async t => {
+test('a verified idle native thread remains available without another model handshake and uncertain requests stay excluded', async t => {
   const h = await harness(t), member = participant(h.service, h.room, 'codex');
   await h.service.chat.connect(member.id, h.room.id);
   await until(() => h.service.chat.store.member(member.id).status === 'ready' && !h.service.chat.active.size, 'native fixture handshake');
@@ -169,12 +169,12 @@ test('a native worker can be relaunched using the persisted thread and uncertain
   assert.equal(diskState(h.data).members.find(m => m.id === member.id).worker_online, false);
   await h.ensure(h.data);
   const result = await h.service.entry.wake(h.room.id, member.id);
-  assert.ok(['connecting', 'already_running', 'ready'].includes(result.status));
+  assert.equal(result.status, 'available_idle');
   await until(() => h.service.chat.store.member(member.id).status === 'ready' && !h.service.chat.active.size, 'resumed native fixture');
   assert.equal(h.service.chat.store.binding(h.room.id, member.id).thread_id, nativeThread);
   assert.equal(h.service.chat.store.message(uncertain.id).status, 'uncertain');
   assert.equal(h.clients.some(client => client.calls.some(call => !call.handshake)), false);
-  assert.equal(h.service.runtime.memberState(member.id).worker_online, true);
+  assert.equal(h.service.runtime.memberState(member.id).worker_online, false, 'availability does not claim an idle worker was started');
 });
 
 test('recovering API checks its daemon for each call and only retries a definitely refused POST once', async () => {

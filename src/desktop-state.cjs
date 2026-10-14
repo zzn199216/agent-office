@@ -5,8 +5,11 @@ const {openDisk}=require('./entry.cjs');
 const {readTeamSnapshot}=require('./desktop-team.cjs');
 const ROOM_ID=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 function olderVersion(actual,expected=VERSION){
-  if(!/^\d+\.\d+\.\d+$/.test(actual||'')||!/^\d+\.\d+\.\d+$/.test(expected))return false;
-  const a=actual.split('.').map(Number),b=expected.split('.').map(Number);for(let i=0;i<3;i++){if(a[i]!==b[i])return a[i]<b[i];}return false;
+  const parse=value=>/^(\d+)\.(\d+)\.(\d+)(?:-([A-Za-z0-9.-]+))?(?:\+[A-Za-z0-9.-]+)?$/.exec(value||'');
+  const a=parse(actual),b=parse(expected);if(!a||!b)return false;
+  for(let i=1;i<=3;i++){if(!Number.isSafeInteger(Number(a[i]))||!Number.isSafeInteger(Number(b[i])))return false;if(Number(a[i])!==Number(b[i]))return Number(a[i])<Number(b[i]);}
+  if(!a[4]||!b[4])return !!a[4]&&!b[4];
+  const x=a[4].split('.'),y=b[4].split('.');for(let i=0;i<Math.max(x.length,y.length);i++){if(x[i]===y[i])continue;if(x[i]===undefined||y[i]===undefined)return x[i]===undefined;const xn=/^\d+$/.test(x[i]),yn=/^\d+$/.test(y[i]);if(xn&&yn)return BigInt(x[i])<BigInt(y[i]);if(xn!==yn)return xn;return x[i]<y[i];}return false;
 }
 function roomInput(value){if(value!=null&&!ROOM_ID.test(value))throw new RoomError('聊天室标识无效。',400,'desktop_room_invalid');return value||null;}
 function activity(state){

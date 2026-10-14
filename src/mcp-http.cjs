@@ -54,8 +54,12 @@ function createMcpHttp(service, options = {}) {
     service.resume.inspect(card);
     return card;
   }
-  function isProxy(card) { return !!proxyFor(disk, card); }
-  function contextFor(card) { return { env: { AGENTROOM_MEMBER_ID: card.member_id, AGENTROOM_ROOM_ID: card.room_id, AGENTROOM_SETUP_MODE: '0', AGENTROOM_CALLER: service.chat.store.member(card.member_id).name }, proxy: isProxy(card), allowJoin: false, secretary: service.chat.store.joined(card.room_id,card.member_id) && service.secretary.get(card.room_id).member_id === card.member_id, connection: memberConnection(disk, card) }; }
+  function contextFor(card) {
+    const fixed=proxyFor(disk,card),proxy=!!fixed,active=service.chat.active.get(card.member_id),native=active?.desktop===true&&!proxy,roomId=fixed?.room_id||(native?active.roomId:card.room_id);
+    if(native&&!service.chat.store.joined(roomId,card.member_id))throw new RoomError('原生委托已离开原房间，未切换到其他房间。',409,'desktop_room_deleted');
+    const connection=memberConnection(disk,card);if(native)connection.default_room_id=roomId;
+    return { env: { AGENTROOM_MEMBER_ID: card.member_id, AGENTROOM_ROOM_ID: roomId, AGENTROOM_SETUP_MODE: '0', AGENTROOM_CALLER: service.chat.store.member(card.member_id).name }, proxy, allowJoin: false, secretary: service.chat.store.joined(roomId,card.member_id) && service.secretary.get(roomId).member_id === card.member_id, connection };
+  }
   function allowedTools(card) { return memberTools(tools, contextFor(card)); }
   function assertRoute(card, route, input) {
     service.resume.inspect(card);
@@ -134,11 +138,12 @@ function createMcpHttp(service, options = {}) {
       else if (request.method === 'tools/call') {
         try {
           const name = request.params?.name, args = request.params?.arguments ?? {};
-          if (!allowedTools(card).some(tool => tool.name === name)) throw new RoomError('这个成员入口不提供该工具。', 403, 'mcp_tool_forbidden');
+          const context = contextFor(card);
+          if (!memberTools(tools, context).some(tool => tool.name === name)) throw new RoomError('这个成员入口不提供该工具。', 403, 'mcp_tool_forbidden');
           // A room other than the card's home room is allowed when the user has seated
           // this member there; the route policy checks that seat on every call.
-          const value = await toolCall(name, args, boundApi(card), contextFor(card));
-          result = await toolResult(name,value,boundApi(card),{...contextFor(card),textResultFormat:'structured'});
+          const value = await toolCall(name, args, boundApi(card), context);
+          result = await toolResult(name,value,boundApi(card),{...context,textResultFormat:'structured'});
         } catch (error) {
           const message = readableError(error).replaceAll(card.secret, '[credential]');
           result = { isError: true, content: [{ type: 'text', text: message }] };

@@ -363,7 +363,9 @@ test('each client gets the one connection method it can actually use', async t =
   const { service, room } = setup(t);
   service._localUrl = 'http://127.0.0.1:47831';
   const make = (name, adapter, provider) => { const member = service.chat.addMember({ name, adapter }); if (provider) service.chat.store.updateMember(member.id, { config: { ...service.chat.store.member(member.id).config, launch_provider: provider } }); service.chat.join(room.id, member.id); return member; };
-  const qwen = service.chat.setup(make('Qwen 桌面客户端', 'mailbox', 'qwen-desktop').id, room.id).client;
+  const qwenGuide = service.chat.setup(make('Qwen 桌面客户端', 'mailbox', 'qwen-desktop').id, room.id).client;
+  assert.equal(qwenGuide.kind,'native_desktop');assert.equal(qwenGuide.native_state.can_wake,false);assert.equal(qwenGuide.connection_evidence.model_reply_verified,false);
+  const qwen=qwenGuide.fallback;
   assert.equal(qwen.kind, 'http_json');
   const config = JSON.parse(qwen.copy).mcpServers.AgentOffice;
   assert.equal(config.type, 'streamable-http'); assert.match(config.url, /^http:\/\/127\.0\.0\.1:47831\/mcp\//);
@@ -375,14 +377,14 @@ test('each client gets the one connection method it can actually use', async t =
   assert.equal(desktop.kind, 'stdio_json');
   const stdio = JSON.parse(desktop.copy).mcpServers.agentoffice;
   assert.ok(stdio.args.includes('--entry')); assert.equal(stdio.env, undefined, 'no member or room id is hardcoded');
-  const doubao = service.chat.setup(make('豆包', 'mailbox', 'doubao').id, room.id).client;
+  const doubaoGuide = service.chat.setup(make('豆包', 'mailbox', 'doubao').id, room.id).client;assert.equal(doubaoGuide.kind,'native_desktop');const doubao=doubaoGuide.fallback;
   assert.equal(doubao.kind, 'http_fields'); assert.match(doubao.copy, /^http:\/\/127\.0\.0\.1:47831\/mcp\//);
   assert.equal(service.chat.setup(make('Codex', 'codex').id, room.id).client.kind, 'background');
-  const grok = service.chat.setup(make('Grok Bot', 'grok-bridge').id, room.id).client;
+  const grokGuide = service.chat.setup(make('Grok Bot', 'grok-bridge').id, room.id).client;assert.equal(grokGuide.kind,'native_desktop');const grok=grokGuide.fallback;
   assert.equal(grok.kind, 'command'); assert.match(grok.copy, /enter/);
   // The same client keeps one configuration across rooms.
   const member = service.chat.store.members().find(value => value.name === 'Qwen 桌面客户端');
   const other = service.chat.addRoom({ title: '另一间', project_id: room.project_id }); service.chat.join(other.id, member.id);
   service.resume.accept(JSON.parse(require('node:fs').readFileSync(service.entry.issue(member.id, room.id).file, 'utf8')));
-  assert.equal(service.chat.setup(member.id, other.id).client.copy, qwen.copy, 'a new room does not need a new import');
+  assert.equal(service.chat.setup(member.id, other.id).client.fallback.copy, qwen.copy, 'a new room does not need a new import');
 });

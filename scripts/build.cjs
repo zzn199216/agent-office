@@ -40,6 +40,7 @@ async function main(){
   fs.copyFileSync(path.join(root,'docs','ZERO_TOUCH_RESEARCH.md'),path.join(release,'ZERO_TOUCH_RESEARCH.md'));
   fs.copyFileSync(path.join(root,'docs','AGENT_INSTALLATION.md'),path.join(release,'AGENT_INSTALLATION.md'));
   fs.copyFileSync(path.join(root,'docs','QWEN_DESKTOP_RESEARCH.md'),path.join(release,'QWEN_DESKTOP_RESEARCH.md'));
+  fs.copyFileSync(path.join(root,'docs','NATIVE_DESKTOP.md'),path.join(release,'NATIVE_DESKTOP.md'));
   fs.copyFileSync(path.join(root,'docs','DOUBAO_DESKTOP_RESEARCH.md'),path.join(release,'DOUBAO_DESKTOP_RESEARCH.md'));
   fs.copyFileSync(path.join(root,'docs','OFFICE_APPEARANCE.md'),path.join(release,'OFFICE_APPEARANCE.md'));
   fs.copyFileSync(path.join(root,'docs','OFFICE_RESEARCH.md'),path.join(release,'OFFICE_RESEARCH.md'));
@@ -54,13 +55,13 @@ async function main(){
 
 保留整个安装包，双击 AgentOffice.exe 打开独立桌面窗口。文字聊天和办公室画面可切换；角色、头像、颜色可在右侧外观页替换。成员、资料与连接详情在右侧抽屉。窗口内可启停本机服务，关闭窗口保留服务，停止服务仍可查看历史。无需 Node/Python、管理员权限或自己的服务器；模型使用各工具原有服务和计费方式。桌面窗口需要微软 WebView2 Runtime，缺失时会显示官方安装入口。
 
-空办公室从 AI 秘书教程开始：先接入并选择一位成员，交代目标，在协作面板填写各窗口信息卡，由秘书按能力派工、验收交付并主持会议。会议保存纪要、关联任务和共同简报，参会窗口确认已读；例会按变化触发且可关闭。新增成员仍由用户点选。选择秘书不派任务，点击开始才实际发送；信箱成员仍需本人窗口领取。桌面窗口记住尺寸，办公室背景自动铺成矩形，工位保持自然比例，随着窗口和成员数调整网格。多出的工位向右、向下延伸，滚动查看，无需手动缩放。详见 SECRETARY_GUIDE.md 和 TEAM_COLLABORATION.md。
+空办公室从 AI 秘书教程开始：先接入并选择一位成员，交代目标，在协作面板填写各窗口信息卡，由秘书按能力派工、验收交付并主持会议。会议保存纪要、关联任务和共同简报，参会窗口确认已读；例会按变化触发且可关闭。新增成员仍由用户点选。选择秘书不派任务，点击开始才实际发送；已接通的原生对话自动处理，手动信箱成员需本人窗口领取。当前 Qwen 原生桌面对话已通过真实验收，豆包和 Grok 原生自动收发仍待验收，详见 NATIVE_DESKTOP.md。桌面窗口记住尺寸，办公室背景自动铺成矩形，工位保持自然比例，随着窗口和成员数调整网格。多出的工位向右、向下延伸，滚动查看，无需手动缩放。详见 SECRETARY_GUIDE.md 和 TEAM_COLLABORATION.md。
 
 聊天室列表旁的 ⋯ 打开房间管理，可归档、恢复或删除。归档收起列表并保留历史与已有协作；删除会先确认并列出本房间工作。删除后成员连接转到仍在的房间，没有房间时暂停，重新入座后恢复，旧配置无需重新导入。其他房间、共享成员和原生 Grok 群保留。Grok Bot 在添加成员页显示为本人窗口桥接，复用已有桥接成员的长期命令入口，真实进入后才显示接通；不安装 Grok CLI 来替代桌面窗口。
 
 打开“接入一位 AI”时扫描本机，默认展示运行中的成员；未运行的已安装/可安装候选可展开查看。选择项目后，点目标旁的“一键接入”。只准备这个成员；首次账号配置、桌面启用或导入需要本人完成时，页面显示明确下一步。未安装的受支持后台入口可“安装并接入”，不修改系统 PATH 或全局 npm。
 
-Codex、Claude Code、Qwen Code、Gemini CLI 有专用后台协作入口，使用各自正式账号或 API。首次安装和实际模型握手分别确认。Claude 桌面、Qwen 消费端、豆包、OpenCode、Cherry Studio、Cline、Roo Code 支持本人处理的 MCP 信箱。豆包使用原生个人连接器表单，其他新成员使用正式 MCP JSON；保存配置不等于启用或后台唤醒。
+Codex、Claude Code、Qwen Code、Gemini CLI 有专用后台协作入口，使用各自正式账号或 API。首次安装和实际模型握手分别确认。Qwen 桌面原生对话在已核对版本可由 AO 自动派发并回写实际回答，沿用同一人物与对话；首次本机连接方式和豆包/Grok 待验收范围见 NATIVE_DESKTOP.md。Claude 桌面、其他尚未接通原生执行器的客户端保留本人处理的 MCP 信箱。豆包使用原生个人连接器表单，其他新成员使用正式 MCP JSON；保存配置不等于启用或后台唤醒。
 
 离线或心跳过期的成员保留空工位，机器人离场，消息与名称仍可查看。右侧连接页可只读诊断本机服务、当前房间、成员长期入口和通知配置。Grok 的 Windows 宿主连接、目标群引用和原生加群工具仍需在 Grok 内核对，本机服务在线不代表它们已接通。
 
@@ -74,10 +75,11 @@ Grok 可先连接一个 Bot，直接在当前对话桥接外部成员；群聊�
 `);
   const licenseCandidates=[path.join(path.dirname(process.execPath),'LICENSE'),path.join(path.dirname(process.execPath),'LICENSE.txt')];const license=licenseCandidates.find(p=>fs.existsSync(p));if(!license)throw new Error('Node.js license file is required for the runtime package.');fs.copyFileSync(license,path.join(release,'NODE_LICENSE.txt'));
   const zip=path.join(root,'release',`AgentOffice-${expectedVersion}-windows-x64.zip`);
+  if(process.argv.includes('--local-only')){console.log(JSON.stringify({executable:path.join(release,'AgentOffice.exe'),release,version,bytes:fs.statSync(executable).size},null,2));return;}
   // ZIP uses a fresh stage and this explicit public-file manifest. Runtime DBs,
   // entry cards, provider configuration, .local and validation outputs never
   // enter it, even if an older release directory contains additional files.
-  const names=['AgentOffice.exe','README.md','USER_GUIDE.md','GROK_GROUP_BRIDGE.md','BRIDGE_SETUP.md','DURABLE_ROOM.md','ZERO_TOUCH_RESEARCH.md','QWEN_DESKTOP_RESEARCH.md','DOUBAO_DESKTOP_RESEARCH.md','GEMINI_CLI_RESEARCH.md','DOUBAO_CONNECTOR_GUIDE.md','ADDITIONAL_AGENTS_RESEARCH.md','GROK_CONNECTION_TROUBLESHOOTING.md','OFFICE_APPEARANCE.md','OFFICE_RESEARCH.md','OFFICE_MASCOT_SOURCES.md','SECRETARY_GUIDE.md','TEAM_COLLABORATION.md','SKILL.md','GROK_SKILL.md','LICENSE','NODE_LICENSE.txt'],stage=fs.mkdtempSync(path.join(dist,'zip-stage-'));
+  const names=['AgentOffice.exe','README.md','USER_GUIDE.md','GROK_GROUP_BRIDGE.md','BRIDGE_SETUP.md','DURABLE_ROOM.md','ZERO_TOUCH_RESEARCH.md','QWEN_DESKTOP_RESEARCH.md','DOUBAO_DESKTOP_RESEARCH.md','NATIVE_DESKTOP.md','GEMINI_CLI_RESEARCH.md','DOUBAO_CONNECTOR_GUIDE.md','ADDITIONAL_AGENTS_RESEARCH.md','GROK_CONNECTION_TROUBLESHOOTING.md','OFFICE_APPEARANCE.md','OFFICE_RESEARCH.md','OFFICE_MASCOT_SOURCES.md','SECRETARY_GUIDE.md','TEAM_COLLABORATION.md','SKILL.md','GROK_SKILL.md','LICENSE','NODE_LICENSE.txt'],stage=fs.mkdtempSync(path.join(dist,'zip-stage-'));
   try{
     for(const name of names)fs.copyFileSync(path.join(release,name),path.join(stage,name));
     copyReferences(referenceSource,path.join(stage,'references'));

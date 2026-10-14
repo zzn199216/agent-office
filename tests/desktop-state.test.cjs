@@ -10,6 +10,7 @@ const {offlineState,desktopState,desktopStart,desktopStop,activity}=require('../
 const {apiCall,readControl}=require('../src/main.cjs');
 const {fixture,FakeCodex,FakeVault}=require('./helpers.cjs');
 const {id,sleep}=require('../src/util.cjs');
+test('preview upgrades preserve stable precedence and numeric preview ordering',()=>{const {olderVersion}=require('../src/desktop-state.cjs');assert.equal(olderVersion('0.14.16','0.15.0-preview.1'),true);assert.equal(olderVersion('0.15.0','0.15.0-preview.1'),false);assert.equal(olderVersion('0.15.0-preview.9','0.15.0-preview.10'),true);assert.equal(olderVersion('0.15.0-preview.1','0.15.0'),true);assert.equal(olderVersion('bad','0.15.0-preview.1'),false);});
 
 test('starting a newer desktop replaces only an idle older service and preserves room identity',async t=>{
   const files=fixture(),v=await seed(files);t.after(()=>cleanup(files));const {VERSION}=require('../src/util.cjs');let running=true,version='0.14.3',stops=0,starts=0;

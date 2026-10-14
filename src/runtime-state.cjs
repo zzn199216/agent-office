@@ -1,6 +1,7 @@
 'use strict';
 const crypto = require('node:crypto');
 const { ChatStore } = require('./chat-store.cjs');
+const { ConnectionEvidence } = require('./connection-evidence.cjs');
 const { RoomError, cleanText, livePid } = require('./util.cjs');
 
 const DEFAULT_LEASE_MS = 60000;
@@ -19,6 +20,7 @@ class RuntimeState {
     this.db = this.chat.db;
     this.clock = options.clock || (() => Date.now());
     this.isPidAlive = options.isPidAlive || livePid;
+    this.wakeMember = typeof options.wakeMember==='function'?options.wakeMember:()=>false;
     if (typeof this.isPidAlive !== 'function') throw new RoomError('后台进程检测器无效。');
     this.leaseMs = this.lease(options.ttlMs === undefined ? DEFAULT_LEASE_MS : options.ttlMs);
     if (!this.readOnly) this.db.exec(`
@@ -42,6 +44,7 @@ class RuntimeState {
     if (!this.readOnly) this.db.prepare('INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)').run('instance_fingerprint', JSON.stringify(crypto.randomUUID()));
     try { this.instanceId = this.store.setting('instance_fingerprint'); } catch { throw new RoomError('本机聊天室实例尚未初始化，不能使用其他空实例替代。', 409, 'instance_not_initialized'); }
     if (typeof this.instanceId !== 'string' || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(this.instanceId)) throw new RoomError('本机聊天室实例尚未初始化或标识无效。', 409, 'instance_not_initialized');
+    this.connectionEvidence = new ConnectionEvidence(this.chat, { readOnly: this.readOnly, clock: () => this.milliseconds(), isPidAlive: this.isPidAlive, ttlMs: this.leaseMs, ownerId: options.ownerId });
     if (!this.readOnly && options.wakeAdapters !== undefined) {
       if (!Array.isArray(options.wakeAdapters)) throw new RoomError('唤醒适配器列表无效。');
       for (const adapter of options.wakeAdapters) this.configureWakeAdapter(adapter, true);
@@ -69,6 +72,8 @@ class RuntimeState {
     this.db.prepare('INSERT INTO runtime_adapter_capabilities VALUES(?,?,?) ON CONFLICT(adapter) DO UPDATE SET can_wake=excluded.can_wake,updated=excluded.updated').run(adapter, enabled ? 1 : 0, this.date());
     return { adapter, can_wake: enabled };
   }
+  recordConnectionEvidence(memberId, input) { this.requireWritable(); return this.connectionEvidence.record(memberId, input); }
+  connectionState(memberId) { return this.connectionEvidence.state(memberId); }
 
   heartbeat(memberId, input = {}) {
     this.requireWritable();
@@ -145,8 +150,9 @@ class RuntimeState {
       worker_state: liveWorkers.length ? 'online' : workerViews.length ? (workerViews.every(row => row.state === 'stopped') ? 'stopped' : 'stale') : 'unknown',
       worker_last_seen: workers[0]?.last_seen || null,
       worker_evidence: workers.some(row => row.pid != null) ? 'heartbeat_lease+pid' : 'heartbeat_lease',
-      can_wake: !!capability?.can_wake,
-      wake_reason: capability?.can_wake ? 'configured_local_adapter' : 'no_local_wake_adapter'
+      can_wake: !!capability?.can_wake || this.wakeMember(member),
+      wake_reason: this.wakeMember(member) ? 'verified_native_desktop_adapter' : capability?.can_wake ? 'configured_local_adapter' : 'no_local_wake_adapter',
+      connection_evidence: this.connectionState(memberId)
     };
   }
 

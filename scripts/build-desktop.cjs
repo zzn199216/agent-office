@@ -36,11 +36,13 @@ async function sdkPackage(){
   return file;
 }
 async function buildDesktop({outputDir=path.join(ROOT,'dist','desktop'),version=require('../package.json').version}={}){
+  const match=/^(\d+)\.(\d+)\.(\d+)(?:[-+][A-Za-z0-9.-]+)?$/.exec(version);if(!match||match.slice(1).some(value=>Number(value)>65535))throw new Error('Desktop package version is invalid.');
+  const assemblyVersion=match.slice(1).join('.')+'.0';
   if(process.platform!=='win32'||process.arch!=='x64')throw new Error('Desktop build requires Windows x64.');
   outputDir=path.resolve(outputDir);fs.mkdirSync(outputDir,{recursive:true});const sdk=await sdkPackage();
   const entries=[['lib/net462/Microsoft.Web.WebView2.Core.dll','Microsoft.Web.WebView2.Core.dll'],['lib/net462/Microsoft.Web.WebView2.WinForms.dll','Microsoft.Web.WebView2.WinForms.dll'],['runtimes/win-x64/native/WebView2Loader.dll','WebView2Loader.dll'],['LICENSE.txt','WEBVIEW2_LICENSE.txt']];
   run('powershell.exe',['-NoProfile','-NonInteractive','-Command',"$ErrorActionPreference='Stop';[Console]::InputEncoding=[Text.Encoding]::UTF8;$r=[Console]::In.ReadToEnd()|ConvertFrom-Json;Add-Type -AssemblyName System.IO.Compression.FileSystem;$z=[IO.Compression.ZipFile]::OpenRead($r.package);try{foreach($item in $r.entries){$e=$z.GetEntry($item[0]);if($null -eq $e){throw 'SDK entry missing'};$target=[IO.Path]::GetFullPath((Join-Path $r.destination $item[1]));if([IO.Path]::GetDirectoryName($target) -ne [IO.Path]::GetFullPath($r.destination)){throw 'SDK extraction target outside build directory'};[IO.Compression.ZipFileExtensions]::ExtractToFile($e,$target,$true)}}finally{$z.Dispose()}"],{input:JSON.stringify({package:sdk,destination:outputDir,entries})});
-  const assembly=path.join(outputDir,'AssemblyInfo.cs');fs.writeFileSync(assembly,`using System.Reflection;\n[assembly:AssemblyTitle("Agent Office")]\n[assembly:AssemblyDescription("Agent Office Local — Agent 办公室")]\n[assembly:AssemblyCompany("Agent Office Local")]\n[assembly:AssemblyProduct("Agent Office")]\n[assembly:AssemblyVersion("${version}.0")]\n[assembly:AssemblyFileVersion("${version}.0")]\n`,{encoding:'utf8'});
+  const assembly=path.join(outputDir,'AssemblyInfo.cs');fs.writeFileSync(assembly,`using System.Reflection;\n[assembly:AssemblyTitle("Agent Office")]\n[assembly:AssemblyDescription("Agent Office Local — Agent 办公室")]\n[assembly:AssemblyCompany("Agent Office Local")]\n[assembly:AssemblyProduct("Agent Office")]\n[assembly:AssemblyVersion("${assemblyVersion}")]\n[assembly:AssemblyFileVersion("${assemblyVersion}")]\n`,{encoding:'utf8'});
   const compiler=path.join(process.env.WINDIR||'C:\\Windows','Microsoft.NET','Framework64','v4.0.30319','csc.exe');
   if(!fs.existsSync(compiler))throw new Error('Windows .NET Framework C# compiler is unavailable.');
   const executable=path.join(outputDir,'AgentRoom.Desktop.exe');
