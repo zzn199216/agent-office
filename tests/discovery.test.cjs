@@ -183,3 +183,13 @@ test('Qwen runtime validates a real non-default data directory through discovery
   assert.equal(qwenVendorScript('C:\\AgentRoomData\\runtimes\\qwen-code\\0.25.1-52791a63-0983-4879-a8c2-30fd6376984e\\payload\\qwen-code\\lib\\cli-entry.js'),true);
   for(const invalid of [script.replace('0.25.1-52791a63-0983-4879-a8c2-30fd6376984e','0.25.1-unverified'),script.replace('cli-entry.js','arbitrary.js'),path.join(data,'runtimes','qwen-code','0.25.1-52791a63-0983-4879-a8c2-30fd6376984e','payload','qwen-code','..','lib','cli-entry.js'),'relative\\runtimes\\qwen-code\\0.25.1-52791a63-0983-4879-a8c2-30fd6376984e\\payload\\qwen-code\\lib\\cli-entry.js'])assert.equal(qwenVendorScript(invalid),false,invalid);
 });
+
+test('a desktop app installed on another drive is recognised from its data, updater or Start-menu shortcut', () => {
+  const { DiscoveryCatalog } = require('../src/discovery.cjs');
+  const present = new Set(['C:\\Users\\u\\AppData\\Roaming\\Qwen\\Local Storage']);
+  const scan = new DiscoveryCatalog({ platform: 'win32', env: { APPDATA: 'C:\\Users\\u\\AppData\\Roaming', LOCALAPPDATA: 'C:\\Users\\u\\AppData\\Local', USERPROFILE: 'C:\\Users\\u', PATH: '' }, fileExists: file => present.has(file), listFiles: () => [] }).scan({ processes: [] });
+  const qwen = scan.candidates.find(candidate => candidate.provider === 'qwen-desktop');
+  assert.equal(qwen.installed, true); assert.equal(qwen.running, false);
+  const none = new DiscoveryCatalog({ platform: 'win32', env: { APPDATA: 'C:\\A', LOCALAPPDATA: 'C:\\L', USERPROFILE: 'C:\\U', PATH: '' }, fileExists: () => false, listFiles: () => [] }).scan({ processes: [] });
+  assert.equal(none.candidates.find(candidate => candidate.provider === 'qwen-desktop').installed, false);
+});

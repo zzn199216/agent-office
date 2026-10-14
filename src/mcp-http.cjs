@@ -59,7 +59,8 @@ function createMcpHttp(service, options = {}) {
       assertRoute(card, route, input);
       // Initialization and tool discovery are not a native identity handshake.
       // An authenticated, permitted tool invocation establishes communication.
-      service.entry.accept(card);
+      // A seat lookup is an authorization read, not evidence of communication.
+      if (!/^\/api\/chat\/members\/[a-f0-9-]{36}\/rooms$/i.test(route)) service.entry.accept(card);
       return call(route, input, card);
     };
   }
@@ -122,7 +123,8 @@ function createMcpHttp(service, options = {}) {
         try {
           const name = request.params?.name, args = request.params?.arguments ?? {};
           if (!allowedTools(card).some(tool => tool.name === name)) throw new RoomError('这个成员入口不提供该工具。', 403, 'mcp_tool_forbidden');
-          if (args?.room_id && args.room_id !== card.room_id) throw new RoomError('这个入口只授权给原聊天室。', 403, 'resume_scope_mismatch');
+          // A room other than the card's home room is allowed when the user has seated
+          // this member there; the route policy checks that seat on every call.
           const value = await toolCall(name, args, boundApi(card), contextFor(card));
           result = await toolResult(name,value,boundApi(card),contextFor(card));
         } catch (error) {

@@ -436,3 +436,36 @@ test('selected Qwen Desktop exports a private local MCP import file without modi
   v.service.store.db.prepare('UPDATE launch_proxies SET installation=? WHERE id=?').run(JSON.stringify({configuration_file:path.join(v.root,'outside.json')}),proxy.id);
   assert.throws(()=>v.service.launch.clientConfig({session_id:preparedState.id,provider:'qwen-desktop'}),error=>error.code==='client_config_scope_mismatch');
 });
+
+test('a verified colleague is carried into a new room without a second member, config or handshake', async t => {
+  const v = setup(t);
+  await prepared(v, { providers: ['codex'] });
+  const first = v.service.chat.store.participants(v.room.id).find(member => member.adapter === 'codex');
+  assert.ok(first.verified_at);
+  const handshakes = () => [...v.clients.values()].flatMap(client => client.calls).filter(call => call.handshake).length, before = handshakes();
+  const second = v.service.chat.addRoom({ title: '第二个房间', project_id: v.project.id });
+  const start = v.service.launch.prepare({ room_id: second.id, providers: ['codex'] });
+  await Promise.all([...v.service.launch.jobs.values()]);
+  const seated = v.service.chat.store.participants(second.id).filter(member => member.adapter === 'codex');
+  assert.deepEqual(seated.map(member => member.id), [first.id], 'the same identity sits in both rooms');
+  assert.equal(v.service.chat.store.members().filter(member => member.adapter === 'codex').length, 1);
+  assert.equal(handshakes(), before, 'no second model or MCP handshake');
+  assert.ok(v.service.launch.state({ session_id: start.id }));
+});
+
+test('failed attempts can be cleaned out of every room without deleting history', async t => {
+  const v = setup(t);
+  const failed = v.service.chat.addMember({ name: '接入失败的 Claude', adapter: 'claude-code' });
+  v.service.chat.join(v.room.id, failed.id);
+  v.service.chat.store.updateMember(failed.id, { status: 'connection_failed', error: '未登录' });
+  v.service.chat.store.db.prepare('UPDATE chat_members SET created=? WHERE id=?').run(new Date(Date.now() - 3600e3).toISOString(), failed.id);
+  const kept = await nativeMember(v, '正常的 Codex');
+  const message = v.service.chat.store.post({ room_id: v.room.id, sender_id: 'user', to_member_id: failed.id, text: '历史消息', idempotency_key: 'history' });
+  assert.deepEqual(v.service.chat.staleMembers().map(member => member.id), [failed.id]);
+  const result = v.service.chat.cleanupStale();
+  assert.deepEqual(result.removed.map(member => member.id), [failed.id]);
+  assert.equal(v.service.chat.store.joined(v.room.id, failed.id), false);
+  assert.equal(v.service.chat.store.joined(v.room.id, kept.id), true);
+  assert.equal(v.service.chat.store.message(message.id).text, '历史消息');
+  assert.deepEqual(v.service.chat.staleMembers(), []);
+});

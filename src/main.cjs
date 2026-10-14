@@ -58,7 +58,13 @@ async function serve(dir,options={}){
     const token=crypto.randomBytes(32).toString('hex');
     server=createServer(service,{token,port:Number(options.port??47831),onShutdown:()=>stop().then(()=>process.exit(0))});
     let port;
-    try{port=await server.listen();}catch(e){if(e.code!=='EADDRINUSE')throw e;await server.close();server=createServer(service,{token,port:0,onShutdown:()=>stop().then(()=>process.exit(0))});port=await server.listen();}
+    // Desktop chat clients store this address in their MCP settings, so stay on
+    // a small fixed range before falling back to a random port.
+    const preferred=Number(options.port??47831);
+    for(let offset=0;!port;offset++){
+      try{port=await server.listen();}catch(e){if(e.code!=='EADDRINUSE')throw e;await server.close();
+        const next=options.port===undefined&&offset<8?preferred+offset+1:0;server=createServer(service,{token,port:next,onShutdown:()=>stop().then(()=>process.exit(0))});if(!next){port=await server.listen();}}
+    }
     atomicWrite(path.join(dir,'control.json'),JSON.stringify({pid:process.pid,url:`http://127.0.0.1:${port}`,token,version:VERSION,instance_id:service.runtime.instanceId}));
     if(options.project)service.addProject({path:options.project,name:options.name});
     if(options['import-grok']){service.vault.import(path.resolve(options['import-grok']));service.changed();}

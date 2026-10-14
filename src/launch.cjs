@@ -70,6 +70,10 @@ class LaunchManager{
       // Mailboxes are identities, not interchangeable product processes.
       existing=participants.find(member=>member.adapter==='mailbox'&&member.config.launch_provider===candidate.provider);
       if(existing)return existing;
+      // One client is one colleague: seat the identity it already imported
+      // instead of minting a new member and config for every room.
+      const known=this.reusableMember(room,member=>member.adapter==='mailbox'&&member.config.launch_provider===candidate.provider);
+      if(known)return known;
       const member=chat.addMember({name:candidate.name,adapter:'mailbox'});chat.join(room.id,member.id);
       chat.store.updateMember(member.id,{status:'awaiting_handshake',config:{...chat.store.member(member.id).config,launch_provider:candidate.provider,connection_mode:'manual_mcp'}});
       return chat.store.member(member.id);
@@ -79,7 +83,17 @@ class LaunchManager{
     for(const row of prior){const m=participants.find(m=>m.id===row.target_member_id&&m.adapter===candidate.adapter);if(m){existing=m;break;}}
     existing||=participants.find(m=>m.adapter===candidate.adapter&&m.verified_at)||participants.find(m=>m.adapter===candidate.adapter);
     if(existing)return existing;
+    const known=this.reusableMember(room,member=>member.adapter===candidate.adapter&&!this.db.prepare('SELECT 1 FROM launch_proxies WHERE proxy_member_id=?').get(member.id));
+    if(known)return known;
     const member=chat.addMember({name:candidate.name,adapter:candidate.adapter,config:{executable:candidate.executable,executable_args:candidate.executable_args||[]}});chat.join(room.id,member.id);return chat.store.member(member.id);
+  }
+  // The most recently verified identity of this client that is not already
+  // seated here. Unverified or failed attempts are never carried forward.
+  reusableMember(room,match){
+    const chat=this.service.chat,seated=new Set(chat.store.participants(room.id).map(member=>member.id));
+    const known=chat.store.members().filter(member=>!seated.has(member.id)&&member.verified_at&&!member.error&&member.status!=='connection_failed'&&match(member)).sort((a,b)=>String(b.verified_at).localeCompare(String(a.verified_at)))[0];
+    if(!known)return null;
+    chat.join(room.id,known.id);return chat.store.member(known.id);
   }
   proxy(room,candidate,backend){
     const old=this.db.prepare('SELECT * FROM launch_proxies WHERE room_id=? AND provider=?').get(room.id,candidate.provider);if(old){this.service.chat.store.requireParticipant(room.id,old.proxy_member_id);this.service.chat.store.requireParticipant(room.id,old.backend_member_id);return old;}
@@ -104,16 +118,17 @@ class LaunchManager{
       const manual=manualProviders.has(candidate.provider)&&candidate.adapter==='mailbox'&&candidate.capabilities?.mcp_prepare===true;
       if(!managed&&!manual||managed&&candidate.installed!==true)continue;
       const old=this.db.prepare('SELECT * FROM launch_proxies WHERE room_id=? AND provider=?').get(room.id,candidate.provider);
-      let backend=old?this.service.chat.store.member(old.backend_member_id):this.backend(room,candidate);
+      const seatedBefore=new Set(this.service.chat.store.participants(room.id).map(member=>member.id));
+      let backend=old?this.service.chat.store.member(old.backend_member_id):this.backend(room,candidate),carried=!seatedBefore.has(backend.id)&&!!backend.verified_at;
       // An explicit installation repair may publish a new owned CLI path. Keep
       // the member and native session while replacing only its executable.
       if(managed&&(backend.config.executable!==candidate.executable||JSON.stringify(backend.config.executable_args||[])!==JSON.stringify(candidate.executable_args||[]))){
         if(this.service.chat.active.has(backend.id))throw new RoomError('该成员正在工作，等待本轮结束后重试接入。',409,'launch_busy');
         const client=this.service.chat.clients.get(backend.id);this.service.chat.clients.delete(backend.id);if(client)await client.close();
         if(this.service.chat.roomDeleted(room.id))return;
-        this.service.chat.store.updateMember(backend.id,{config:{...backend.config,executable:candidate.executable,executable_args:candidate.executable_args||[]}});backend=this.service.chat.store.member(backend.id);
+        this.service.chat.store.updateMember(backend.id,{config:{...backend.config,executable:candidate.executable,executable_args:candidate.executable_args||[]}});backend=this.service.chat.store.member(backend.id);carried=false;
       }
-      const proxy=this.proxy(room,candidate,backend),backendEntry=this.service.entry.issue(backend.id,room.id,{repair_invalid:true});
+      const proxy=this.proxy(room,candidate,backend),backendEntry=manual?this.service.entry.primary(backend.id,room.id):this.service.entry.issue(backend.id,room.id,{repair_invalid:true});
       this.service.entry.issue(proxy.proxy_member_id,room.id,{repair_invalid:true});
       if(candidate.provider==='qwen-desktop'){
         let result;
@@ -141,7 +156,8 @@ class LaunchManager{
         this.db.prepare('UPDATE launch_proxies SET installation=?,updated=? WHERE id=?').run(JSON.stringify(result),now(),proxy.id);
       }
       if(this.closing||this.service.chat.roomDeleted(session.room_id))return;
-      if(managed)await this.service.entry.wake(room.id,backend.id);
+      // A verified colleague carried into a new room needs no second handshake.
+      if(managed&&!(carried&&backend.status==='ready'&&!backend.error))await this.service.entry.wake(room.id,backend.id);
       if(this.service.chat.roomDeleted(room.id))return;
       this.role(proxy);this.service.changed();
     }

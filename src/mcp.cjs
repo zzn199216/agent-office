@@ -83,30 +83,36 @@ async function dispatchTool(name,args,api,context={}){
   const tool=tools.find(t=>t.name===name);if(!tool)throw new Error('未知工具。');validateArgs(tool,args);
   const environment=context.env||process.env;
   if(name==='agentroom_ask' && environment.AGENTROOM_CALLER==='codex' && args.recipient==='codex')throw new Error('当前调用方就是 Codex；请直接核实资料或向 Grok 提问，避免把自己的活动会话排到自己后面。');
-  const member=environment.AGENTROOM_MEMBER_ID,room=environment.AGENTROOM_ROOM_ID;
-  if(TEAM_TOOLS.includes(name)&&(!member||!room))throw new RoomError('团队工具需要绑定成员和房间的入口。',403,'mcp_tool_forbidden');
-  if(TEAM_SECRETARY_TOOLS.includes(name)&&context.secretary!==true)throw new RoomError('只有本房间当前秘书可以协调任务与会议。',403,'team_role_forbidden');
+  // The bound room is the member's home room. A member seated in several rooms
+  // names the room per call; the transport policy checks that seat each time.
+  const member=environment.AGENTROOM_MEMBER_ID,home=environment.AGENTROOM_ROOM_ID,room=(member&&typeof args.room_id==='string'&&args.room_id)||home;
+  if(TEAM_TOOLS.includes(name)&&(!member||!home))throw new RoomError('团队工具需要绑定成员和房间的入口。',403,'mcp_tool_forbidden');
+  if(TEAM_SECRETARY_TOOLS.includes(name)&&room===home&&context.secretary!==true)throw new RoomError('只有本房间当前秘书可以协调任务与会议。',403,'team_role_forbidden');
   if(['agentroom_group_prepare','agentroom_group_report','agentroom_group_state','agentroom_group_sync','agentroom_sync_report','agentroom_discover_agents','agentroom_connect','agentroom_connect_state','agentroom_connect_retry'].includes(name)&& (environment.AGENTROOM_SETUP_MODE!=='1'||member))throw new Error('请使用用户安装的一次接入 MCP（mcp --setup），普通成员不能管理整个群。');
-  if((member||room)&&(!member||!room||!memberTools(tools,{...context,env:environment,proxy:context.proxy??PROXY_TOOLS.has(name)}).some(tool=>tool.name===name)))throw new RoomError('当前成员入口不提供该工具。',403,'mcp_tool_forbidden');
-  if(['agentroom_delegate','agentroom_delegate_wait'].includes(name)&&(!member||!room))throw new Error('请使用该群成员的固定代理入口。');
+  if((member||home)&&(!member||!home||!memberTools(tools,{...context,env:environment,proxy:context.proxy??PROXY_TOOLS.has(name)}).some(tool=>tool.name===name)))throw new RoomError('当前成员入口不提供该工具。',403,'mcp_tool_forbidden');
+  if(['agentroom_delegate','agentroom_delegate_wait'].includes(name)&&(!member||!home||room!==home))throw new Error('请使用该群成员的固定代理入口。');
   if(member&&room&&['agentroom_chat_post','agentroom_bridge_request'].includes(name)){
     const proxy=await api(`/api/launch/proxy?member_id=${encodeURIComponent(member)}&room_id=${encodeURIComponent(room)}`),target=args.to_member_id||args.target_member_id;
     if(proxy?.backend_member_id&&target&&target!==proxy.backend_member_id)throw new RoomError('群内代理只能向自己的固定后端发起工作请求。',403,'proxy_target_mismatch');
   }
   if(['agentroom_room_state','agentroom_room_ensure','agentroom_member_wake','agentroom_heartbeat'].includes(name)){
-    if(!member||!room)throw new Error('请使用成员的长期恢复入口或已绑定成员和房间的 MCP 配置。');
-    if(args.room_id&&args.room_id!==room)throw new Error('这个入口只授权给原聊天室。');
+    if(!member||!home)throw new Error('请使用成员的长期恢复入口或已绑定成员和房间的 MCP 配置。');
+    if(args.room_id&&args.room_id!==home)throw new Error('恢复与唤醒只作用于这个入口的原聊天室；其他房间请用聊天工具并指定 room_id。');
   }
   if(name.startsWith('agentroom_bridge_')){
     if(!member)throw new Error('请使用已绑定成员身份的接入配置。');
-    if(args.room_id&&room&&args.room_id!==room)throw new Error('这个连接仅授权给邀请中的聊天室。');
     if(args.entry_id){const entry=await api(`/api/bridge/entries/${encodeURIComponent(args.entry_id)}?member_id=${encodeURIComponent(member)}${room?'&room_id='+encodeURIComponent(room):''}`);if(entry.member_id!==member||room&&entry.room_id!==room)throw new Error('这条桥接请求不属于当前成员或聊天室。');}
   }
-  if(name.startsWith('agentroom_chat_')&&args.room_id&&room&&args.room_id!==room)throw new Error('这个连接仅授权给邀请中的聊天室。');
+  // Defence in depth for every transport: a room other than home must be one of
+  // this member's seats, including rooms reached through a message id.
+  if(member&&home&&(name.startsWith('agentroom_chat_')||name.startsWith('agentroom_bridge_')||TEAM_TOOLS.includes(name))){
+    let target=room;
+    if(['agentroom_chat_wait','agentroom_chat_reply','agentroom_chat_ack'].includes(name)&&args.message_id){const message=await api(`/api/chat/messages/${encodeURIComponent(args.message_id)}`);target=message.room_id;}
+    if(target&&target!==home){const seats=await api(`/api/chat/members/${encodeURIComponent(member)}/rooms`);if(!seats.rooms?.some(value=>value.id===target))throw new RoomError('这个成员没有坐在该聊天室，不能在那里操作。',403,'resume_scope_mismatch');}
+  }
   if(['agentroom_chat_post','agentroom_chat_inbox','agentroom_chat_reply','agentroom_chat_ack'].includes(name)&&!member)throw new Error('请用成员接入说明里的 MCP 配置绑定身份。');
   if(name==='agentroom_chat_post'&&args.to_member_id===member)throw new Error('不能给自己的活动会话排队提问。');
-  if(room&&['agentroom_chat_wait','agentroom_chat_reply','agentroom_chat_ack'].includes(name)){const message=await api(`/api/chat/messages/${encodeURIComponent(args.message_id)}`);if(message.room_id!==room)throw new Error('这个连接仅授权给邀请中的聊天室。');}
-  if(name==='agentroom_join'){if(!member)throw new Error('请使用成员接入说明中已绑定身份的 MCP 配置。');if(room){const invitation=await api(`/api/chat/invitations/${encodeURIComponent(args.invite_id)}`);if(invitation.room_id!==room)throw new Error('这个邀请属于其他聊天室。');}}
+  if(name==='agentroom_join'&&!member)throw new Error('请使用成员接入说明中已绑定身份的 MCP 配置。');
   switch(name){
     case'agentroom_team_state':return api(`/api/team?room_id=${encodeURIComponent(room)}`);
     case'agentroom_member_card':return api('/api/team/cards',{...args,room_id:room,member_id:member,caller_member_id:member});
@@ -137,11 +143,11 @@ async function dispatchTool(name,args,api,context={}){
     case'agentroom_bridge_wait':return api(`/api/bridge/entries/${encodeURIComponent(args.entry_id)}/wait?seconds=${Math.min(25,args.seconds??25)}&member_id=${encodeURIComponent(member)}${room?'&room_id='+encodeURIComponent(room):''}`);
     case'agentroom_bridge_report':return api(`/api/bridge/entries/${encodeURIComponent(args.entry_id)}/report`,{...args,member_id:member,room_id:room});
     case'agentroom_join':return api('/api/chat/join',{...args,member_id:member});
-    case'agentroom_chat_rooms':{if(!room)return api('/api/chat/state');const value=await api(`/api/chat/rooms/${encodeURIComponent(room)}`);return {rooms:[value.room],members:value.participants};}
+    case'agentroom_chat_rooms':{if(!member)return api('/api/chat/state');const value=await api(`/api/chat/members/${encodeURIComponent(member)}/rooms`),current=await api(`/api/chat/rooms/${encodeURIComponent(room)}`);return {member_id:member,current_room_id:room,rooms:value.rooms,members:current.participants};}
     case'agentroom_chat_history':return api(`/api/chat/rooms/${encodeURIComponent(args.room_id)}`);
     case'agentroom_chat_post':return api('/api/chat/messages',{...args,sender_id:member});
     case'agentroom_chat_wait':return api(`/api/chat/messages/${encodeURIComponent(args.message_id)}/wait?seconds=${Math.min(25,args.seconds??25)}${member?'&member_id='+encodeURIComponent(member):''}`);
-    case'agentroom_chat_inbox':{const value=await api(`/api/chat/inbox?member_id=${encodeURIComponent(member)}${args.room_id||room?'&room_id='+encodeURIComponent(args.room_id||room):''}`);return Array.isArray(value?.items)?value.items:value;}
+    case'agentroom_chat_inbox':{const value=await api(`/api/chat/inbox?member_id=${encodeURIComponent(member)}${args.room_id?'&room_id='+encodeURIComponent(args.room_id):''}`);return Array.isArray(value?.items)?value.items:value;}
     case'agentroom_chat_image':return api(`/api/chat/images/${encodeURIComponent(args.image_id)}?room_id=${encodeURIComponent(room)}&member_id=${encodeURIComponent(member)}&format=base64`);
     case'agentroom_chat_reply':return api(`/api/chat/messages/${encodeURIComponent(args.message_id)}/reply`,{member_id:member,text:args.text,idempotency_key:args.idempotency_key});
     case'agentroom_chat_ack':return api(`/api/chat/messages/${encodeURIComponent(args.message_id)}/ack`,{member_id:member});

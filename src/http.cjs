@@ -86,6 +86,9 @@ function createServer(service,{token,port=47831,onShutdown}={}) {
         return json(res,service.bridge.entry(bridgeEntry[1],member,room,{forBridge:!!member}));
       }
       const invitation=pathname.match(/^\/api\/chat\/invitations\/([a-f0-9-]{36})$/i);if(req.method==='GET'&&invitation)return json(res,service.chat.store.invite(invitation[1]));
+      if(req.method==='GET'&&pathname==='/api/chat/members/stale')return json(res,{members:service.chat.staleMembers().map(m=>({id:m.id,name:m.name,status:m.status}))});
+      const memberRooms=req.method==='GET'&&pathname.match(/^\/api\/chat\/members\/([a-f0-9-]{36})\/rooms$/i);
+      if(memberRooms){const memberId=memberRooms[1];service.chat.store.member(memberId);return json(res,{member_id:memberId,rooms:service.chat.store.rooms().filter(room=>service.chat.store.joined(room.id,memberId))});}
       if(req.method==='GET' && pathname==='/api/chat/inbox'){const q=new URL(req.url,`http://${req.headers.host}`).searchParams,items=service.chat.inbox(q.get('member_id'),q.get('room_id')||undefined);return json(res,q.get('format')==='array'?items:{items});}
       const imageRoute=pathname.match(/^\/api\/chat\/images\/([a-f0-9-]{36})$/i);
       if(req.method==='GET'&&imageRoute){
@@ -174,6 +177,7 @@ function createServer(service,{token,port=47831,onShutdown}={}) {
       if(bridgeEntry?.[2]==='report')return json(res,service.bridge.report(bridgeEntry[1],input));
       if(bridgeEntry?.[2]==='confirm-return')return json(res,service.bridge.confirmReturn(bridgeEntry[1],input.verification_code));
       if(pathname==='/api/chat/rooms')return json(res,service.chat.addRoom(input),201);
+      if(pathname==='/api/chat/members/cleanup')return json(res,service.chat.cleanupStale());
       if(pathname==='/api/chat/members')return json(res,service.chat.addMember(input),201);
       if(pathname==='/api/chat/messages')return json(res,service.chat.post(input),202);
       if(pathname==='/api/chat/join')return json(res,service.chat.completeInvite(input.invite_id,input.nonce,input.member_id));

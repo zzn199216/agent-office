@@ -94,8 +94,15 @@ function windowsProcessInventory(){
   // Node arguments are used only to distinguish named vendor entrypoints from
   // ordinary node processes. Neither they nor environment variables are returned.
   const script="$other=Get-CimInstance Win32_Process -Filter \"Name <> 'Grok Bot.exe' AND Name <> 'GrokBot.exe' AND Name <> 'Grok.exe'\" | Where-Object {$_.Name -match '^(codex|claude|Cursor|Qwen|Qwen Studio|Doubao|豆包|opencode|Cherry Studio|CherryStudio|cherry-studio|node|crashpad_handler|chrome_crashpad_handler)\\.exe$'} | Select-Object Name,ProcessId,ParentProcessId,ExecutablePath,CommandLine; $grok=Get-CimInstance Win32_Process -Filter \"Name = 'Grok Bot.exe' OR Name = 'GrokBot.exe' OR Name = 'Grok.exe'\" -Property Name,ProcessId,ParentProcessId,ExecutablePath | Select-Object Name,ProcessId,ParentProcessId,ExecutablePath; @($other)+@($grok) | ConvertTo-Json -Compress";
-  const result=spawnSync('powershell.exe',['-NoProfile','-NonInteractive','-Command',script],{encoding:'utf8',windowsHide:true,timeout:5000,maxBuffer:4*1024*1024});
-  if(result.error||result.status!==0)return {processes:[],available:false,reason:'暂时无法读取本机进程清单。'};
+  const result=spawnSync('powershell.exe',['-NoProfile','-NonInteractive','-Command',script],{encoding:'utf8',windowsHide:true,timeout:15000,maxBuffer:4*1024*1024});
+  if(result.error||result.status!==0){
+    // A cold PowerShell CIM query can take longer than a busy desktop allows.
+    // Get-Process is faster; it lacks parents and command lines, so CLI vendor
+    // scripts may be missed, but desktop apps are still recognised.
+    const quick=spawnSync('powershell.exe',['-NoProfile','-NonInteractive','-Command',"Get-Process | Where-Object {$_.ProcessName -match '^(codex|claude|Cursor|Qwen|Qwen Studio|Doubao|豆包|opencode|Cherry Studio|CherryStudio|cherry-studio)$'} | Select-Object @{n='Name';e={$_.ProcessName+'.exe'}},@{n='ProcessId';e={$_.Id}},@{n='ExecutablePath';e={$_.Path}} | ConvertTo-Json -Compress"],{encoding:'utf8',windowsHide:true,timeout:15000,maxBuffer:4*1024*1024});
+    if(quick.error||quick.status!==0)return {processes:[],available:false,reason:'暂时无法读取本机进程清单。'};
+    try{const rows=JSON.parse(quick.stdout||'[]');return {processes:Array.isArray(rows)?rows:rows?[rows]:[],available:true,partial:true};}catch{return {processes:[],available:false,reason:'进程清单格式无法识别。'};}
+  }
   try{const rows=JSON.parse(result.stdout||'[]');return {processes:Array.isArray(rows)?rows:rows?[rows]:[],available:true};}catch{return {processes:[],available:false,reason:'进程清单格式无法识别。'};}
 }
 
@@ -186,6 +193,15 @@ class DiscoveryCatalog{
     }
     return false;
   }
+  // Desktop apps are often installed on another drive. Their per-user data and
+  // updater folders, or a Start-menu shortcut, still show they are installed.
+  installMarkers(definition){
+    if(this.platform!=='win32')return false;const e=this.env,p=this.path,app=e.APPDATA||'',local=e.LOCALAPPDATA||'',common=e.ProgramData||'';
+    const menus=[app&&p.join(app,'Microsoft','Windows','Start Menu','Programs'),common&&p.join(common,'Microsoft','Windows','Start Menu','Programs')].filter(Boolean);
+    const marks={'qwen-desktop':[app&&p.join(app,'Qwen','Local Storage'),local&&p.join(local,'qwen-updater'),...menus.map(m=>p.join(m,'Qwen.lnk')),...menus.map(m=>p.join(m,'Qwen','Qwen.lnk'))],
+      doubao:[app&&p.join(app,'Doubao'),local&&p.join(local,'Doubao'),...menus.map(m=>p.join(m,'豆包.lnk'))]}[definition.id]||[];
+    return marks.filter(Boolean).some(mark=>this.safeExists(mark));
+  }
   installedPaths(definition){
     const p=this.path,e=this.env,home=e.USERPROFILE||e.HOME||'',local=e.LOCALAPPDATA||'',app=e.APPDATA||'';let candidates=[];
     const names=(definition.executableNames||[]).filter(name=>this.platform==='win32'?!/^codex$|^claude$|^cursor$|^qwen$|^gemini$|^opencode$/i.test(name):!/\.exe$|\.cmd$/i.test(name));
@@ -218,7 +234,7 @@ class DiscoveryCatalog{
     else if(definition.id==='grok-bot'&&this.platform==='win32'){if(local)candidates.push(p.join(local,'Programs','Grok Bot','Grok Bot.exe'));if(e.ProgramFiles)candidates.push(p.join(e.ProgramFiles,'Grok Bot','Grok Bot.exe'));}
     else if(definition.id==='doubao'&&this.platform==='win32'){if(local)candidates.push(p.join(local,'Doubao','application','Doubao.exe'),p.join(local,'Programs','Doubao','Doubao.exe'));if(e.ProgramData)candidates.push(p.join(e.ProgramData,'Doubao','app','Doubao.exe'));}
     else if(definition.id==='cherry-studio'&&this.platform==='win32'){if(local)candidates.push(p.join(local,'Programs','Cherry Studio','Cherry Studio.exe'));if(e.ProgramFiles)candidates.push(p.join(e.ProgramFiles,'Cherry Studio','Cherry Studio.exe'));}
-    else if(definition.id==='qwen-desktop'&&this.platform==='win32'){if(local)candidates.push(p.join(local,'Programs','Qwen','Qwen.exe'));if(e.ProgramFiles)candidates.push(p.join(e.ProgramFiles,'Qwen','Qwen.exe'));}
+    else if(definition.id==='qwen-desktop'&&this.platform==='win32'){if(local)candidates.push(p.join(local,'Programs','Qwen','Qwen.exe'));if(e.ProgramFiles)candidates.push(p.join(e.ProgramFiles,'Qwen','Qwen.exe'));for(const drive of 'DEFGHW')candidates.push(`${drive}:\\Program Files\\Qwen\\Qwen.exe`);}
     let custom=definition.executables||[];if(typeof custom==='function')try{custom=custom({platform:this.platform,env:this.env,path:this.path});}catch{custom=[];}
     candidates.push(...(Array.isArray(custom)?custom:[]));return [...new Set(candidates.filter(v=>typeof v==='string'&&v&&!/[\r\n\u0000]/.test(v)))].filter(v=>this.safeExists(v)&&(definition.id!=='claude-code'||!claudeDesktop(v))&&(definition.id!=='qwen-code'||!qwenDesktop(v)));
   }
@@ -233,7 +249,7 @@ class DiscoveryCatalog{
         const parent=processById.get(process.parentPid);if(parent&&match.role==='desktop'&&pathEqual(parent.executable,process.executable,this.platform)&&parent.executable&&parent.name===process.name)continue;
         matches.push({pid:process.pid,parent_pid:process.parentPid,executable:process.executable||null,role:['cli','desktop','unknown'].includes(match.role)?match.role:'unknown',confidence:['process_name','script_path','verified_path'].includes(match.confidence)?match.confidence:'process_name'});
       }
-      const paths=this.installedPaths(definition),extension=this.extensionInstalled(definition),installed=!!paths.length||extension||matches.some(m=>m.executable&&this.safeExists(m.executable)),running=matches.length>0;
+      const paths=this.installedPaths(definition),extension=this.extensionInstalled(definition),installed=!!paths.length||extension||this.installMarkers(definition)||matches.some(m=>m.executable&&this.safeExists(m.executable)),running=matches.length>0;
       // Codex's desktop binary cannot be used as its CLI merely because the name
       // matches. Only separately discovered executable entrypoints are launchable.
       let executable=paths[0]||matches.find(m=>m.executable)?.executable||null,executableArgs=[];

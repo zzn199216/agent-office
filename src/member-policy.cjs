@@ -30,11 +30,39 @@ function memberTools(tools, { env = process.env, proxy = false, allowJoin = true
   }
   return tools.filter(tool => (!MEMBER_TOOLS.has(tool.name)||['agentroom_chat_rooms','agentroom_chat_history'].includes(tool.name)) && !TEAM_TOOLS.includes(tool.name) && !PROXY_TOOLS.has(tool.name) && tool.name !== 'agentroom_join' && (!SETUP_TOOLS.has(tool.name) || env.AGENTROOM_SETUP_MODE === '1'));
 }
-function assertMemberRoute(disk, scope, route, input, { allowJoin = false } = {}) {
-  const room = scope.room_id, member = scope.member_id;
-  disk.chat.requireParticipant(room, member);
-  const url = new URL(route, 'http://127.0.0.1'), p = url.pathname, q = url.searchParams;
+// A member credential is an identity, not a room ticket. Its card names the
+// room it was issued in ("home"), but a request may act in any room the user
+// has seated this member in. The request's room is derived from the route
+// (query, body, or the message/image/invitation/bridge it addresses); then
+// every existing per-room rule below is applied to that room unchanged.
+// Fixed group proxies stay pinned to their home room.
+function requestRoom(disk, scope, p, q, input) {
+  const found = new Set(), add = value => { if (typeof value === 'string' && value) found.add(value); };
+  add(q.get('room_id')); add(input?.room_id);
+  const roomPath = p.match(new RegExp(`^/api/chat/rooms/(${UUID})$`, 'i')); if (roomPath) add(roomPath[1]);
+  const messagePath = p.match(new RegExp(`^/api/chat/messages/(${UUID})`, 'i')); if (messagePath) { try { add(disk.chat.message(messagePath[1]).room_id); } catch {} }
+  const imagePath = p.match(new RegExp(`^/api/chat/images/(${UUID})$`, 'i')); if (imagePath) { try { add(disk.chat.images.metadata(imagePath[1]).room_id); } catch {} }
+  const invitationPath = p.match(new RegExp(`^/api/chat/invitations/(${UUID})$`, 'i'));
+  if (invitationPath || p === '/api/chat/join') { try { add(disk.chat.invite(invitationPath?.[1] || input?.invite_id).room_id); } catch {} }
+  const bridgePath = p.match(new RegExp(`^/api/bridge/entries/(${UUID})`, 'i'));
+  if (bridgePath) { const row = disk.store.db.prepare('SELECT b.room_id FROM bridge_entries e JOIN bridge_bindings b ON b.id=e.binding_id WHERE e.id=?').get(bridgePath[1]); if (row) add(row.room_id); }
+  if (found.size > 1) throw new RoomError('一次请求只能作用于一个房间。', 403, 'resume_scope_mismatch');
+  return found.size ? [...found][0] : scope.room_id;
+}
+function assertMemberRoute(disk, home, route, input, { allowJoin = false } = {}) {
+  const member = home.member_id, url = new URL(route, 'http://127.0.0.1'), p = url.pathname, q = url.searchParams;
+  disk.chat.requireParticipant(home.room_id, member);
   const denied = () => { throw new RoomError('请求超出了当前成员的房间授权；管理操作请使用本机控制界面。', 403, 'resume_scope_mismatch'); };
+  // A member's own inbox across all of its rooms needs no room at all.
+  if (input === undefined && p === '/api/chat/inbox' && q.get('member_id') === member && !q.has('room_id')) return;
+  if (input === undefined && p === `/api/chat/members/${member}/rooms`) return;
+  const room = requestRoom(disk, home, p, q, input);
+  if (room !== home.room_id) {
+    if (proxyFor(disk, home)) denied();
+    const joining = (p === '/api/chat/join' || /^\/api\/chat\/invitations\//.test(p)) && allowJoin;
+    if (!joining) { try { disk.chat.requireParticipant(room, member); } catch { denied(); } }
+  }
+  const scope = { ...home, room_id: room };
   if (q.has('room_id') && q.get('room_id') !== room || q.has('member_id') && q.get('member_id') !== member || input?.room_id && input.room_id !== room || input?.sender_id && input.sender_id !== member || input?.caller_member_id && input.caller_member_id !== member) denied();
   const messageRoute = p.match(new RegExp(`^/api/chat/messages/(${UUID})(?:/(wait|reply|ack|cancel))?$`, 'i'));
   const imageRoute = p.match(new RegExp(`^/api/chat/images/(${UUID})$`, 'i'));
@@ -83,7 +111,7 @@ function assertMemberRoute(disk, scope, route, input, { allowJoin = false } = {}
       !!bridgeRoute && bridgeRoute[2] === 'report' && input.room_id === room && ownIdentity ||
       ['/api/launch/delegate','/api/launch/wait'].includes(p) && !!proxy && input.room_id === room && ownIdentity ||
       p === '/api/chat/join' && allowJoin && ownIdentity ||
-      p === '/api/resume/accept' && input.card?.instance_id === scope.instance_id && input.card?.room_id === room && input.card?.member_id === member;
+      p === '/api/resume/accept' && input.card?.instance_id === scope.instance_id && input.card?.room_id === home.room_id && input.card?.member_id === member;
     if (messageRoute && message.sender_id !== member && message.to_member_id !== member) denied();
     if (p === '/api/runtime/wake') disk.chat.requireParticipant(room, input.member_id);
     if (input.to_member_id || input.target_member_id) {

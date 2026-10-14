@@ -287,22 +287,33 @@ test('native peer replies return to the original member and stop after acknowled
   assert.equal(service.chat.room(room.id).messages.length, 3);
 });
 
-test('MCP room scope covers explicit room operations and message-id-only operations', async t => {
+test('a member identity works in every room it is seated in and nowhere else', async t => {
   const { service, room, project } = setup(t), api = await apiFor(t, service);
   const otherRoom = service.chat.addRoom({ title: '另一个已加入房间', project_id: project.id });
+  const foreignRoom = service.chat.addRoom({ title: '没有加入的房间', project_id: project.id });
   const member = service.chat.addMember({ name: '同一个成员', adapter: 'mailbox' });
   service.chat.join(room.id, member.id); service.chat.join(otherRoom.id, member.id);
   const otherMessage = service.chat.post({ room_id: otherRoom.id, to_member_id: member.id, text: '另一房间消息', idempotency_key: 'other-room' });
   bindIdentity(t, member.id, room.id);
-  await assert.rejects(() => toolCall('agentroom_chat_history', { room_id: otherRoom.id }, api), /仅授权.*聊天室/);
-  await assert.rejects(() => toolCall('agentroom_chat_inbox', { room_id: otherRoom.id }, api), /仅授权.*聊天室/);
-  await assert.rejects(() => toolCall('agentroom_chat_post', { room_id: otherRoom.id, text: '不能跨房间', idempotency_key: 'other-post' }, api), /仅授权.*聊天室/);
-  await assert.rejects(() => toolCall('agentroom_chat_wait', { message_id: otherMessage.id, seconds: 0 }, api), /仅授权.*聊天室/);
-  await assert.rejects(() => toolCall('agentroom_chat_reply', { message_id: otherMessage.id, text: '不能跨房间回复', idempotency_key: 'other-reply' }, api), /仅授权.*聊天室/);
-  await assert.rejects(() => toolCall('agentroom_chat_ack', { message_id: otherMessage.id }, api), /仅授权.*聊天室/);
-  const otherInvitation = await service.chat.connect(member.id, otherRoom.id);
-  await assert.rejects(() => toolCall('agentroom_join', { invite_id: otherInvitation.invite.id, nonce: otherInvitation.invite.nonce }, api), /其他聊天室/);
-  assert.equal(service.chat.store.message(otherMessage.id).status, 'queued');
+  // Seated in the other room: the same credential works there without a new config.
+  assert.equal((await toolCall('agentroom_chat_history', { room_id: otherRoom.id }, api)).room.id, otherRoom.id);
+  const inbox = await toolCall('agentroom_chat_inbox', {}, api);
+  assert.ok(JSON.stringify(inbox).includes(otherMessage.id), 'inbox without room covers every seated room');
+  const posted = await toolCall('agentroom_chat_post', { room_id: otherRoom.id, text: '跨房间发言', idempotency_key: 'other-post' }, api);
+  assert.equal(posted.room_id, otherRoom.id);
+  const rooms = await toolCall('agentroom_chat_rooms', {}, api);
+  assert.deepEqual(rooms.rooms.map(value => value.id).sort(), [room.id, otherRoom.id].sort());
+  // Not seated: refused for explicit rooms and for records addressed by id.
+  const foreigner = service.chat.addMember({ name: '外部成员', adapter: 'mailbox' }); service.chat.join(foreignRoom.id, foreigner.id);
+  const foreignMessage = service.chat.post({ room_id: foreignRoom.id, to_member_id: foreigner.id, text: '别人的房间', idempotency_key: 'foreign' });
+  await assert.rejects(() => toolCall('agentroom_chat_history', { room_id: foreignRoom.id }, api));
+  await assert.rejects(() => toolCall('agentroom_chat_post', { room_id: foreignRoom.id, text: '不能越过座位', idempotency_key: 'foreign-post' }, api));
+  await assert.rejects(() => toolCall('agentroom_chat_wait', { message_id: foreignMessage.id, seconds: 0 }, api));
+  await assert.rejects(() => toolCall('agentroom_chat_reply', { message_id: foreignMessage.id, text: '不能回复', idempotency_key: 'foreign-reply' }, api));
+  assert.equal(service.chat.store.message(foreignMessage.id).status, 'queued');
+  // Leaving a room removes access to it at once.
+  service.chat.leave(otherRoom.id, member.id);
+  await assert.rejects(() => toolCall('agentroom_chat_history', { room_id: otherRoom.id }, api));
 });
 
 test('a Grok bridge webhook acceptance stays delivered until an actual mailbox reply arrives', async t => {
@@ -346,4 +357,29 @@ test('an uncertain bridge notification is retained for review and not automatica
   assert.equal(posts, 1);
   assert.equal(service.chat.store.message(question.id).status, 'uncertain');
   assert.equal((await service.chat.wait(question.id, 0)).responses.length, 0);
+});
+
+test('each client gets the one connection method it can actually use', async t => {
+  const { service, room } = setup(t);
+  service._localUrl = 'http://127.0.0.1:47831';
+  const make = (name, adapter, provider) => { const member = service.chat.addMember({ name, adapter }); if (provider) service.chat.store.updateMember(member.id, { config: { ...service.chat.store.member(member.id).config, launch_provider: provider } }); service.chat.join(room.id, member.id); return member; };
+  const qwen = service.chat.setup(make('Qwen 桌面客户端', 'mailbox', 'qwen-desktop').id, room.id).client;
+  assert.equal(qwen.kind, 'http_json');
+  const config = JSON.parse(qwen.copy).mcpServers.AgentOffice;
+  assert.equal(config.type, 'streamable-http'); assert.match(config.url, /^http:\/\/127\.0\.0\.1:47831\/mcp\//);
+  assert.ok(qwen.steps.some(step => step.includes('代码解释器')), 'Qwen is warned off its cloud code interpreter');
+  const desktop = service.chat.setup(make('Claude 桌面客户端', 'mailbox', 'claude-desktop').id, room.id).client;
+  assert.equal(desktop.kind, 'stdio_json');
+  const stdio = JSON.parse(desktop.copy).mcpServers.agentoffice;
+  assert.ok(stdio.args.includes('--entry')); assert.equal(stdio.env, undefined, 'no member or room id is hardcoded');
+  const doubao = service.chat.setup(make('豆包', 'mailbox', 'doubao').id, room.id).client;
+  assert.equal(doubao.kind, 'http_fields'); assert.match(doubao.copy, /^http:\/\/127\.0\.0\.1:47831\/mcp\//);
+  assert.equal(service.chat.setup(make('Codex', 'codex').id, room.id).client.kind, 'background');
+  const grok = service.chat.setup(make('Grok Bot', 'grok-bridge').id, room.id).client;
+  assert.equal(grok.kind, 'command'); assert.match(grok.copy, /enter/);
+  // The same client keeps one configuration across rooms.
+  const member = service.chat.store.members().find(value => value.name === 'Qwen 桌面客户端');
+  const other = service.chat.addRoom({ title: '另一间', project_id: room.project_id }); service.chat.join(other.id, member.id);
+  service.resume.accept(JSON.parse(require('node:fs').readFileSync(service.entry.issue(member.id, room.id).file, 'utf8')));
+  assert.equal(service.chat.setup(member.id, other.id).client.copy, qwen.copy, 'a new room does not need a new import');
 });

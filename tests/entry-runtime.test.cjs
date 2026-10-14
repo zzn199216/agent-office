@@ -234,7 +234,7 @@ test('a revoked entry guard fails before daemon startup or operation dispatch', 
   assert.equal(starts, 0); assert.equal(dispatches, 0);
 });
 
-test('an entry guard resolves record IDs before startup and refuses cross-room messages, invitations, bridge entries and management writes', async t => {
+test('an entry guard resolves record IDs before startup and refuses records in rooms the member is not seated in, and management writes', async t => {
   const h = await harness(t), member = participant(h.service, h.room), peer = participant(h.service, h.room);
   const setup = h.service.entry.issue(member.id, h.room.id), entry = readEntry(setup.file); acceptEntry(entry);
   const otherRoom = h.service.chat.addRoom({ title: '另一个聊天室', project_id: h.project.id });
@@ -248,6 +248,8 @@ test('an entry guard resolves record IDs before startup and refuses cross-room m
   const ownBridge = h.service.bridge.store.submit({ binding_id: bindInside.id, target_member_id: peer.id, external_message_id: 'own', text: '房间内自己的桥接请求' });
   const outsideBridge = h.service.bridge.store.submit({ binding_id: bindOutside.id, target_member_id: peer.id, external_message_id: 'other-room', text: '另一个房间的桥接请求' });
   const peerBridge = h.service.bridge.store.submit({ binding_id: bindPeer.id, target_member_id: member.id, external_message_id: 'other-member', text: '同房间其他成员的桥接请求' });
+  // The member leaves the other room, so every record there is outside its seats.
+  h.service.chat.store.leave(otherRoom.id, member.id);
   await h.close();
   let starts = 0, dispatched = 0;
   const api = createRecoveringApi(h.data, { ensure: async () => { starts++; }, call: async () => { dispatched++; return { allowed: true }; }, guard: (route, input) => {

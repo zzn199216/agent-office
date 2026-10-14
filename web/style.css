@@ -217,3 +217,13 @@ body.pixel-theme .secretary-connection-note,body.pixel-theme .secretary-steps,bo
 .room-list-row{position:relative}.room-list-row .room-button{padding-right:43px}.room-actions-button{position:absolute;right:5px;top:50%;transform:translateY(-50%);width:29px;height:29px;padding:0;border:1px solid transparent;border-radius:5px;background:transparent;font-size:18px;line-height:1;cursor:pointer}.room-actions-button:hover,.room-actions-button:focus-visible{background:var(--panel);border-color:var(--border)}.archived-rooms{margin-top:10px;max-height:35vh;overflow:auto}.archived-rooms>summary{padding:8px 10px;cursor:pointer;font-size:11px;color:var(--muted)}.room-actions-dialog{width:min(430px,calc(100vw - 32px))}.room-management-actions{display:flex;flex-direction:column;gap:10px;margin:20px 0}
 
 .image-drafts,.message-images{display:flex;gap:12px;flex-wrap:wrap;margin:8px 0}.image-draft{position:relative;max-width:130px;border:2px solid var(--pixel-ink,#2b2c43);padding:6px;background:var(--pixel-paper,#fffaf0)}.image-draft img{width:112px;height:90px;object-fit:contain}.image-draft span,.message-image span{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px}.image-draft button{position:absolute;right:2px;top:2px;padding:0 6px}.attach-image{white-space:nowrap;padding:7px 12px}.message-image{display:block;max-width:280px;border:2px solid var(--pixel-ink,#2b2c43);padding:6px;color:inherit}.message-image img{display:block;max-width:100%;max-height:220px;object-fit:contain}.image-dialog{max-width:94vw;max-height:94vh;padding:18px}.image-dialog img{display:block;max-width:86vw;max-height:82vh;object-fit:contain}.image-dialog button{float:right}.saved-image{padding:8px}
+
+/* member connect guide */
+.connect-guide{border:2px solid var(--ink,#2b2d42);border-radius:6px;padding:14px 16px;background:#fffdf7;margin:12px 0}
+.connect-guide:empty{display:none}
+.connect-guide h3{margin:0 0 8px;font-size:15px}
+.connect-steps{margin:0 0 10px;padding-left:1.3em;font-size:13px;line-height:1.7}
+.connect-actions{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:8px}
+.connect-state{font-size:12px;color:var(--muted)}
+.connect-fields{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;font-size:12px;margin:0 0 10px}
+.connect-fields dd{margin:0;overflow-wrap:anywhere}

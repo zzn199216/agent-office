@@ -25,6 +25,14 @@ class RoomEntry {
     try{if(fs.statSync(file).size>64000)throw new RoomError('本机入口卡过大。');const card=JSON.parse(fs.readFileSync(file,'utf8'));if(card.member_id!==memberId||card.room_id!==roomId)throw new RoomError('本机入口卡身份不匹配。');status=this.service.resume.inspect(card).credential.status;}catch(e){if(e.code!=='ENOENT')status=e.code==='resume_revoked'?'revoked':'invalid';}
     return {file,status,available:['pending','active'].includes(status),mcp:{mcpServers:{agentroom:{command:own.command,args:[...own.args,'mcp','--entry',file],env:{AGENTROOM_MEMBER_ID:memberId,AGENTROOM_ROOM_ID:roomId}}}}};
   }
+  // The member's working credential: an entry it already has in any room it
+  // is still seated in, so a client imports one configuration for all rooms.
+  primary(memberId,preferredRoomId){
+    const {chat,resume}=this.service,rows=resume.credentials(memberId).filter(row=>row.status!=='revoked'&&chat.store.joined(row.room_id,memberId));
+    const ranked=rows.sort((a,b)=>(b.status==='active')-(a.status==='active')||String(b.last_seen||b.created).localeCompare(String(a.last_seen||a.created)));
+    for(const row of ranked){const described=this.describe(memberId,row.room_id);if(described.available)return this.issue(memberId,row.room_id);}
+    return this.issue(memberId,preferredRoomId);
+  }
   issue(memberId,roomId,options={}){
     const {chat,resume,runtime}=this.service;chat.store.requireParticipant(roomId,memberId);
     const file=path.join(this.service.store.dir,'entries',`${memberId}-${roomId}.json`);let credential;
