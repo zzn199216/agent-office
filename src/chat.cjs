@@ -163,7 +163,7 @@ class ChatManager {
   // Controller-only operations: the HTTP/CLI authority boundary must not expose
   // these through a member's MCP or durable entry. Evidence is an attributed
   // manual observation, not a claim that AgentRoom queried the provider.
-  reconcile(messageId,input){
+  reconcile(messageId,input,options={}){
     if(!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).some(k=>!['outcome','evidence','answer'].includes(k))||!['completed','failed','cancelled'].includes(input.outcome))throw new RoomError('核对结案参数无效。',400,'reconciliation_input_invalid');
     const evidence=this.store.evidence(input.evidence),answer=input.answer===undefined?null:redact(cleanText(input.answer,20000,'已核对回答'));
     if(answer!==null&&input.outcome!=='completed')throw new RoomError('只有核对完成时可以补录回答。',400,'reconciliation_input_invalid');
@@ -177,7 +177,7 @@ class ChatManager {
       const entries=hasBridge?this.store.db.prepare("SELECT id FROM bridge_entries WHERE chat_message_id=? AND status IN ('waiting','uncertain','staged')").all(messageId):[];
       if(entries.length&&input.outcome==='completed'&&answer===null)throw new RoomError('桥接请求核对完成时请补录实际回答，不能用结案状态代替原答案。',400,'reconciliation_answer_required');
       const binding=message.to_member_id?this.store.db.prepare('SELECT thread_id,binding_state FROM chat_bindings WHERE room_id=? AND member_id=?').get(message.room_id,message.to_member_id):null;
-      const reconciliation=this.store.saveReconciliation(message.room_id,'message',messageId,'resolution',bodyHash,{subject_type:'message',message_id:messageId,actor:'controller',method:'manual_evidence',previous_status:message.status,outcome:input.outcome,evidence,answer,native_thread_id:binding?.thread_id||null,native_request_id:message.request_id});
+      const reconciliation=this.store.saveReconciliation(message.room_id,'message',messageId,'resolution',bodyHash,{subject_type:'message',message_id:messageId,actor:'controller',method:options.nativeObserved?'native_read_only':'manual_evidence',previous_status:message.status,outcome:input.outcome,evidence,answer,native_thread_id:binding?.thread_id||null,native_request_id:message.request_id});
       this.store.updateMessage(messageId,{status:input.outcome,error:null});
       for(const entry of entries)this.store.db.prepare('UPDATE bridge_entries SET status=?,response_text=?,error=NULL,updated=? WHERE id=?').run(input.outcome==='completed'?'answered':input.outcome,answer||'',now(),entry.id);
       for(const [key,a]of this.service.approvals)if(a.public.request_id===messageId)this.service.approvals.delete(key);

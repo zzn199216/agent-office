@@ -86,12 +86,12 @@ function createServer(service,{token,port=47831,onShutdown}={}) {
         return json(res,service.bridge.entry(bridgeEntry[1],member,room,{forBridge:!!member}));
       }
       const invitation=pathname.match(/^\/api\/chat\/invitations\/([a-f0-9-]{36})$/i);if(req.method==='GET'&&invitation)return json(res,service.chat.store.invite(invitation[1]));
-      if(req.method==='GET' && pathname==='/api/chat/inbox'){const q=new URL(req.url,`http://${req.headers.host}`).searchParams;return json(res,service.chat.inbox(q.get('member_id'),q.get('room_id')||undefined));}
+      if(req.method==='GET' && pathname==='/api/chat/inbox'){const q=new URL(req.url,`http://${req.headers.host}`).searchParams,items=service.chat.inbox(q.get('member_id'),q.get('room_id')||undefined);return json(res,q.get('format')==='array'?items:{items});}
       const chat=pathname.match(/^\/api\/chat\/(rooms|members|messages)\/([a-f0-9-]{36})(?:\/(join|leave|connect|setup|wait|reply|cancel|ack|heartbeat|grok-configure|reconcile))?$/i);
       if(req.method==='DELETE'&&pathname.startsWith('/api/chat/rooms/')){
         const route=new URL(req.url,'http://127.0.0.1'),input=await body(req);
         if(!chat||chat[1]!=='rooms'||chat[3]||route.search||!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).length)throw new RoomError('删除聊天室的请求范围无效。',400,'room_delete_input_invalid');
-        return json(res,require('./room-lifecycle.cjs').deleteRoom(service,chat[2]));
+        const lifecycle=require('./room-lifecycle.cjs');await lifecycle.settleInterruptedWork(service,chat[2]);return json(res,lifecycle.deleteRoom(service,chat[2]));
       }
       if(req.method==='GET' && chat){const q=new URL(req.url,`http://${req.headers.host}`).searchParams;
         if(chat[1]==='rooms')return json(res,service.chat.room(chat[2],{...(q.has('before_seq')?{before_seq:Number(q.get('before_seq'))}:{}),...(q.has('limit')?{limit:Number(q.get('limit'))}:{})}));
@@ -196,7 +196,7 @@ function createServer(service,{token,port=47831,onShutdown}={}) {
         if(m[3]==='ack')return json(res,service.ack(m[2],input.stage));
       }
       throw new RoomError('没有这个接口。',404);
-    } catch(e){if(!res.headersSent)json(res,{error:readableError(e),code:e.code || 'operation_failed'},e.status || 500);else res.end();}
+    } catch(e){if(!res.headersSent)json(res,{error:readableError(e),code:e.code || 'operation_failed',...(e.code==='room_busy'&&e.details?{details:e.details}:{})},e.status || 500);else res.end();}
   });
   server.on('connection',socket=>{sockets.add(socket);socket.on('close',()=>sockets.delete(socket));});
   const changed=revision=>{for(const res of streams)res.write(`event: update\ndata: ${revision}\n\n`);};service.on('change',changed);

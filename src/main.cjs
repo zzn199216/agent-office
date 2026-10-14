@@ -163,7 +163,7 @@ async function main(args=process.argv.slice(2)){
     const m=await api('/api/chat/messages',{room_id:options.room,sender_id:options.member||'user',to_member_id:options.to||null,text,reply_to:options.reply||null,idempotency_key:options.key||crypto.randomUUID()});print(options.wait?await waitChat(api,m.id,Number(options.wait),options.member):m);return;
   }
   if(command==='chat-wait'){print(await waitChat(api,pos[1],Number(options.timeout||300),options.member));return;}
-  if(command==='chat-inbox'){print(await api(`/api/chat/inbox?member_id=${encodeURIComponent(options.member)}${options.room?'&room_id='+encodeURIComponent(options.room):''}`));return;}
+  if(command==='chat-inbox'){const result=await api(`/api/chat/inbox?member_id=${encodeURIComponent(options.member)}${options.room?'&room_id='+encodeURIComponent(options.room):''}`);print(Array.isArray(result?.items)?result.items:result);return;}
   if(command==='chat-reply'){print(await api(`/api/chat/messages/${pos[1]}/reply`,{member_id:options.member,text:options.file?fileText(options.file):options.stdin?await stdinText():options.message,idempotency_key:options.key||crypto.randomUUID()}));return;}
   if(command==='chat-ack'){print(await api(`/api/chat/messages/${pos[1]}/ack`,{member_id:options.member}));return;}
   if(command==='bridge-request'){

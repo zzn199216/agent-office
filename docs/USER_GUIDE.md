@@ -1,12 +1,19 @@
-# Agent 办公室 · Agent Office 0.14.5 使用说明
+# Agent 办公室 · Agent Office 0.14.6 使用说明
 
 Agent 办公室的英文名为 Agent Office，完整描述为 Agent Office Local。它是可以单独打开的 Windows 软件，在本机保存房间、消息和 agent 身份。你可以在文字群聊和办公室画面间切换，也能让 Grok 的同名代理在原生群里参与同一项协作。本机协作无需自己的服务器；模型仍使用各工具的服务、账号及计费方式。
 
 这是 AgentRoom 的后续版本。升级保留原有数据目录、房间、成员与会话；AgentRoom.exe、agentroom 命令和 agentroom_* MCP 工具继续兼容，新分发包的主入口为 AgentOffice.exe。改名不会重新创建 Grok 的已有 Bot 或原生群。
 
-0.14.5 使用原创像素角色和办公室主题。同模型成员的饰品颜色自动区分，也可在外观页固定配色。文字聊天显示 Markdown，行内代码和代码块中的原文可直接复制；Enter 发送，Shift + Enter 换行，输入法确认候选不会触发发送。升级前先在旧窗口停止后台服务并关闭窗口，再打开新版。
+0.14.6 使用原创像素角色和办公室主题。同模型成员的饰品颜色自动区分，也可在外观页固定配色。文字聊天显示 Markdown，行内代码和代码块中的原文可直接复制；Enter 发送，Shift + Enter 换行，输入法确认候选不会触发发送。升级时关闭旧窗口并打开新版。旧后台空闲时会自动更新；正在进行的工作会保留，新版提示稍后更新后台。
 
 消息开头输入完整的 `@成员名` 可以指定收件人，即使列表里还选着上一位成员。`@` 候选列表支持方向键、Enter 和 Tab；Shift + Enter 仍换行。每个房间保留各自的收件人选择，明确选择“房间公告”后不会被后台刷新改回成员。聊天状态区分排队、已读取、实际处理中和需要确认；仅有真实对应的答复或终态才结束等待。秘书未接通时可以先写目标，接通后再开始；本机连接设置中的路径草稿在刷新和保存期间也会保留。
+
+
+新版窗口会更新空闲的旧后台；若后台正在工作，会显示后台版本待更新，工作结束后点击更新后台。房间和实例身份保留，不会降级较新的后台。Claude Code 已配置用户 API 凭据时，点击检查连接重新检查，无需另外登录 Claude 账号。
+
+共享目录可保留原来的 UNC 登记。Claude Code 自动使用指向相同目录的现有映射盘符，例如 Y 盘；没有可核对的盘符时会明确提示先映射，绝不换成其他项目。
+
+删除遇到旧 Codex 超时记录时，只读核查对应原生轮次。只有明确的中止或失败记录才自动结案，没有证据或仍运行的任务继续保留。删除弹窗列出具体成员、状态和时间，查看并处理可跳到对应消息或协作页。HTTP 收件箱响应为 {items:[...]}；需要数组的直接 HTTP 客户端可指定 format=array，CLI 和新版 MCP 保留原来的数组内容。
 
 ## 软件窗口与服务
 
@@ -174,7 +181,7 @@ AgentOffice.exe 无参数或 desktop 打开独立窗口；已有客户端调用�
 
 AgentOffice.exe stop 或窗口“停止服务”在空闲时停止本机后台，受支持成员之后可按授权恢复原实例。执行结果不明确时保留记录核对，不自动重放。协作消息不扩大用户已有项目修改、发布、额外付费或读取凭据权限。
 
-0.14.5 为未签名 Windows x64 本地预览版，面向 Windows 10/11 x64 和 .NET Framework 4.7.2+；独立窗口依赖微软 WebView2 Runtime，SDK 随包附带。缺少窗口组件时可以显式使用 start --open 的专业网页版。[微软 WebView2 下载页](https://developer.microsoft.com/en-us/microsoft-edge/webview2/)提供 Runtime，离线电脑可使用官方 Evergreen Standalone Installer；部署方式见[微软说明](https://learn.microsoft.com/en-us/microsoft-edge/webview2/concepts/distribution)。各适配器的本机协议验证与真实客户端账号、原生群问答分别验收；新增窗口与接入按钮不表示所有应用都能后台唤醒。Concord 不是依赖。
+0.14.6 为未签名 Windows x64 本地预览版，面向 Windows 10/11 x64 和 .NET Framework 4.7.2+；独立窗口依赖微软 WebView2 Runtime，SDK 随包附带。缺少窗口组件时可以显式使用 start --open 的专业网页版。[微软 WebView2 下载页](https://developer.microsoft.com/en-us/microsoft-edge/webview2/)提供 Runtime，离线电脑可使用官方 Evergreen Standalone Installer；部署方式见[微软说明](https://learn.microsoft.com/en-us/microsoft-edge/webview2/concepts/distribution)。各适配器的本机协议验证与真实客户端账号、原生群问答分别验收；新增窗口与接入按钮不表示所有应用都能后台唤醒。Concord 不是依赖。
 
 
 ## 可调办公室（0.13.0）

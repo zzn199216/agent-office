@@ -11,6 +11,18 @@ const {apiCall,readControl}=require('../src/main.cjs');
 const {fixture,FakeCodex,FakeVault}=require('./helpers.cjs');
 const {id,sleep}=require('../src/util.cjs');
 
+test('starting a newer desktop replaces only an idle older service and preserves room identity',async t=>{
+  const files=fixture(),v=await seed(files);t.after(()=>cleanup(files));const {VERSION}=require('../src/util.cjs');let running=true,version='0.14.3',stops=0,starts=0;
+  const snapshot=()=>({...offlineState(files.data,v.first.id).snapshot,version,activeSetup:{}});
+  const main={readControl:()=>running?{pid:12345,url:'http://127.0.0.1:1234',instance_id:v.instance}:null,apiCall:async(_dir,route,input)=>{if(route==='/api/state')return snapshot();if(route==='/api/shutdown'){assert.deepEqual(input,{idle_only:true});stops++;running=false;return {ok:true};}if(route.startsWith('/api/chat/rooms/'))return offlineState(files.data,v.first.id).history;if(route.startsWith('/api/team'))return offlineState(files.data,v.first.id).team;throw Error(route);},ensureServer:async()=>{starts++;version=VERSION;running=true;}};
+  const before=await desktopState(files.data,{room_id:v.first.id},{main});assert.equal(before.can_update,true);
+  const after=await desktopStart(files.data,{room_id:v.first.id},{main,isPidAlive:()=>false});assert.equal(after.update_available,false);assert.equal(after.snapshot.version,VERSION);assert.equal(after.selected_room_id,v.first.id);assert.equal(stops,1);assert.equal(starts,1);
+});
+test('busy and newer backends cannot be interrupted or downgraded by a desktop start',async t=>{
+  const files=fixture(),v=await seed(files);t.after(()=>cleanup(files));let version='0.14.3',busy=true,stops=0,starts=0;const main={readControl:()=>({pid:12345,url:'http://127.0.0.1:1234',instance_id:v.instance}),apiCall:async(_dir,route)=>{if(route==='/api/state')return {...offlineState(files.data,v.first.id).snapshot,version,activeRequest:busy?'active-turn':null};if(route==='/api/shutdown'){stops++;throw Error('must not stop');}if(route.startsWith('/api/chat/rooms/'))return offlineState(files.data,v.first.id).history;if(route.startsWith('/api/team'))return offlineState(files.data,v.first.id).team;throw Error(route);},ensureServer:async()=>{starts++;}};
+  await assert.rejects(desktopStart(files.data,{room_id:v.first.id},{main}),{code:'desktop_update_busy'});assert.equal(stops,0);assert.equal(starts,0);version='99.0.0';busy=false;assert.equal((await desktopStart(files.data,{room_id:v.first.id},{main})).update_available,false);assert.equal(stops,0);assert.equal(starts,1);
+});
+
 function cleanup(files){
   const root=path.resolve(files.root);assert.equal(path.dirname(root),path.resolve(os.tmpdir()));assert.match(path.basename(root),/^agentroom-test-/);
   fs.rmSync(root,{recursive:true,force:true});

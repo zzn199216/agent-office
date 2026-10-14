@@ -1,5 +1,6 @@
 'use strict';
 const {test}=require('node:test'),assert=require('node:assert/strict'),{PassThrough}=require('node:stream'),{runMcp}=require('../src/mcp.cjs');
+test('current MCP reads inbox object responses without changing its text array contract',async()=>{const {toolCall}=require('../src/mcp.cjs'),rows=[{id:'fixture-message'}];assert.deepEqual(await toolCall('agentroom_chat_inbox',{},async()=>({items:rows}),{env:{AGENTROOM_MEMBER_ID:'member',AGENTROOM_ROOM_ID:'room'}}),rows);});
 test('stdio MCP list results have object structuredContent and preserve the text array',async t=>{
   const input=new PassThrough(),output=new PassThrough(),rows=[{id:'fixture-message',text:'actual inbox result'}],messages=[];
   const api=async()=>rows;api.mcpContext=async()=>({env:{AGENTROOM_MEMBER_ID:'fixture-member',AGENTROOM_ROOM_ID:'fixture-room'}});

@@ -21,6 +21,20 @@ const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 function providerText(value) {
   return redact(value).replace(/sk-ant-[A-Za-z0-9_-]+/g, '[密钥已隐藏]');
 }
+function providerDirectory(project,options={}){
+  if((options.platform||process.platform)!=='win32'||!/^\\\\/.test(project.path))return project.path;
+  const realpath=options.realpath||fs.realpathSync.native,clean=value=>String(value).replace(/^\\\\\?\\UNC\\/i,'\\\\').replace(/^\\\\\?\\/,'').toLowerCase();
+  const intended=clean(project.canonical||realpath(project.path));
+  for(const drive of options.drives||'ABCDEFGHIJKLMNOPQRSTUVWXYZ'){
+    const root=drive+':\\';let actual;try{actual=clean(realpath(root));}catch{continue;}
+    if(!actual.startsWith('\\\\'))continue;
+    const relative=path.win32.relative(actual,intended);
+    if(relative==='..'||relative.startsWith('..\\')||path.win32.isAbsolute(relative))continue;
+    const candidate=path.win32.join(root,relative);
+    try{if(clean(realpath(candidate))===intended)return candidate;}catch{}
+  }
+  throw new RoomError('Claude Code 无人值守读取需要已映射的盘符。没有找到与登记项目完全相同的盘符路径，请先映射该共享目录后重试。',409,'claude_local_path_required');
+}
 // --restricted deliberately ignores user settings. Forward only the user's
 // API credentials and model selection, never project env, hooks or plugins.
 const USER_ENV_KEYS = new Set(['ANTHROPIC_BASE_URL', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_API_KEY', 'ANTHROPIC_MODEL', 'ANTHROPIC_SMALL_FAST_MODEL', 'CLAUDE_CODE_SUBAGENT_MODEL']);
@@ -117,9 +131,8 @@ class ClaudeClient extends EventEmitter {
     const canonical = normalizePath(project.path);
     if (project.canonical && canonical !== project.canonical) throw new RoomError('项目目录身份已变化，请核对注册目录。', 409, 'project_mismatch');
     if (discussion.thread_id && this.sessionProjects.has(discussion.thread_id) && this.sessionProjects.get(discussion.thread_id) !== canonical) throw new RoomError('这个 Claude Code 协作会话属于另一项目。', 409, 'project_mismatch');
-    // Restricted file tools refuse UNC reads without an interactive approval.
-    // A registered drive-letter mapping is fine; never silently switch projects.
-    if (process.platform === 'win32' && /^\\\\/.test(project.path)) throw new RoomError('Claude Code 无人值守读取需要本地目录或已映射的盘符路径，请使用该共享目录的盘符路径。', 409, 'claude_local_path_required');
+    // Use only an existing drive alias verified against the registered directory.
+    const directory=providerDirectory(project);
     // Use one settings snapshot for both authentication checks and this turn.
     // Read it again next turn so key rotation does not require a service restart.
     const environment = runtimeEnvironment(this.environment);
@@ -179,7 +192,7 @@ class ClaudeClient extends EventEmitter {
     this.active = { stop, ended };
     try {
       if (!discussion.thread_id) onBinding('creating');
-      child = spawn(this.executable, args, { cwd: project.path, env: childEnv, windowsHide: true, shell: false, stdio: ['pipe', 'pipe', 'pipe'] });
+      child = spawn(this.executable, args, { cwd: directory, env: childEnv, windowsHide: true, shell: false, stdio: ['pipe', 'pipe', 'pipe'] });
       this.child = child;
       child.once('spawn', () => { started = true; });
       child.stdout.setEncoding('utf8'); child.stderr.on('data', () => {});
@@ -219,4 +232,4 @@ class ClaudeClient extends EventEmitter {
   }
   async close() { this.closed = true; const active = this.active; if (active) { active.stop(new RoomError('Claude Code 协作进程已停止，未完成的结果需要核对。', 409, 'outcome_uncertain')); await active.ended.catch(() => {}); } }
 }
-module.exports = { ClaudeClient, detectClaude, MIN_VERSION, ROOM_TOOLS, versionSupported };
+module.exports = { ClaudeClient, detectClaude, MIN_VERSION, ROOM_TOOLS, versionSupported, providerDirectory };

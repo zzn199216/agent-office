@@ -359,7 +359,7 @@ async function api(path, input, method = input === undefined ? 'GET' : 'POST') {
     await authRenewal; response = await fetch(path,options);
     if (response.status === 401) throw new Error('本机连接尚未恢复，请使用成员入口检查原实例。');
   }
-  const value = await response.json(); if (!response.ok) throw Object.assign(new Error(value.error || '操作失败'),{status:response.status,code:value.code}); return value;
+  const value = await response.json(); if (!response.ok) throw Object.assign(new Error(value.error || '操作失败'),{status:response.status,code:value.code,details:value.details}); return value;
 }
 function toast(text) { $('toast').textContent = text; $('toast').classList.remove('hidden'); clearTimeout(toastTimer); toastTimer = setTimeout(() => $('toast').classList.add('hidden'), 6000); }
 async function action(fn) { try { return await fn(); } catch (error) { const networkFailure = /^(Failed to fetch|Load failed|NetworkError)/i.test(error.message || ''); if (networkFailure) {setWebConnected(false);checkDesktopTransport();} toast(networkFailure ? '本机处理程序未连接。已有成员入口可以恢复同一个房间。' : error.message); } }
@@ -440,7 +440,7 @@ function showDeleteRoom(id) {
   const target=state?.chat?.rooms?.find(room=>room.id===id);
   if(!target||!webConnected||deletingRoom)return;
   deleteRoomId=id;$('delete-room-name').textContent=target.title;
-  $('delete-room-error').textContent='';$('delete-room-confirm').disabled=false;
+  $('delete-room-error').textContent='';$('delete-room-blockers').replaceChildren();$('delete-room-confirm').disabled=false;
   $('delete-room-dialog').showModal();
 }
 async function confirmDeleteRoom() {
@@ -459,6 +459,8 @@ async function confirmDeleteRoom() {
     await refresh();toast('聊天室已删除');
   } catch(error) {
     $('delete-room-error').textContent=/^(Failed to fetch|Load failed|NetworkError)/i.test(error.message||'')?'未确认删除结果，请先检查连接和房间列表。':error.message;
+    const blockers=error.details?.room_id===id?error.details.blockers||[]:[];
+    $('delete-room-blockers').innerHTML=blockers.map(item=>`<div class="delete-blocker"><span>${escape(item.name)} · ${escape(labels[item.status]||item.status)}${item.created?` · ${escape(time(item.created))}`:''}</span><button type="button" class="secondary" data-delete-blocker="${escape(item.id)}" data-blocker-kind="${escape(item.kind)}">查看并处理</button></div>`).join('');
   } finally {deletingRoom=false;$('delete-room-confirm').disabled=false;}
 }
 function renderSettings() {
@@ -630,7 +632,7 @@ function installDesktopChrome() {
   const alert = document.createElement('div'); alert.id = 'desktop-offline-banner'; alert.className = 'desktop-offline-banner hidden'; alert.setAttribute('role','status');
   alert.innerHTML = '<span>服务已关闭，你仍可查看本机历史。</span><button id="offline-start-service" class="text-button">开启服务，继续交流 ↗</button>';
   document.querySelector('.content').prepend(alert);
-  $('service-toggle').onclick = () => action(() => desktop?.offline || !webConnected ? changeService('start_service') : showServiceStop());
+  $('service-toggle').onclick = () => action(() => desktopState?.update_available || desktop?.offline || !webConnected ? changeService('start_service') : showServiceStop());
   $('offline-start-service').onclick = () => action(() => changeService('start_service'));
   $('service-stop-confirm').onclick = () => action(() => changeService('stop_service'));
   document.querySelector('.local-indicator').innerHTML = '<i id="top-service-dot"></i><span id="top-service-label">本机服务</span>';
@@ -655,6 +657,7 @@ function renderService() {
   $('service-dot').classList.toggle('online',running); $('service-dot').classList.toggle('busy',running && busy);
   $('service-toggle').disabled = desktopBusy || !desktopReady;
   $('service-toggle').textContent = desktopBusy ? '请稍候…' : running ? '关闭服务' : '开启服务';
+  if(desktopState?.update_available){$('service-label').textContent='后台版本待更新';$('service-detail').textContent=`后台 ${desktopState.snapshot?.version||'旧版本'} · 软件 ${desktopState.client_version}。${busy?'当前工作结束后再更新。':'更新后接入修复才会生效。'}`;$('service-toggle').textContent='更新后台';$('service-toggle').disabled=desktopBusy||!desktopReady||busy;}
   $('desktop-service').querySelector('small').textContent=running ? '关窗口后，服务继续运行' : '关窗口不会删除房间';
   $('top-service-label').textContent = running ? busy ? '成员正在工作' : '服务运行中' : '历史浏览';
   $('top-service-dot').classList.toggle('stopped',!running);
@@ -1259,6 +1262,7 @@ $('room-actions-archive').onclick=()=>action(toggleRoomArchive);
 $('room-actions-delete').onclick=()=>{const id=managedRoomId;$('room-actions-dialog').close();managedRoomId=null;showDeleteRoom(id);};
 $('room-actions-start').onclick=()=>action(()=>changeService('start_service'));
 $('delete-room-confirm').onclick=()=>action(confirmDeleteRoom);
+$('delete-room-blockers').onclick=event=>action(async()=>{const button=event.target.closest('[data-delete-blocker]'),target=state?.chat?.rooms?.find(room=>room.id===deleteRoomId);if(!button||!target)return;const kind=button.dataset.blockerKind,id=button.dataset.deleteBlocker;$('delete-room-dialog').close();roomId=target.id;projectId=target.project_id;legacyId=null;setReply(null);await refresh();if(kind==='message'){selectRoomView(false);requestAnimationFrame(()=>$('message-'+id)?.scrollIntoView({block:'center'}));}else openInspector(kind==='binding'?'connections':'team',kind==='binding'?id:undefined);});
 $('discussions').onclick = event => { const button = event.target.closest('[data-discussion]'); if (button) { legacyId = button.dataset.discussion; setReply(null); action(refresh); } };
 $('room-members').onclick = event => { const button = event.target.closest('[data-member]'); if (button) openInspector('connections',button.dataset.member); };
 $('inspector-members').onclick = event => { const button = event.target.closest('[data-inspector-member]'); if (button) openInspector('connections',button.dataset.inspectorMember); };

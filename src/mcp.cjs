@@ -140,7 +140,7 @@ async function dispatchTool(name,args,api,context={}){
     case'agentroom_chat_history':return api(`/api/chat/rooms/${encodeURIComponent(args.room_id)}`);
     case'agentroom_chat_post':return api('/api/chat/messages',{...args,sender_id:member});
     case'agentroom_chat_wait':return api(`/api/chat/messages/${encodeURIComponent(args.message_id)}/wait?seconds=${Math.min(25,args.seconds??25)}${member?'&member_id='+encodeURIComponent(member):''}`);
-    case'agentroom_chat_inbox':return api(`/api/chat/inbox?member_id=${encodeURIComponent(member)}${args.room_id||room?'&room_id='+encodeURIComponent(args.room_id||room):''}`);
+    case'agentroom_chat_inbox':{const value=await api(`/api/chat/inbox?member_id=${encodeURIComponent(member)}${args.room_id||room?'&room_id='+encodeURIComponent(args.room_id||room):''}`);return Array.isArray(value?.items)?value.items:value;}
     case'agentroom_chat_reply':return api(`/api/chat/messages/${encodeURIComponent(args.message_id)}/reply`,{member_id:member,text:args.text,idempotency_key:args.idempotency_key});
     case'agentroom_chat_ack':return api(`/api/chat/messages/${encodeURIComponent(args.message_id)}/ack`,{member_id:member});
     case'agentroom_list':{const s=await api('/api/state');return {projects:s.projects,discussions:s.discussions,grok:s.grok};}

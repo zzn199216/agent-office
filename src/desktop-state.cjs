@@ -4,6 +4,10 @@ const {RoomError,VERSION,livePid,sleep}=require('./util.cjs');
 const {openDisk}=require('./entry.cjs');
 const {readTeamSnapshot}=require('./desktop-team.cjs');
 const ROOM_ID=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
+function olderVersion(actual,expected=VERSION){
+  if(!/^\d+\.\d+\.\d+$/.test(actual||'')||!/^\d+\.\d+\.\d+$/.test(expected))return false;
+  const a=actual.split('.').map(Number),b=expected.split('.').map(Number);for(let i=0;i<3;i++){if(a[i]!==b[i])return a[i]<b[i];}return false;
+}
 function roomInput(value){if(value!=null&&!ROOM_ID.test(value))throw new RoomError('聊天室标识无效。',400,'desktop_room_invalid');return value||null;}
 function activity(state){
   const setup=state.activeSetup||{},busy={active_requests:state.activeRequest?1:0,active_messages:state.chat?.activeMessages?.length||0,approvals:state.approvals?.length||0,connecting:state.chat?.members?.filter(member=>member.status==='connecting').length||0,onboarding:setup.onboarding||0,runtime_installs:setup.runtime_installs||0,launch:setup.launch||0};
@@ -38,9 +42,19 @@ async function desktopState(dir,input={},options={}){
   if(!offline.initialized||snapshot.instance_id!==offline.snapshot.instance_id||control.instance_id!==snapshot.instance_id)throw new RoomError('本机服务与原聊天室身份不一致，未打开替代实例。',409,'instance_control_mismatch');
   const selected=roomInput(input.room_id)||snapshot.chat.rooms[0]?.id||null;
   const [history,team]=selected?await Promise.all([main.apiCall(dir,'/api/chat/rooms/'+selected,undefined,5000),main.apiCall(dir,'/api/team?room_id='+encodeURIComponent(selected),undefined,5000)]):[null,null];
-  return {running:true,url:control.url,initialized:true,busy:activity(snapshot),snapshot,history,team,selected_room_id:selected};
+  const busy=activity(snapshot),update=olderVersion(snapshot.version);
+  return {running:true,url:control.url,initialized:true,busy,snapshot,history,team,selected_room_id:selected,client_version:VERSION,update_available:update,can_update:update&&!busy.is_busy};
 }
-async function desktopStart(dir,input={},options={}){roomInput(input.room_id);const main=options.main||require('./main.cjs');await main.ensureServer(dir);return desktopState(dir,input,{...options,main});}
+async function desktopStart(dir,input={},options={}){
+  roomInput(input.room_id);const main=options.main||require('./main.cjs'),before=await desktopState(dir,input,{...options,main});
+  if(before.update_available){
+    if(before.busy.is_busy)throw new RoomError('旧后台正在处理任务。先完成或停止当前工作，再更新后台；没有中断任务。',409,'desktop_update_busy');
+    await desktopStop(dir,input,{...options,main});
+  }
+  await main.ensureServer(dir);const after=await desktopState(dir,input,{...options,main});
+  if(after.update_available)throw new RoomError('后台仍是旧版本，更新尚未完成。请保留房间记录并重试更新后台。',409,'desktop_update_incomplete');
+  return after;
+}
 async function desktopStop(dir,input={},options={}){
   const main=options.main||require('./main.cjs'),state=await desktopState(dir,input,{...options,main});if(!state.running)return state;
   if(state.busy.is_busy)throw new RoomError('仍有任务或安装正在进行。请先结束或取消这些任务，再停止服务。',409,'desktop_service_busy');
@@ -50,4 +64,4 @@ async function desktopStop(dir,input={},options={}){
   if(alive(control.pid))throw new RoomError('服务正在结束本轮清理，请稍后检查状态。',409,'desktop_stop_pending');
   return offlineState(dir,input.room_id);
 }
-module.exports={activity,offlineState,desktopState,desktopStart,desktopStop};
+module.exports={activity,offlineState,desktopState,desktopStart,desktopStop,olderVersion};

@@ -354,7 +354,15 @@ namespace AgentRoomDesktop
                     if (!AllowedOrigin(e.Request.Uri) && !AllowedAppearanceImage(e.Request.Uri, e.ResourceContext)) e.Response = environment.CreateWebResourceResponse(new MemoryStream(new byte[0]), 403, "Forbidden", "Content-Type: text/plain");
                 };
                 core.WebMessageReceived += async delegate(object sender, CoreWebView2WebMessageReceivedEventArgs e) { await Receive(e); };
-                latest = await cli.Invoke("desktop-state", null); selectedRoom = Json.Text(latest, "selected_room_id"); NavigateForState(latest);
+                latest = await cli.Invoke("desktop-state", null); selectedRoom = Json.Text(latest, "selected_room_id");
+                if (Json.Flag(latest, "can_update"))
+                {
+                    bool updateFailed = false;
+                    try { latest = await cli.Invoke("desktop-start", selectedRoom); }
+                    catch { updateFailed = true; }
+                    if (updateFailed) latest = await cli.Invoke("desktop-state", selectedRoom);
+                }
+                NavigateForState(latest);
                 if (options.DiagnosticsDirectory != null)
                 {
                     Diagnostic.Write(options.DiagnosticsDirectory, "runtime.json", new Dictionary<string, object> { { "webview_runtime", runtimeVersion }, { "process_id", Process.GetCurrentProcess().Id }, { "initial_running", Json.Flag(latest, "running") } });
@@ -395,7 +403,7 @@ namespace AgentRoomDesktop
         }
         private void NavigateForState(Dictionary<string, object> state)
         {
-            Uri target = ValidServiceUrl(state); onlineOrigin = target;
+            Uri target = Json.Flag(state, "update_available") ? null : ValidServiceUrl(state); onlineOrigin = target;
             // Online room selection and confirmation dialogs belong to the UI.
             // A same-origin state refresh must not reload that active page.
             if (target != null && view.Source != null && view.Source.Scheme == target.Scheme && view.Source.Host == target.Host && view.Source.Port == target.Port) return;
