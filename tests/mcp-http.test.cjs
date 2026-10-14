@@ -202,3 +202,17 @@ test('credentials earlier versions revoked with a deleted room come back when th
   store.leave(fresh.id, h.first.person.id); h.service.chat.join(fresh.id, h.first.person.id);
   assert.equal(h.service.resume.credential(h.first.card.credential_id).status, 'revoked');
 });
+
+test('every imported address resumes, even if the member already has a working credential', async t => {
+  const h = await setup(t), store = h.service.chat.store;
+  const extra = h.service.resume.issue(h.first.person.id, h.room.id).card;
+  const firstSession = await h.initialize(h.first.card), extraSession = await h.initialize(extra);
+  store.deleteRoom(h.room.id, () => {}, { force: true });
+  const fresh = h.service.chat.addRoom({ title: '新房间', project_id: h.project.id });
+  h.service.chat.join(fresh.id, h.first.person.id);
+  for (const [card, session] of [[h.first.card, firstSession], [extra, extraSession]]) {
+    const result = await h.invoke(card, session, 'agentroom_chat_rooms');
+    assert.equal(result.data.result?.isError, undefined, result.raw);
+    assert.equal(result.data.result?.structuredContent.current_room_id, fresh.id, result.raw);
+  }
+});

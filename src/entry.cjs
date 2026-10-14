@@ -12,16 +12,28 @@ function readEntry(file){
   const dir=resolveDataDirectory(card.data_directory),disk=openDisk(dir,{readOnly:true});try{card={...card,room_id:disk.resume.inspect(card).room_id};}finally{disk.close();}
   return {file,dir,card};
 }
-function diskState(dir,entry,scope={}){const disk=openDisk(dir,{readOnly:true});try{if(entry)disk.resume.inspect(entry.card);return {...disk.runtime.offlineSnapshot(entry?.card.room_id||scope.roomId,entry?.card.member_id||scope.memberId),data_directory:fs.realpathSync.native(dir),transport:'disk',ui_required:false};}finally{disk.close();}}
+function diskState(dir,entry,scope={}){const disk=openDisk(dir,{readOnly:true});try{const current=entry?disk.resume.inspect(entry.card):null;return {...disk.runtime.offlineSnapshot(current?.room_id||scope.roomId,current?.member_id||scope.memberId),data_directory:fs.realpathSync.native(dir),transport:'disk',ui_required:false};}finally{disk.close();}}
 function acceptEntry(entry){const disk=openDisk(entry.dir);try{const result=disk.resume.accept(entry.card);disk.runtime.heartbeat(result.member_id,{session_ref:`entry:${entry.card.credential_id}`});return result;}finally{disk.close();}}
 function assertEntryScope(disk,card,route,input){
   return require('./member-policy.cjs').assertMemberRoute(disk,card,route,input);
 }
 class RoomEntry {
   constructor(service){this.service=service;}
+  entryFile(memberId,roomId){
+    const directory=path.join(this.service.store.dir,'entries'),file=path.join(directory,`${memberId}-${roomId}.json`);
+    if(fs.existsSync(file))return file;
+    // Rehoming changes the credential row, never the file already referenced
+    // by a client's stdio configuration. Find that original file for the UI.
+    try{for(const name of fs.readdirSync(directory).sort()){
+      if(!name.startsWith(memberId+'-')||!name.endsWith('.json'))continue;
+      const candidate=path.join(directory,name);
+      try{if(fs.statSync(candidate).size>64000)continue;const card=JSON.parse(fs.readFileSync(candidate,'utf8'));if(card.member_id===memberId&&this.service.resume.inspect(card).room_id===roomId)return candidate;}catch{}
+    }}catch(error){if(error.code!=='ENOENT')throw error;}
+    return file;
+  }
   describe(memberId,roomId){
     this.service.chat.store.requireParticipant(roomId,memberId);
-    const file=path.join(this.service.store.dir,'entries',`${memberId}-${roomId}.json`),own=ownCommand();let status='missing';
+    const file=this.entryFile(memberId,roomId),own=ownCommand();let status='missing';
     try{if(fs.statSync(file).size>64000)throw new RoomError('本机入口卡过大。');const card=JSON.parse(fs.readFileSync(file,'utf8'));if(card.member_id!==memberId)throw new RoomError('本机入口卡身份不匹配。');const seen=this.service.resume.inspect(card);status=seen.room_id===roomId?seen.credential.status:'moved';}catch(e){if(e.code!=='ENOENT')status=e.code==='resume_revoked'?'revoked':'invalid';}
     return {file,status,available:['pending','active'].includes(status),mcp:{mcpServers:{agentroom:{command:own.command,args:[...own.args,'mcp','--entry',file],env:{AGENTROOM_MEMBER_ID:memberId,AGENTROOM_ROOM_ID:roomId}}}}};
   }
@@ -35,7 +47,7 @@ class RoomEntry {
   }
   issue(memberId,roomId,options={}){
     const {chat,resume,runtime}=this.service;chat.store.requireParticipant(roomId,memberId);
-    const file=path.join(this.service.store.dir,'entries',`${memberId}-${roomId}.json`);let credential;
+    const file=this.entryFile(memberId,roomId);let credential;
     try{const bytes=fs.readFileSync(file);if(bytes.length>64000)throw new RoomError('本机入口卡过大。',400,'invalid_resume_card');const card=JSON.parse(bytes.toString('utf8'));if(card.member_id!==memberId)throw new RoomError('本机入口卡身份不匹配。',403,'resume_scope_mismatch');const seen=resume.inspect(card);if(seen.room_id===roomId)credential=seen.credential;}catch(e){
       const damaged=e instanceof SyntaxError||['invalid_resume_card','invalid_request','resume_scope_mismatch','resume_instance_mismatch'].includes(e.code);
       if(damaged&&options.repair_invalid===true){

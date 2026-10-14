@@ -49,6 +49,52 @@ test('a user-issued long-lived card stays pending until a real accept and surviv
   assert.equal(state.chat.db.prepare('SELECT count(*) AS count FROM chat_invitations').get().count, 0);
 });
 
+test('all legacy deletion credentials recover alongside a working entry, but explicit revocations remain revoked', t => {
+  const h = setup(t), first = h.access.issue(h.member.id, h.room.id).card, second = h.access.issue(h.member.id, h.room.id).card;
+  const explicit = h.access.issue(h.member.id, h.room.id).card;
+  h.access.accept(first);
+  h.chat.deleteRoom(h.room.id, () => {}, { force: true });
+  const stamp = h.store.db.prepare('SELECT deleted_at FROM chat_room_tombstones WHERE room_id=?').get(h.room.id).deleted_at;
+  h.store.db.prepare("UPDATE chat_resume_credentials SET status='revoked',revoked_at=? WHERE room_id=?").run(stamp, h.room.id);
+  // The user explicitly revokes an already revoked legacy row.
+  h.access.revoke(explicit.credential_id);
+  const fresh = h.chat.addRoom({ title: '新房间', project_id: h.project.id });
+  h.store.db.prepare('INSERT INTO chat_participants(room_id,member_id,joined,joined_at) VALUES(?,?,1,?)').run(fresh.id, h.member.id, stamp);
+  const working = h.access.issue(h.member.id, fresh.id).card;
+  h.restart();
+  assert.equal(h.chat.reviveAllCredentials(), 1);
+  assert.equal(h.chat.reviveAllCredentials(), 0);
+  for (const card of [first, second, working]) assert.equal(h.access.inspect(card).room_id, fresh.id);
+  assert.equal(h.access.credential(first.credential_id).status, 'active');
+  assert.equal(h.access.credential(second.credential_id).status, 'pending');
+  assert.throws(() => h.access.inspect(explicit), { code: 'resume_revoked' });
+});
+
+test('joining and leaving roll back the seat if credential relocation fails', t => {
+  const h = setup(t), card = h.access.issue(h.member.id, h.room.id).card;
+  const fresh = h.chat.addRoom({ title: '另一房间', project_id: h.project.id }); h.chat.join(fresh.id, h.member.id);
+  h.store.db.exec("CREATE TRIGGER fixture_fail_move BEFORE UPDATE ON chat_resume_credentials BEGIN SELECT RAISE(ABORT,'fixture movement denied'); END");
+  assert.throws(() => h.chat.leave(h.room.id, h.member.id), /fixture movement denied/);
+  assert.equal(h.chat.joined(h.room.id, h.member.id), true);
+  assert.equal(h.access.inspect(card).room_id, h.room.id);
+  h.store.db.exec('DROP TRIGGER fixture_fail_move');
+  h.chat.leave(fresh.id, h.member.id); h.chat.leave(h.room.id, h.member.id);
+  h.store.db.exec("CREATE TRIGGER fixture_fail_move BEFORE UPDATE ON chat_resume_credentials BEGIN SELECT RAISE(ABORT,'fixture movement denied'); END");
+  assert.throws(() => h.chat.join(fresh.id, h.member.id), /fixture movement denied/);
+  assert.equal(h.chat.joined(fresh.id, h.member.id), false);
+  assert.equal(h.access.credential(card.credential_id).room_id, h.room.id);
+});
+
+test('upgrading the old credential schema preserves existing cards and migrates only once', t => {
+  const h = setup(t), card = h.access.issue(h.member.id, h.room.id).card;
+  h.store.db.exec('ALTER TABLE chat_resume_credentials DROP COLUMN revocation_reason');
+  h.restart();
+  assert.equal(h.access.inspect(card).valid, true);
+  h.access.revoke(card.credential_id); h.restart();
+  assert.equal(h.access.credential(card.credential_id).revocation_reason, 'explicit');
+  assert.throws(() => h.access.inspect(card), { code: 'resume_revoked' });
+});
+
 test('cards contain only member credentials and launcher hints, and SQLite persists only a hash', t => {
   const state = setup(t), issued = state.access.issue(state.member.id, state.room.id, { file: path.join(state.root, 'private', 'entry.json') });
   const written = JSON.parse(fs.readFileSync(issued.file, 'utf8'));

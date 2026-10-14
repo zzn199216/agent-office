@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { EventEmitter } = require('node:events');
 const { PassThrough } = require('node:stream');
+const { spawn } = require('node:child_process');
 const { RoomService } = require('../src/service.cjs');
 const { createServer } = require('../src/http.cjs');
 const { readEntry, diskState, acceptEntry, openDisk, assertEntryScope } = require('../src/entry.cjs');
@@ -322,4 +323,53 @@ test('one persistent MCP connection continues after daemon shutdown and restores
   assert.equal(h.service.chat.store.messages(h.room.id).length, 1);
   assert.equal(h.service.entry.issue(member.id, h.room.id).credential_id, setup.credential_id);
   assert.equal(h.service.chat.store.db.prepare('SELECT count(*) AS count FROM chat_invitations').get().count, 0);
+});
+
+test('the real stdio entry follows its credential after deletion without restarting the MCP process', async t => {
+  const h = await harness(t), member = participant(h.service, h.room);
+  const setup = h.service.entry.issue(member.id, h.room.id), entry = readEntry(setup.file);
+  const executable = process.env.AGENTOFFICE_TEST_EXECUTABLE || process.execPath;
+  const prefix = process.env.AGENTOFFICE_TEST_EXECUTABLE ? [] : [path.resolve(__dirname, '../src/main.cjs')];
+  const child = spawn(executable, [...prefix, 'mcp', '--entry', setup.file], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+  let raw = '', errors = ''; child.stdout.on('data', value => { raw += value; }); child.stderr.on('data', value => { errors += value; });
+  t.after(async () => { if (child.exitCode === null) { child.stdin.end(); await new Promise(resolve => child.once('exit', resolve)); } });
+  let sequence = 0;
+  async function request(method, params, allowError = false) {
+    const requestId = ++sequence;
+    child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: requestId, method, params }) + '\n');
+    let found;
+    await until(() => { found = raw.trim().split('\n').filter(Boolean).map(JSON.parse).find(value => value.id === requestId); return !!found || child.exitCode !== null; }, 'stdio response');
+    assert.ok(found, errors); assert.equal(found.error, undefined); if (!allowError) assert.equal(found.result?.isError, undefined, JSON.stringify(found));
+    return found.result;
+  }
+  await request('initialize', { protocolVersion: '2025-06-18' });
+  child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
+  await request('tools/call', { name: 'agentroom_room_state', arguments: {} });
+  h.service.chat.store.deleteRoom(h.room.id, () => {}, { force: true });
+  const fresh = h.service.chat.addRoom({ project_id: h.project.id, title: '重新加入的房间' });
+  h.service.chat.join(fresh.id, member.id);
+  const state = await request('tools/call', { name: 'agentroom_room_state', arguments: {} });
+  assert.deepEqual(state.structuredContent.rooms.map(room => room.id), [fresh.id]);
+  const rooms = await request('tools/call', { name: 'agentroom_chat_rooms', arguments: {} });
+  assert.equal(rooms.structuredContent.current_room_id, fresh.id);
+  assert.deepEqual(diskState(h.data, entry).rooms.map(room => room.id), [fresh.id]);
+  const denied = h.service.chat.addRoom({ project_id: h.project.id, title: '未授权的房间' });
+  const refused = await request('tools/call', { name: 'agentroom_chat_history', arguments: { room_id: denied.id } }, true);
+  assert.equal(refused.isError, true);
+  h.service.resume.revoke(setup.credential_id);
+  h.service.chat.store.leave(fresh.id, member.id); h.service.chat.join(fresh.id, member.id);
+  assert.equal(h.service.resume.credential(setup.credential_id).status, 'revoked');
+});
+
+test('connection instructions reuse the moved entry file and credential instead of issuing another URL', async t => {
+  const h = await harness(t), member = participant(h.service, h.room), setup = h.service.entry.issue(member.id, h.room.id);
+  acceptEntry(readEntry(setup.file));
+  const bytes = fs.readFileSync(setup.file);
+  h.service.chat.store.deleteRoom(h.room.id, () => {}, { force: true });
+  const fresh = h.service.chat.addRoom({ project_id: h.project.id, title: '新房间' }); h.service.chat.join(fresh.id, member.id);
+  const current = h.service.entry.primary(member.id, fresh.id);
+  assert.equal(current.credential_id, setup.credential_id);
+  assert.equal(current.file, setup.file);
+  assert.deepEqual(fs.readFileSync(setup.file), bytes);
+  assert.equal(h.service.resume.credentials(member.id).length, 1);
 });

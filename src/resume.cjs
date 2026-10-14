@@ -28,11 +28,12 @@ class ResumeAccess {
         room_id TEXT NOT NULL REFERENCES chat_rooms(id),
         member_id TEXT NOT NULL REFERENCES chat_members(id),
         secret_hash TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending',
-        created TEXT NOT NULL, accepted_at TEXT, last_seen TEXT, revoked_at TEXT
+        created TEXT NOT NULL, accepted_at TEXT, last_seen TEXT, revoked_at TEXT, revocation_reason TEXT
       );
       CREATE INDEX IF NOT EXISTS chat_resume_credentials_member
         ON chat_resume_credentials(member_id,room_id,status);
     `);
+    if (!this.db.prepare('PRAGMA table_info(chat_resume_credentials)').all().some(column => column.name === 'revocation_reason')) this.db.exec('ALTER TABLE chat_resume_credentials ADD COLUMN revocation_reason TEXT');
   }
   argumentList(value) {
     if (!Array.isArray(value) || value.length > 100 || value.some(arg => typeof arg !== 'string' || arg.length > 4096 || arg.includes('\0'))) throw new RoomError('本机入口参数无效。');
@@ -132,7 +133,9 @@ class ResumeAccess {
     this.requireWritable();
     const row = this.credential(credentialId);
     if (row.instance_id !== this.instanceId) throw new RoomError('不能撤销其他聊天室实例的入口。', 403, 'resume_instance_mismatch');
-    if (row.status !== 'revoked') this.db.prepare("UPDATE chat_resume_credentials SET status='revoked',revoked_at=? WHERE id=?").run(now(), row.id);
+    // Record user intent even when an old version already revoked this row.
+    // A timestamp alone can collide with room deletion in the same millisecond.
+    this.db.prepare("UPDATE chat_resume_credentials SET status='revoked',revoked_at=COALESCE(revoked_at,?),revocation_reason='explicit' WHERE id=?").run(now(), row.id);
     return this.credential(row.id);
   }
 }
