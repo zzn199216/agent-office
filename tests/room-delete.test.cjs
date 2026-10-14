@@ -52,7 +52,7 @@ test('preview is read-only; confirmed force deletion cancels all room work atomi
   assert.equal(JSON.parse(db.prepare('SELECT body FROM team_records WHERE id=?').get(goal.id).body).status,'cancelled');
   for(const [table,key]of [['launch_sessions',launch],['onboarding_runs',onboarding],['bridge_setup_tests',check]])assert.equal(db.prepare(`SELECT status FROM ${table} WHERE id=?`).get(key).status,'cancelled');
   s.onboarding.set(onboarding,{status:'ready',stage:'completed'});s.bridge.finishTest(check,'passed','late result');assert.equal(db.prepare('SELECT status FROM onboarding_runs WHERE id=?').get(onboarding).status,'cancelled');assert.equal(s.bridge.test(check).status,'cancelled');
-  assert.equal(c.message(keep.id).status,'queued');assert.equal(c.joined(v.other.id,v.shared.id),true);assert.throws(()=>s.resume.inspect(old),{code:'resume_revoked'});
+  assert.equal(c.message(keep.id).status,'queued');assert.equal(c.joined(v.other.id,v.shared.id),true);assert.equal(s.resume.inspect(old).room_id,v.other.id);
   assert.equal((await forceDeleteRoom(s,v.room.id,preview.confirmation_token)).already_deleted,true);
 });
 
@@ -78,7 +78,7 @@ test('preview and forced DELETE require controller authority and a matching issu
 test('failed force revocation rolls back cancellation and never aborts the owned worker',async t=>{
   const v=setup(t),s=v.service,c=s.chat.store,db=s.store.db,abort=new AbortController();s.entry.issue(v.shared.id,v.room.id);
   const message=c.post({room_id:v.room.id,to_member_id:v.shared.id,text:'keep on rollback',idempotency_key:'rollback'});s.chat.active.set(v.shared.id,{roomId:v.room.id,abort});const preview=deletionPreview(s,v.room.id);
-  db.exec("CREATE TRIGGER fixture_deny_force BEFORE UPDATE OF status ON chat_resume_credentials BEGIN SELECT RAISE(ABORT,'fixture force denied'); END;");
+  db.exec("CREATE TRIGGER fixture_deny_force BEFORE UPDATE ON chat_resume_credentials BEGIN SELECT RAISE(ABORT,'fixture force denied'); END;");
   await assert.rejects(forceDeleteRoom(s,v.room.id,preview.confirmation_token),/fixture force denied/);assert.equal(abort.signal.aborted,false);assert.equal(c.message(message.id).status,'queued');assert.equal(c.room(v.room.id).id,v.room.id);db.exec('DROP TRIGGER fixture_deny_force');s.chat.active.clear();
 });
 
@@ -100,7 +100,7 @@ test('force deletion stops the owned running turn and ignores late output while 
   assert.equal(s.store.db.prepare('SELECT status FROM chat_messages WHERE id=?').get(message.id).status,'cancelled');assert.equal(s.store.db.prepare("SELECT count(*) n FROM chat_messages WHERE room_id=? AND kind='reply'").get(v.room.id).n,0);s.chat.active.clear();
 });
 
-test('controller deletes only one local room atomically, revokes its entrances and keeps shared identities and history',async t=>{
+test('controller deletes only one local room atomically, moves its entrances to each member’s remaining rooms and keeps shared identities and history',async t=>{
   const v=setup(t),s=v.service,db=s.store.db,c=s.chat.store;
   const old=c.post({room_id:v.room.id,text:'retained deleted-room history',idempotency_key:'old'});
   const keep=c.post({room_id:v.other.id,text:'keep other-room history',idempotency_key:'keep'});
@@ -119,18 +119,18 @@ test('controller deletes only one local room atomically, revokes its entrances a
   assert.equal(db.prepare('SELECT joined FROM chat_participants WHERE room_id=? AND member_id=?').get(v.room.id,v.shared.id).joined,0);
   assert.equal(c.joined(v.other.id,v.shared.id),true);
   for(const [table,rows] of Object.entries(unchanged))assert.deepEqual(immutableRows(db,table),rows,table+' must preserve identities and history');
-  assert.deepEqual(db.prepare('SELECT * FROM chat_resume_credentials WHERE room_id=?').all(v.other.id),otherResume);
-  assert.equal(db.prepare('SELECT status FROM chat_resume_credentials WHERE id=?').get(oldCard.credential_id).status,'revoked');
+  assert.deepEqual(db.prepare('SELECT * FROM chat_resume_credentials WHERE room_id=? AND id!=?').all(v.other.id,oldCard.credential_id),otherResume);
+  assert.deepEqual({...db.prepare('SELECT room_id,status FROM chat_resume_credentials WHERE id=?').get(oldCard.credential_id)},{room_id:v.other.id,status:'active'});
   assert.equal(db.prepare('SELECT status FROM chat_invitations WHERE id=?').get(invite.id).status,'revoked');
   assert.equal(c.invite(otherInvite.id).status,'pending');assert.equal(c.message(keep.id).text,'keep other-room history');assert.equal(c.binding(v.other.id,v.shared.id).thread_id,'other-native-session');
   assert.equal(db.prepare('SELECT id FROM bridge_bindings WHERE id=?').get(native.id).id,native.id);assert.equal(s.bridge.store.binding(otherNative.id).room_id,v.other.id);
   assert.deepEqual(fs.readFileSync(card.file),cardRaw);assert.deepEqual(fs.readFileSync(otherCard.file),otherRaw);assert.equal(s.closing,false);assert.equal(fs.readFileSync(path.join(v.project.path,'README.md'),'utf8'),'A local test project.');
   for(const run of [()=>c.room(v.room.id),()=>c.messages(v.room.id),()=>c.message(old.id),()=>c.join(v.room.id,v.shared.id),()=>c.completeInvite(invite.id,invite.nonce),()=>c.invite(invite.id),()=>c.post({room_id:v.room.id,text:'no resurrection',idempotency_key:'replay'}),()=>s.entry.issue(v.shared.id,v.room.id)])assert.throws(run,{status:410,code:'room_deleted'});
-  for(const run of [()=>s.resume.inspect(oldCard),()=>s.resume.accept(oldCard),()=>readEntry(card.file)])assert.throws(run,{status:410,code:'resume_revoked'});
+  for(const run of [()=>s.resume.inspect(oldCard),()=>s.resume.accept(oldCard),()=>readEntry(card.file).card])assert.equal(run().room_id,v.other.id);
   assert.equal(s.resume.inspect(JSON.parse(otherRaw)).valid,true);
   const repeated=deleteRoom(s,v.room.id);assert.equal(repeated.already_deleted,true);assert.equal(repeated.deleted_at,result.deleted_at);assert.equal(s.revision,revision+1);
   const restarted=await v.restart(),disk=openDisk(v.data,{readOnly:true});
-  try{assert.deepEqual(restarted.chat.store.rooms().map(r=>r.id),[v.other.id]);assert.deepEqual(disk.chat.rooms().map(r=>r.id),[v.other.id]);assert.throws(()=>disk.chat.room(v.room.id),{code:'room_deleted'});assert.throws(()=>disk.resume.inspect(oldCard),{code:'resume_revoked'});assert.equal(disk.resume.inspect(JSON.parse(otherRaw)).valid,true);assert.equal(disk.runtime.instanceId,restarted.runtime.instanceId);}finally{disk.close();}
+  try{assert.deepEqual(restarted.chat.store.rooms().map(r=>r.id),[v.other.id]);assert.deepEqual(disk.chat.rooms().map(r=>r.id),[v.other.id]);assert.throws(()=>disk.chat.room(v.room.id),{code:'room_deleted'});assert.equal(disk.resume.inspect(oldCard).room_id,v.other.id);assert.equal(disk.resume.inspect(JSON.parse(otherRaw)).valid,true);assert.equal(disk.runtime.instanceId,restarted.runtime.instanceId);}finally{disk.close();}
   assert.equal(restarted.chat.snapshot().activeMessages.length,0);assert.equal(restarted.codex.calls.length,0);assert.equal(db.isOpen,false);
 });
 
@@ -180,7 +180,7 @@ test('DELETE API authenticates controller, rejects extra scope and is idempotent
 
 test('failed revocation rolls back the tombstone and participants in the same transaction',t=>{
   const v=setup(t),s=v.service,db=s.store.db,card=s.resume.issue(v.shared.id,v.room.id).card;
-  db.exec("CREATE TRIGGER fixture_deny_revocation BEFORE UPDATE OF status ON chat_resume_credentials BEGIN SELECT RAISE(ABORT,'fixture revocation denied'); END;");
+  db.exec("CREATE TRIGGER fixture_deny_revocation BEFORE UPDATE ON chat_resume_credentials BEGIN SELECT RAISE(ABORT,'fixture revocation denied'); END;");
   assert.throws(()=>deleteRoom(s,v.room.id),/fixture revocation denied/);
   assert.equal(s.chat.store.room(v.room.id).id,v.room.id);assert.equal(s.chat.store.joined(v.room.id,v.shared.id),true);assert.equal(db.prepare('SELECT count(*) n FROM chat_room_tombstones').get().n,0);assert.equal(s.resume.inspect(card).valid,true);
   db.exec('DROP TRIGGER fixture_deny_revocation');assert.equal(deleteRoom(s,v.room.id).ok,true);
@@ -192,7 +192,7 @@ test('last room may be deleted, leaving an empty local office without deleting t
   assert.deepEqual(s.chat.store.rooms(),[]);assert.deepEqual(s.snapshot().chat.rooms,[]);assert.deepEqual(s.office.snapshot(),{});assert.deepEqual(s.secretary.snapshot(),{});assert.equal(s.store.projects().length,1);assert.equal(s.chat.store.members().length,1);
 });
 
-test('an already initialized HTTP MCP session and CLI recovering guard cannot wake or revive a deleted room',async t=>{
+test('an already initialized HTTP MCP session and CLI recovering guard cannot wake or revive a deleted room, but keep the member’s other rooms',async t=>{
   const v=setup(t),s=v.service,token=id(),server=createServer(s,{port:0,token}),port=await server.listen(),base='http://127.0.0.1:'+port;
   t.after(()=>server.close());const own=s.entry.issue(v.shared.id,v.room.id),card=JSON.parse(fs.readFileSync(own.file,'utf8'));
   const url=createQwenMcpConfig(base,card).mcpServers.agentroom.url;
@@ -200,8 +200,9 @@ test('an already initialized HTTP MCP session and CLI recovering guard cannot wa
   assert.equal(initialized.status,200);const session=initialized.headers.get('mcp-session-id');assert.ok(session);assert.ok((await initialized.json()).result);
   const credentialBefore=s.resume.credential(card.credential_id);assert.equal(credentialBefore.status,'pending');
   deleteRoom(s,v.room.id);
-  const oldSession=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json','mcp-session-id':session,'mcp-protocol-version':'2025-06-18'},body:JSON.stringify({jsonrpc:'2.0',id:2,method:'tools/call',params:{name:'agentroom_room_ensure',arguments:{}}})});
-  assert.equal(oldSession.status,410);assert.ok((await oldSession.json()).error);
-  let starts=0,dispatches=0;const recovering=createRecoveringApi(v.data,{guard:()=>readEntry(own.file),ensure:async()=>{starts++;},call:async()=>{dispatches++;}});
-  await assert.rejects(recovering('/api/runtime'),{code:'resume_revoked'});assert.equal(starts,0);assert.equal(dispatches,0);assert.equal(s.codex.calls.length,0);assert.equal(s.store.db.prepare('SELECT count(*) n FROM chat_rooms').get().n,2);assert.equal(s.store.db.prepare('SELECT count(*) n FROM chat_resume_credentials').get().n,1);
+  const oldSession=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json','mcp-session-id':session,'mcp-protocol-version':'2025-06-18'},body:JSON.stringify({jsonrpc:'2.0',id:2,method:'tools/call',params:{name:'agentroom_chat_history',arguments:{room_id:v.room.id}}})});
+  const refused=await oldSession.json();assert.ok(refused.error||refused.result?.isError,JSON.stringify(refused));assert.equal(s.chat.store.rooms().some(room=>room.id===v.room.id),false);
+  assert.equal(s.resume.credential(card.credential_id).room_id,v.other.id);assert.equal(readEntry(own.file).card.room_id,v.other.id);
+  let starts=0,dispatches=0;const recovering=createRecoveringApi(v.data,{guard:()=>{readEntry(own.file);throw Object.assign(new Error('fixture stop'),{code:'fixture_stop'});},ensure:async()=>{starts++;},call:async()=>{dispatches++;}});
+  await assert.rejects(recovering('/api/runtime'),{code:'fixture_stop'});assert.equal(starts,0);assert.equal(dispatches,0);assert.equal(s.codex.calls.length,0);assert.equal(s.store.db.prepare('SELECT count(*) n FROM chat_rooms').get().n,2);assert.equal(s.store.db.prepare('SELECT count(*) n FROM chat_resume_credentials').get().n,1);
 });

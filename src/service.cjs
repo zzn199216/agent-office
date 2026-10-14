@@ -20,7 +20,7 @@ class RoomService extends EventEmitter {
     const {RuntimeState}=require('./runtime-state.cjs');this.runtime=new RuntimeState(this.chat.store,{wakeAdapters:['codex','claude-code','qwen-code','gemini-cli']});
     const {SecretaryManager}=require('./secretary.cjs');this.secretary=new SecretaryManager(this);
     const {TeamManager}=require('./team.cjs');this.team=new TeamManager(this,options.team||{});
-    const {ResumeAccess}=require('./resume.cjs');this.resume=new ResumeAccess(this.chat.store,{instanceId:this.runtime.instanceId,dataDirectory:dir});
+    const {ResumeAccess}=require('./resume.cjs');this.resume=new ResumeAccess(this.chat.store,{instanceId:this.runtime.instanceId,dataDirectory:dir});try{this.chat.store.reviveAllCredentials();}catch{}
     const {RoomEntry}=require('./entry.cjs');this.entry=new RoomEntry(this);this.runtimeRef=`service:${process.pid}`;
     const {BridgeManager}=require('./bridge.cjs');this.bridge=new BridgeManager(this.chat,{allowLocalTest:process.env.AGENTROOM_LOCAL_TEST==='1',...options.bridge});
     const {LaunchManager}=require('./launch.cjs');this.launch=new LaunchManager(this,options.launch||{});

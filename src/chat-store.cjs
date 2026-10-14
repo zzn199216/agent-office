@@ -181,7 +181,7 @@ class ChatStore {
       this.db.prepare('INSERT INTO chat_room_tombstones(room_id,deleted_at) VALUES(?,?)').run(roomId,stamp);
       this.db.prepare('UPDATE chat_participants SET joined=0,left_at=? WHERE room_id=? AND joined=1').run(stamp,roomId);
       this.db.prepare("UPDATE chat_invitations SET status='revoked' WHERE room_id=? AND status IN ('pending','verified')").run(roomId);
-      if(hasTable('chat_resume_credentials'))this.db.prepare("UPDATE chat_resume_credentials SET status='revoked',revoked_at=? WHERE room_id=? AND status!='revoked'").run(stamp,roomId);
+      if(hasTable('chat_resume_credentials'))this.rehomeCredentials(roomId);
       if(hasTable('launch_sync_routes'))this.db.prepare("UPDATE launch_sync_routes SET status='pause_requested',updated=? WHERE room_id=?").run(stamp,roomId);
       if(hasTable('launch_watches'))this.db.prepare('UPDATE launch_watches SET enabled=0 WHERE room_id=?').run(roomId);
       return {ok:true,room_id:roomId,status:'deleted',deleted_at:stamp,already_deleted:false};
@@ -205,12 +205,47 @@ class ChatStore {
   join(roomId, memberId) {
     this.room(roomId); this.member(memberId);
     this.db.prepare('INSERT INTO chat_participants(room_id,member_id,joined,joined_at,left_at) VALUES(?,?,1,?,NULL) ON CONFLICT(room_id,member_id) DO UPDATE SET joined=1,joined_at=CASE WHEN chat_participants.joined=1 THEN chat_participants.joined_at ELSE excluded.joined_at END,left_at=NULL').run(roomId, memberId, now());
+    this.reviveCredentials(memberId, roomId);
     return this.participants(roomId).find(member => member.id === memberId);
   }
   leave(roomId, memberId) {
     this.room(roomId); this.member(memberId);
     this.db.prepare('UPDATE chat_participants SET joined=0,left_at=? WHERE room_id=? AND member_id=? AND joined=1').run(now(), roomId, memberId);
+    this.rehomeCredentials(roomId, memberId);
     return { room_id: roomId, member_id: memberId, joined: false };
+  }
+  // A member's connection credential belongs to the member, not to one room.
+  // When its home room is deleted or left, move it to another room the member
+  // is still seated in, so the configuration the client imported keeps working.
+  // With no seat left it simply stops working until the member is seated again.
+  hasCredentialTable() { return !!this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='chat_resume_credentials'").get(); }
+  liveSeat(memberId, exceptRoomId = null) {
+    return this.db.prepare('SELECT p.room_id FROM chat_participants p WHERE p.member_id=? AND p.joined=1 AND p.room_id IS NOT ? AND NOT EXISTS (SELECT 1 FROM chat_room_tombstones t WHERE t.room_id=p.room_id) ORDER BY p.joined_at DESC,p.room_id LIMIT 1').get(memberId, exceptRoomId)?.room_id || null;
+  }
+  rehomeCredentials(roomId, memberId = null) {
+    if (!this.hasCredentialTable()) return;
+    const rows = this.db.prepare("SELECT id,member_id FROM chat_resume_credentials WHERE room_id=? AND status!='revoked'" + (memberId ? ' AND member_id=?' : '')).all(...(memberId ? [roomId, memberId] : [roomId]));
+    for (const row of rows) { const next = this.liveSeat(row.member_id, roomId); if (next) this.db.prepare('UPDATE chat_resume_credentials SET room_id=? WHERE id=?').run(next, row.id); }
+  }
+  // When a member is seated and none of its credentials lives in a room it
+  // sits in, bring back its newest one: a credential stranded by leaving or
+  // deleting rooms, or one older versions revoked only because its room was
+  // deleted. Credentials the user revoked explicitly stay revoked.
+  reviveCredentials(memberId, roomId = null) {
+    if (!this.hasCredentialTable()) return false;
+    if (this.db.prepare("SELECT 1 FROM chat_resume_credentials c JOIN chat_participants p ON p.room_id=c.room_id AND p.member_id=c.member_id AND p.joined=1 WHERE c.member_id=? AND c.status!='revoked' AND NOT EXISTS (SELECT 1 FROM chat_room_tombstones t WHERE t.room_id=c.room_id)").get(memberId)) return false;
+    const target = roomId && this.joined(roomId, memberId) ? roomId : this.liveSeat(memberId);
+    if (!target) return false;
+    const row = this.db.prepare("SELECT c.id FROM chat_resume_credentials c LEFT JOIN chat_room_tombstones t ON t.room_id=c.room_id WHERE c.member_id=? AND (c.status!='revoked' OR c.revoked_at=t.deleted_at) ORDER BY (c.accepted_at IS NOT NULL) DESC,COALESCE(c.last_seen,c.created) DESC LIMIT 1").get(memberId);
+    if (!row) return false;
+    this.db.prepare("UPDATE chat_resume_credentials SET room_id=?,status=CASE WHEN accepted_at IS NULL THEN 'pending' ELSE 'active' END,revoked_at=NULL WHERE id=?").run(target, row.id);
+    return true;
+  }
+  reviveAllCredentials() {
+    if (!this.hasCredentialTable()) return 0;
+    let revived = 0;
+    for (const { member_id } of this.db.prepare('SELECT DISTINCT member_id FROM chat_participants WHERE joined=1').all()) if (this.reviveCredentials(member_id)) revived++;
+    return revived;
   }
   messages(roomId, options = {}) {
     this.room(roomId);

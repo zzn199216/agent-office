@@ -9,7 +9,7 @@ function openDisk(dir,{readOnly=false}={}){
 function readEntry(file){
   file=path.resolve(cleanText(file,4096,'本机入口卡路径'));const b=fs.readFileSync(file);if(b.length>64000)throw new RoomError('本机入口卡过大。');let card;try{card=JSON.parse(b.toString('utf8'));}catch{throw new RoomError('本机入口卡格式无效。');}
   if(card?.schema!=='agentroom.resume'||card.version!==1||typeof card.data_directory!=='string')throw new RoomError('本机入口卡格式无效。');
-  const dir=resolveDataDirectory(card.data_directory),disk=openDisk(dir,{readOnly:true});try{disk.resume.inspect(card);}finally{disk.close();}
+  const dir=resolveDataDirectory(card.data_directory),disk=openDisk(dir,{readOnly:true});try{card={...card,room_id:disk.resume.inspect(card).room_id};}finally{disk.close();}
   return {file,dir,card};
 }
 function diskState(dir,entry,scope={}){const disk=openDisk(dir,{readOnly:true});try{if(entry)disk.resume.inspect(entry.card);return {...disk.runtime.offlineSnapshot(entry?.card.room_id||scope.roomId,entry?.card.member_id||scope.memberId),data_directory:fs.realpathSync.native(dir),transport:'disk',ui_required:false};}finally{disk.close();}}
@@ -22,7 +22,7 @@ class RoomEntry {
   describe(memberId,roomId){
     this.service.chat.store.requireParticipant(roomId,memberId);
     const file=path.join(this.service.store.dir,'entries',`${memberId}-${roomId}.json`),own=ownCommand();let status='missing';
-    try{if(fs.statSync(file).size>64000)throw new RoomError('本机入口卡过大。');const card=JSON.parse(fs.readFileSync(file,'utf8'));if(card.member_id!==memberId||card.room_id!==roomId)throw new RoomError('本机入口卡身份不匹配。');status=this.service.resume.inspect(card).credential.status;}catch(e){if(e.code!=='ENOENT')status=e.code==='resume_revoked'?'revoked':'invalid';}
+    try{if(fs.statSync(file).size>64000)throw new RoomError('本机入口卡过大。');const card=JSON.parse(fs.readFileSync(file,'utf8'));if(card.member_id!==memberId)throw new RoomError('本机入口卡身份不匹配。');const seen=this.service.resume.inspect(card);status=seen.room_id===roomId?seen.credential.status:'moved';}catch(e){if(e.code!=='ENOENT')status=e.code==='resume_revoked'?'revoked':'invalid';}
     return {file,status,available:['pending','active'].includes(status),mcp:{mcpServers:{agentroom:{command:own.command,args:[...own.args,'mcp','--entry',file],env:{AGENTROOM_MEMBER_ID:memberId,AGENTROOM_ROOM_ID:roomId}}}}};
   }
   // The member's working credential: an entry it already has in any room it
@@ -36,7 +36,7 @@ class RoomEntry {
   issue(memberId,roomId,options={}){
     const {chat,resume,runtime}=this.service;chat.store.requireParticipant(roomId,memberId);
     const file=path.join(this.service.store.dir,'entries',`${memberId}-${roomId}.json`);let credential;
-    try{const bytes=fs.readFileSync(file);if(bytes.length>64000)throw new RoomError('本机入口卡过大。',400,'invalid_resume_card');const card=JSON.parse(bytes.toString('utf8'));if(card.member_id!==memberId||card.room_id!==roomId)throw new RoomError('本机入口卡身份不匹配。',403,'resume_scope_mismatch');credential=resume.inspect(card).credential;}catch(e){
+    try{const bytes=fs.readFileSync(file);if(bytes.length>64000)throw new RoomError('本机入口卡过大。',400,'invalid_resume_card');const card=JSON.parse(bytes.toString('utf8'));if(card.member_id!==memberId)throw new RoomError('本机入口卡身份不匹配。',403,'resume_scope_mismatch');const seen=resume.inspect(card);if(seen.room_id===roomId)credential=seen.credential;}catch(e){
       const damaged=e instanceof SyntaxError||['invalid_resume_card','invalid_request','resume_scope_mismatch','resume_instance_mismatch'].includes(e.code);
       if(damaged&&options.repair_invalid===true){
         // Only explicit user setup can repair a corrupt card. Keep its bytes

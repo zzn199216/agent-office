@@ -95,12 +95,14 @@ class ResumeAccess {
     if (parsed.instance_id !== this.instanceId) throw new RoomError('连接到了另一个聊天室实例；请按入口卡定位原数据目录，不要创建替代聊天室。', 409, 'resume_instance_mismatch');
     const row = this.db.prepare('SELECT * FROM chat_resume_credentials WHERE id=?').get(parsed.credential_id);
     if (!row || row.instance_id !== this.instanceId) throw new RoomError('原实例中没有这张入口卡；请向原聊天室获取恢复入口。', 404, 'resume_not_found');
-    if (row.room_id !== parsed.room_id || row.member_id !== parsed.member_id) throw new RoomError('入口卡与授权的成员或聊天室不匹配。', 403, 'resume_scope_mismatch');
+    // The card's room is only where it was first issued; the credential may
+    // have moved with its member when that room was deleted or left.
+    if (row.member_id !== parsed.member_id) throw new RoomError('入口卡与授权的成员或聊天室不匹配。', 403, 'resume_scope_mismatch');
     const hash = crypto.createHash('sha256').update(parsed.secret).digest();
     if (!crypto.timingSafeEqual(hash, Buffer.from(row.secret_hash, 'hex'))) throw new RoomError('恢复入口凭据无效。', 403, 'invalid_resume_secret');
     if (row.status === 'revoked') throw new RoomError('恢复入口已撤销，请从原聊天室获取新的入口卡。', 410, 'resume_revoked');
     this.chat.requireParticipant(row.room_id, row.member_id);
-    return { row, card: parsed };
+    return { row, card: { ...parsed, room_id: row.room_id } };
   }
   inspect(card) {
     const { row, card: parsed } = this.validate(card);

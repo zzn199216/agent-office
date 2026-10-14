@@ -70,7 +70,7 @@ function createMcpHttp(service, options = {}) {
       if (typeof key === 'string') sessions.delete(key);
       throw new RoomError('MCP 会话不存在或已结束，请重新初始化。', key ? 404 : 400, 'mcp_session_missing');
     }
-    if (session.credentialId !== card.credential_id || session.memberId !== card.member_id || session.roomId !== card.room_id || session.instanceId !== card.instance_id) throw new RoomError('MCP 会话与成员入口不匹配。', 403, 'mcp_session_mismatch');
+    if (session.credentialId !== card.credential_id || session.memberId !== card.member_id || session.instanceId !== card.instance_id) throw new RoomError('MCP 会话与成员入口不匹配。', 403, 'mcp_session_mismatch');
     const protocol = req.headers['mcp-protocol-version'];
     if (protocol && protocol !== session.protocol) throw new RoomError('MCP 协议版本与会话不匹配。', 400, 'mcp_protocol_mismatch');
     session.expires = Date.now() + SESSION_LEASE;

@@ -71,7 +71,8 @@ test('wrong instances, members, rooms, versions and secrets cannot be accepted o
   const state = setup(t), issued = state.access.issue(state.member.id, state.room.id), card = issued.card;
   assert.throws(() => state.access.accept({ ...card, instance_id: 'different-existing-instance' }), { status: 409, code: 'resume_instance_mismatch' });
   assert.throws(() => state.access.accept({ ...card, member_id: 'different-member' }), { status: 403, code: 'resume_scope_mismatch' });
-  assert.throws(() => state.access.accept({ ...card, room_id: 'different-room' }), { status: 403, code: 'resume_scope_mismatch' });
+  // The card's room is only a hint: the credential's own room always decides the scope.
+  assert.equal(state.access.inspect({ ...card, room_id: 'different-room' }).room_id, state.room.id);
   assert.throws(() => state.access.accept({ ...card, credential_id: 'unknown-credential' }), { status: 404, code: 'resume_not_found' });
   assert.throws(() => state.access.accept({ ...card, secret: 'a'.repeat(43) }), { status: 403, code: 'invalid_resume_secret' });
   assert.throws(() => state.access.accept({ ...card, version: 2 }), { code: 'invalid_resume_card' });

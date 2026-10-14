@@ -169,3 +169,36 @@ test('Qwen import configuration is local Streamable HTTP and refuses external cr
   assert.ok(config.mcpServers.agentroom.url.startsWith(`${h.base}/mcp/${h.first.card.credential_id}/`));
   for (const destination of ['https://127.0.0.1:9999', 'http://example.com:9999', `${h.base}/other`, `${h.base}?q=1`]) assert.throws(() => createQwenMcpConfig(destination, h.first.card), { code: 'invalid_mcp_address' });
 });
+
+test('an imported HTTP MCP address survives deleting its room and keeps working in the next room', async t => {
+  const h = await setup(t), url = h.endpoint(h.first.card);
+  await h.initialize(h.first.card);
+  // The user deletes the only room, makes a new one and adds the same colleague.
+  h.service.chat.store.deleteRoom(h.room.id, () => {}, { force: true });
+  const fresh = h.service.chat.addRoom({ title: '1', project_id: h.project.id });
+  h.service.chat.join(fresh.id, h.first.person.id); h.service.chat.join(fresh.id, h.second.person.id);
+  assert.equal(h.endpoint(h.first.card), url);
+  const session = await h.initialize(h.first.card);
+  const peer = await h.initialize(h.second.card);
+  const posted = await h.invoke(h.second.card, peer, 'agentroom_chat_post', { room_id: fresh.id, to_member_id: h.first.person.id, text: '你好', idempotency_key: 'after-delete' });
+  assert.notEqual(posted.data.result.isError, true, posted.raw);
+  const inbox = await h.invoke(h.first.card, session, 'agentroom_chat_inbox');
+  assert.notEqual(inbox.data.result.isError, true, inbox.raw);
+  assert.deepEqual(inbox.data.result.structuredContent.items.map(item => item.text), ['你好']);
+});
+
+test('credentials earlier versions revoked with a deleted room come back when the colleague is seated again', async t => {
+  const h = await setup(t), store = h.service.chat.store, db = h.service.store.db;
+  const fresh = h.service.chat.addRoom({ title: '1', project_id: h.project.id });
+  // Reproduce the old behaviour: deletion revoked the room's credentials.
+  store.deleteRoom(h.room.id, () => {}, { force: true });
+  const stamp = db.prepare('SELECT deleted_at FROM chat_room_tombstones WHERE room_id=?').get(h.room.id).deleted_at;
+  db.prepare("UPDATE chat_resume_credentials SET status='revoked',revoked_at=? WHERE room_id=?").run(stamp, h.room.id);
+  h.service.chat.join(fresh.id, h.first.person.id);
+  assert.equal(h.service.resume.credential(h.first.card.credential_id).status, 'pending');
+  assert.equal(h.service.resume.credential(h.first.card.credential_id).room_id, fresh.id);
+  // An explicit revocation is never undone.
+  h.service.resume.revoke(h.first.card.credential_id);
+  store.leave(fresh.id, h.first.person.id); h.service.chat.join(fresh.id, h.first.person.id);
+  assert.equal(h.service.resume.credential(h.first.card.credential_id).status, 'revoked');
+});
