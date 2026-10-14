@@ -346,6 +346,10 @@ test('the real stdio entry follows its credential after deletion without restart
   child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
   await request('tools/call', { name: 'agentroom_room_state', arguments: {} });
   h.service.chat.store.deleteRoom(h.room.id, () => {}, { force: true });
+  const empty = await request('tools/call', { name: 'agentroom_chat_rooms', arguments: {} });
+  assert.deepEqual(empty.structuredContent.rooms, []);
+  await request('tools/list', {});
+  assert.deepEqual(diskState(h.data, entry).rooms, []);
   const fresh = h.service.chat.addRoom({ project_id: h.project.id, title: '重新加入的房间' });
   h.service.chat.join(fresh.id, member.id);
   const state = await request('tools/call', { name: 'agentroom_room_state', arguments: {} });

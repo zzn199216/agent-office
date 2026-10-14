@@ -158,7 +158,7 @@ test('accepting an already verified member preserves native verification and run
   assert.equal(accepted.credential.last_seen, accepted.last_seen);
 });
 
-test('revocation persists across restart and leaving the room prevents credential resurrection', t => {
+test('revocation persists across restart while leaving a room preserves identity without granting its messages', t => {
   const state = setup(t), issued = state.access.issue(state.member.id, state.room.id);
   state.access.accept(issued.card);
   const first = state.access.revoke(issued.credential.id), second = state.access.revoke(issued.credential.id);
@@ -168,9 +168,10 @@ test('revocation persists across restart and leaving the room prevents credentia
   assert.throws(() => state.access.accept(issued.card), { status: 410, code: 'resume_revoked' });
   const other = state.access.issue(state.member.id, state.room.id);
   state.chat.leave(state.room.id, state.member.id);
-  assert.throws(() => state.access.accept(other.card), { status: 403, code: 'not_in_room' });
+  assert.equal(state.access.accept(other.card).room, null);
   assert.equal(state.chat.joined(state.room.id, state.member.id), false);
-  assert.equal(state.access.credential(other.credential.id).status, 'pending');
+  assert.equal(state.access.credential(other.credential.id).status, 'active');
+  assert.throws(() => state.chat.requireParticipant(state.room.id,state.member.id), { code: 'not_in_room' });
   assert.throws(() => state.access.issue(state.member.id, state.room.id), { code: 'not_in_room' });
 });
 

@@ -1,14 +1,13 @@
 'use strict';
 const crypto = require('node:crypto');
 const { tools, toolCall, toolResult } = require('./mcp.cjs');
-const { memberTools } = require('./member-policy.cjs');
+const { memberTools, memberConnection, proxyFor, MEMBER_CONNECTION_INSTRUCTIONS } = require('./member-policy.cjs');
 const { assertEntryScope } = require('./entry.cjs');
 const { CARD_SCHEMA, CARD_VERSION } = require('./resume.cjs');
 const { VERSION, RoomError, ownCommand, readableError } = require('./util.cjs');
 
 const PROTOCOLS = ['2025-03-26', '2025-06-18'];
 const MAX_BODY = 64 * 1024;
-const SESSION_LEASE = 30 * 60 * 1000;
 const UUID = '[a-f0-9-]{36}';
 
 // This URL is a local member credential. Keep the generated config in a local
@@ -38,7 +37,15 @@ async function readBody(req) {
 }
 
 function createMcpHttp(service, options = {}) {
-  const sessions = new Map();
+  const db = service.store.db;
+  // Protocol state survives backend updates. Every request still authenticates
+  // the member credential and checks current seats; this is not presence proof.
+  db.exec(`CREATE TABLE IF NOT EXISTS mcp_http_sessions (
+    session_hash TEXT PRIMARY KEY, credential_id TEXT NOT NULL REFERENCES chat_resume_credentials(id),
+    instance_id TEXT NOT NULL, member_id TEXT NOT NULL REFERENCES chat_members(id),
+    protocol TEXT NOT NULL, initialized INTEGER NOT NULL DEFAULT 0, updated INTEGER NOT NULL
+  );`);
+  const sessionHash = key => crypto.createHash('sha256').update(key).digest('hex');
   const call = options.api || ((route, input) => require('./main.cjs').apiCall(service.store.dir, route, input));
   const disk = { store: service.store, chat: service.chat.store };
   function cardFor(credentialId, secret) {
@@ -47,8 +54,8 @@ function createMcpHttp(service, options = {}) {
     service.resume.inspect(card);
     return card;
   }
-  function isProxy(card) { return !!service.launch.lookup(card.member_id, card.room_id); }
-  function contextFor(card) { return { env: { AGENTROOM_MEMBER_ID: card.member_id, AGENTROOM_ROOM_ID: card.room_id, AGENTROOM_SETUP_MODE: '0', AGENTROOM_CALLER: service.chat.store.member(card.member_id).name }, proxy: isProxy(card), allowJoin: false, secretary: service.secretary.get(card.room_id).member_id === card.member_id }; }
+  function isProxy(card) { return !!proxyFor(disk, card); }
+  function contextFor(card) { return { env: { AGENTROOM_MEMBER_ID: card.member_id, AGENTROOM_ROOM_ID: card.room_id, AGENTROOM_SETUP_MODE: '0', AGENTROOM_CALLER: service.chat.store.member(card.member_id).name }, proxy: isProxy(card), allowJoin: false, secretary: service.chat.store.joined(card.room_id,card.member_id) && service.secretary.get(card.room_id).member_id === card.member_id, connection: memberConnection(disk, card) }; }
   function allowedTools(card) { return memberTools(tools, contextFor(card)); }
   function assertRoute(card, route, input) {
     service.resume.inspect(card);
@@ -65,15 +72,14 @@ function createMcpHttp(service, options = {}) {
     };
   }
   function sessionFor(req, card) {
-    const key = req.headers['mcp-session-id'], session = typeof key === 'string' ? sessions.get(key) : null;
-    if (!session || session.expires <= Date.now()) {
-      if (typeof key === 'string') sessions.delete(key);
+    const key = req.headers['mcp-session-id'], session = typeof key === 'string' ? db.prepare('SELECT session_hash,credential_id AS credentialId,instance_id AS instanceId,member_id AS memberId,protocol,initialized FROM mcp_http_sessions WHERE session_hash=?').get(sessionHash(key)) : null;
+    if (!session) {
       throw new RoomError('MCP 会话不存在或已结束，请重新初始化。', key ? 404 : 400, 'mcp_session_missing');
     }
     if (session.credentialId !== card.credential_id || session.memberId !== card.member_id || session.instanceId !== card.instance_id) throw new RoomError('MCP 会话与成员入口不匹配。', 403, 'mcp_session_mismatch');
     const protocol = req.headers['mcp-protocol-version'];
     if (protocol && protocol !== session.protocol) throw new RoomError('MCP 协议版本与会话不匹配。', 400, 'mcp_protocol_mismatch');
-    session.expires = Date.now() + SESSION_LEASE;
+    db.prepare('UPDATE mcp_http_sessions SET updated=? WHERE session_hash=?').run(Date.now(), session.session_hash);
     return session;
   }
   async function handle(req, res, givenUrl) {
@@ -88,8 +94,10 @@ function createMcpHttp(service, options = {}) {
       if (!['127.0.0.1', 'localhost'].includes(local.hostname) || req.headers.origin && req.headers.origin !== local.origin) throw new RoomError('不接受跨站 MCP 请求。', 403, 'invalid_mcp_origin');
       card = cardFor(match[1], match[2]);
     } catch (error) {
-      const status = error.status === 410 ? 410 : error.status === 403 ? 403 : 401;
-      rpcError(res, null, -32001, status === 410 ? 'MCP 入口已撤销。' : 'MCP 入口认证失败。', status); return true;
+      const paused = ['room_deleted', 'not_in_room'].includes(error.code);
+      const status = error.code === 'resume_revoked' ? 410 : paused || error.status === 403 ? 403 : 401;
+      const message = paused ? '成员暂未加入可用房间，原 MCP 凭据保留。请在 Agent Office 将同一成员加入房间后重试，无需重新配置 MCP。' : status === 410 ? 'MCP 入口已撤销。' : 'MCP 入口认证失败。';
+      rpcError(res, null, -32001, message, status); return true;
     }
     if (req.method !== 'POST') { res.setHeader('Allow', 'POST'); rpcError(res, null, -32600, '此 MCP 入口只提供 POST JSON，不提供服务器事件流。', 405); return true; }
     const protocol = req.headers['mcp-protocol-version'];
@@ -102,17 +110,21 @@ function createMcpHttp(service, options = {}) {
     try {
       if (request.method === 'initialize') {
         if (request.id === undefined || req.headers['mcp-session-id']) throw new RoomError('MCP 初始化需要请求标识且不能复用会话头。');
-        for (const [key, value] of sessions) if (value.expires <= Date.now()) sessions.delete(key);
-        if (sessions.size >= 512) throw new RoomError('MCP 会话数量已达上限，请稍后再试。', 503, 'mcp_sessions_full');
         const selected = PROTOCOLS.includes(request.params?.protocolVersion) ? request.params.protocolVersion : PROTOCOLS.at(-1);
         const key = crypto.randomBytes(24).toString('base64url');
-        sessions.set(key, { credentialId: card.credential_id, instanceId: card.instance_id, memberId: card.member_id, roomId: card.room_id, protocol: selected, initialized: false, expires: Date.now() + SESSION_LEASE });
-        json(res, { jsonrpc: '2.0', id: request.id, result: { protocolVersion: selected, capabilities: { tools: {} }, serverInfo: { name: 'agentroom-local', version: VERSION } } }, 200, { 'Mcp-Session-Id': key });
+        service.chat.store.transaction(() => {
+          db.prepare("DELETE FROM mcp_http_sessions WHERE instance_id!=? OR credential_id IN (SELECT id FROM chat_resume_credentials WHERE status='revoked')").run(card.instance_id);
+          // Bound storage without a short idle timeout that makes desktop
+          // clients discard a connection between conversations.
+          db.exec('DELETE FROM mcp_http_sessions WHERE session_hash IN (SELECT session_hash FROM mcp_http_sessions ORDER BY updated DESC,session_hash LIMIT -1 OFFSET 511)');
+          db.prepare('INSERT INTO mcp_http_sessions(session_hash,credential_id,instance_id,member_id,protocol,initialized,updated) VALUES(?,?,?,?,?,0,?)').run(sessionHash(key), card.credential_id, card.instance_id, card.member_id, selected, Date.now());
+        });
+        json(res, { jsonrpc: '2.0', id: request.id, result: { protocolVersion: selected, capabilities: { tools: {} }, serverInfo: { name: 'agentroom-local', version: VERSION }, instructions: MEMBER_CONNECTION_INSTRUCTIONS } }, 200, { 'Mcp-Session-Id': key });
         return true;
       }
       const session = sessionFor(req, card);
       if (request.id === undefined) {
-        if (request.method === 'notifications/initialized') session.initialized = true;
+        if (request.method === 'notifications/initialized') db.prepare('UPDATE mcp_http_sessions SET initialized=1 WHERE session_hash=?').run(session.session_hash);
         res.writeHead(202, { 'Cache-Control': 'no-store' }); res.end(); return true;
       }
       let result;
@@ -136,6 +148,6 @@ function createMcpHttp(service, options = {}) {
     } catch (error) { rpcError(res, request.id, -32600, readableError(error).replaceAll(card.secret, '[credential]'), error.status || 400); }
     return true;
   }
-  return { handle, close: () => sessions.clear() };
+  return { handle, close() {} };
 }
 module.exports = { createMcpHttp, createQwenMcpConfig };

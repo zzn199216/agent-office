@@ -221,7 +221,7 @@ class ChatStore {
   // A member's connection credential belongs to the member, not to one room.
   // When its home room is deleted or left, move it to another room the member
   // is still seated in, so the configuration the client imported keeps working.
-  // With no seat left it simply stops working until the member is seated again.
+  // With no seat left the identity stays connected with no room access.
   hasCredentialTable() { return !!this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='chat_resume_credentials'").get(); }
   liveSeat(memberId, exceptRoomId = null) {
     return this.db.prepare('SELECT p.room_id FROM chat_participants p WHERE p.member_id=? AND p.joined=1 AND p.room_id IS NOT ? AND NOT EXISTS (SELECT 1 FROM chat_room_tombstones t WHERE t.room_id=p.room_id) ORDER BY p.joined_at DESC,p.room_id LIMIT 1').get(memberId, exceptRoomId)?.room_id || null;

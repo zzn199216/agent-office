@@ -368,6 +368,9 @@ test('each client gets the one connection method it can actually use', async t =
   const config = JSON.parse(qwen.copy).mcpServers.AgentOffice;
   assert.equal(config.type, 'streamable-http'); assert.match(config.url, /^http:\/\/127\.0\.0\.1:47831\/mcp\//);
   assert.ok(qwen.steps.some(step => step.includes('代码解释器')), 'Qwen is warned off its cloud code interpreter');
+  assert.ok(qwen.steps.some(step => step.includes('StreamableHTTP') && step.includes('SSE')));
+  assert.ok(qwen.bootstrap.includes('agentroom_chat_rooms')); assert.ok(qwen.bootstrap.includes('不传 room_id'));
+  assert.equal(qwen.bootstrap.includes(room.id), false);
   const desktop = service.chat.setup(make('Claude 桌面客户端', 'mailbox', 'claude-desktop').id, room.id).client;
   assert.equal(desktop.kind, 'stdio_json');
   const stdio = JSON.parse(desktop.copy).mcpServers.agentoffice;

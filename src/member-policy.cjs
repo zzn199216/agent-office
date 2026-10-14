@@ -1,5 +1,6 @@
 'use strict';
-const { RoomError } = require('./util.cjs');
+const { RoomError, VERSION } = require('./util.cjs');
+const MEMBER_CONNECTION_INSTRUCTIONS = 'This MCP authenticates one member in one persistent Agent Office instance. Its credential is reused in all rooms the user has seated that member in; the entry card room_id is a default, not a permanent room restriction. After room changes call agentroom_chat_rooms for current seats. Call agentroom_chat_inbox without room_id to read addressed messages across all current seats. Do not ask for another entry card or MCP configuration merely because a room changed. Claim connection, room identity or an empty inbox only from an actual successful tool result, never from conversation memory.';
 
 const MEMBER_TOOLS = new Set([
   'agentroom_room_state', 'agentroom_room_ensure', 'agentroom_member_wake', 'agentroom_heartbeat',
@@ -18,6 +19,11 @@ const UUID = '[a-f0-9-]{36}';
 function proxyFor(disk, scope) {
   const exists = disk.store.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='launch_proxies'").get();
   return exists ? disk.store.db.prepare('SELECT backend_member_id FROM launch_proxies WHERE room_id=? AND proxy_member_id=?').get(scope.room_id, scope.member_id) : null;
+}
+function memberConnection(disk, scope) {
+  const proxy = proxyFor(disk, scope);
+  const rooms = disk.chat.rooms().filter(room => disk.chat.joined(room.id, scope.member_id) && (!proxy || room.id === scope.room_id)).map(room => ({ id: room.id, title: room.title }));
+  return { server_version: VERSION, instance_id: scope.instance_id || disk.runtime?.instanceId, member_id: scope.member_id, default_room_id: rooms.some(room=>room.id===scope.room_id)?scope.room_id:null, room_scope: proxy ? 'fixed_proxy' : 'joined_rooms', rooms };
 }
 function memberTools(tools, { env = process.env, proxy = false, allowJoin = true } = {}) {
   const member = env.AGENTROOM_MEMBER_ID, room = env.AGENTROOM_ROOM_ID;
@@ -51,17 +57,17 @@ function requestRoom(disk, scope, p, q, input) {
 }
 function assertMemberRoute(disk, home, route, input, { allowJoin = false } = {}) {
   const member = home.member_id, url = new URL(route, 'http://127.0.0.1'), p = url.pathname, q = url.searchParams;
-  disk.chat.requireParticipant(home.room_id, member);
+  disk.chat.member(member);
   const denied = () => { throw new RoomError('请求超出了当前成员的房间授权；管理操作请使用本机控制界面。', 403, 'resume_scope_mismatch'); };
   // A member's own inbox across all of its rooms needs no room at all.
   if (input === undefined && p === '/api/chat/inbox' && q.get('member_id') === member && !q.has('room_id')) return;
   if (input === undefined && p === `/api/chat/members/${member}/rooms`) return;
+  if (p === `/api/chat/members/${member}/heartbeat` && input && Object.keys(input).length===0) return;
+  if (p === '/api/resume/accept' && input?.card?.member_id===member && input.card.instance_id===home.instance_id && input.card.credential_id===home.credential_id) return;
   const room = requestRoom(disk, home, p, q, input);
-  if (room !== home.room_id) {
-    if (proxyFor(disk, home)) denied();
-    const joining = (p === '/api/chat/join' || /^\/api\/chat\/invitations\//.test(p)) && allowJoin;
-    if (!joining) { try { disk.chat.requireParticipant(room, member); } catch { denied(); } }
-  }
+  if (room !== home.room_id && proxyFor(disk, home)) denied();
+  const joining = (p === '/api/chat/join' || /^\/api\/chat\/invitations\//.test(p)) && allowJoin;
+  if (!joining) { try { disk.chat.requireParticipant(room, member); } catch { denied(); } }
   const scope = { ...home, room_id: room };
   if (q.has('room_id') && q.get('room_id') !== room || q.has('member_id') && q.get('member_id') !== member || input?.room_id && input.room_id !== room || input?.sender_id && input.sender_id !== member || input?.caller_member_id && input.caller_member_id !== member) denied();
   const messageRoute = p.match(new RegExp(`^/api/chat/messages/(${UUID})(?:/(wait|reply|ack|cancel))?$`, 'i'));
@@ -130,4 +136,4 @@ function assertMemberRoute(disk, home, route, input, { allowJoin = false } = {})
   }
   if (!permitted) denied();
 }
-module.exports = { MEMBER_TOOLS, PROXY_TOOLS, SETUP_TOOLS, TEAM_TOOLS, TEAM_SECRETARY_TOOLS, TEAM_INSTRUCTIONS, memberTools, proxyFor, assertMemberRoute };
+module.exports = { MEMBER_TOOLS, PROXY_TOOLS, SETUP_TOOLS, TEAM_TOOLS, TEAM_SECRETARY_TOOLS, TEAM_INSTRUCTIONS, MEMBER_CONNECTION_INSTRUCTIONS, memberConnection, memberTools, proxyFor, assertMemberRoute };

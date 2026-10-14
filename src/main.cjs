@@ -45,7 +45,7 @@ async function serve(dir,options={}){
     fs.unlinkSync(lock);fd=fs.openSync(lock,'wx');
   }
   fs.writeFileSync(fd,JSON.stringify({pid:process.pid}));fs.closeSync(fd);
-  const {RoomService}=require('./service.cjs');const {createServer}=require('./http.cjs');
+  const {RoomService}=require('./service.cjs');
   const service=new RoomService(dir);let server;let stopped=false;
   const stop=async()=>{
     if(stopped)return;stopped=true;
@@ -56,15 +56,8 @@ async function serve(dir,options={}){
   };
   try{
     const token=crypto.randomBytes(32).toString('hex');
-    server=createServer(service,{token,port:Number(options.port??47831),onShutdown:()=>stop().then(()=>process.exit(0))});
-    let port;
-    // Desktop chat clients store this address in their MCP settings, so stay on
-    // a small fixed range before falling back to a random port.
-    const preferred=Number(options.port??47831);
-    for(let offset=0;!port;offset++){
-      try{port=await server.listen();}catch(e){if(e.code!=='EADDRINUSE')throw e;await server.close();
-        const next=options.port===undefined&&offset<8?preferred+offset+1:0;server=createServer(service,{token,port:next,onShutdown:()=>stop().then(()=>process.exit(0))});if(!next){port=await server.listen();}}
-    }
+    const listener=await require('./http-listener.cjs').listenLocal(service,{token,port:options.port,onShutdown:()=>stop().then(()=>process.exit(0))});
+    server=listener.server;const port=listener.port;
     atomicWrite(path.join(dir,'control.json'),JSON.stringify({pid:process.pid,url:`http://127.0.0.1:${port}`,token,version:VERSION,instance_id:service.runtime.instanceId}));
     if(options.project)service.addProject({path:options.project,name:options.name});
     if(options['import-grok']){service.vault.import(path.resolve(options['import-grok']));service.changed();}
@@ -116,7 +109,14 @@ async function main(args=process.argv.slice(2)){
   if(command==='stop'){if(entry)throw new RoomError('停止整个处理程序属于本机管理操作，请不用成员入口卡执行。',403,'resume_scope_mismatch');await apiCall(dir,'/api/shutdown',{idle_only:true});print({stopping:true});return;}
   const memberScope=entry?.card||(command==='mcp'&&(process.env.AGENTROOM_MEMBER_ID||process.env.AGENTROOM_ROOM_ID)?{member_id:process.env.AGENTROOM_MEMBER_ID,room_id:process.env.AGENTROOM_ROOM_ID}:null);
   if(memberScope&&(!memberScope.member_id||!memberScope.room_id))throw new RoomError('成员 MCP 必须同时绑定成员和房间。',403,'resume_scope_mismatch');
-  const inspectScope=(route,input)=>{const mod=require('./entry.cjs'),disk=mod.openDisk(dir,{readOnly:true});try{if(entry)memberScope.room_id=disk.resume.inspect(entry.card).room_id;else disk.chat.requireParticipant(memberScope.room_id,memberScope.member_id);if(route)require('./member-policy.cjs').assertMemberRoute(disk,memberScope,route,input,{allowJoin:!entry});return {env:{...process.env,AGENTROOM_MEMBER_ID:memberScope.member_id,AGENTROOM_ROOM_ID:memberScope.room_id},proxy:!!require('./member-policy.cjs').proxyFor(disk,memberScope),allowJoin:!entry,secretary:disk.store.setting('secretary.'+memberScope.room_id)?.member_id===memberScope.member_id};}finally{disk.close();}};
+  const inspectScope=(route,input)=>{
+    const mod=require('./entry.cjs'),policy=require('./member-policy.cjs'),disk=mod.openDisk(dir,{readOnly:true});
+    try{
+      if(entry)memberScope.room_id=disk.resume.inspect(entry.card).room_id;else disk.chat.requireParticipant(memberScope.room_id,memberScope.member_id);
+      if(route)policy.assertMemberRoute(disk,memberScope,route,input,{allowJoin:!entry});
+      return {env:{...process.env,AGENTROOM_MEMBER_ID:memberScope.member_id,AGENTROOM_ROOM_ID:memberScope.room_id},proxy:!!policy.proxyFor(disk,memberScope),allowJoin:!entry,secretary:disk.store.setting('secretary.'+memberScope.room_id)?.member_id===memberScope.member_id,connection:policy.memberConnection(disk,memberScope)};
+    }finally{disk.close();}
+  };
   const guard=memberScope?inspectScope:undefined;
   const baseApi=createRecoveringApi(dir,{guard});const api=async(route,input)=>{if(entry){await guard(route,input);await baseApi('/api/resume/accept',{card:entry.card});}return baseApi(route,input);};
   api.diskState=args=>{if(memberScope)inspectScope();return require('./entry.cjs').diskState(dir,entry,{roomId:args?.room_id||memberScope?.room_id||options.room,memberId:memberScope?.member_id||options.member});};

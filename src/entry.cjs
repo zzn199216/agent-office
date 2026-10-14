@@ -12,7 +12,7 @@ function readEntry(file){
   const dir=resolveDataDirectory(card.data_directory),disk=openDisk(dir,{readOnly:true});try{card={...card,room_id:disk.resume.inspect(card).room_id};}finally{disk.close();}
   return {file,dir,card};
 }
-function diskState(dir,entry,scope={}){const disk=openDisk(dir,{readOnly:true});try{const current=entry?disk.resume.inspect(entry.card):null;return {...disk.runtime.offlineSnapshot(current?.room_id||scope.roomId,current?.member_id||scope.memberId),data_directory:fs.realpathSync.native(dir),transport:'disk',ui_required:false};}finally{disk.close();}}
+function diskState(dir,entry,scope={}){const disk=openDisk(dir,{readOnly:true});try{const current=entry?disk.resume.inspect(entry.card):null;return {...disk.runtime.offlineSnapshot(current?(current.room?current.room_id:undefined):scope.roomId,current?.member_id||scope.memberId),data_directory:fs.realpathSync.native(dir),transport:'disk',ui_required:false};}finally{disk.close();}}
 function acceptEntry(entry){const disk=openDisk(entry.dir);try{const result=disk.resume.accept(entry.card);disk.runtime.heartbeat(result.member_id,{session_ref:`entry:${entry.card.credential_id}`});return result;}finally{disk.close();}}
 function assertEntryScope(disk,card,route,input){
   return require('./member-policy.cjs').assertMemberRoute(disk,card,route,input);

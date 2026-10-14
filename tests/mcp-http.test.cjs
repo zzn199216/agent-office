@@ -10,7 +10,8 @@ const { fixture, FakeCodex, FakeVault } = require('./helpers.cjs');
 
 async function setup(t) {
   const files = fixture(), codex = new FakeCodex();
-  const service = new RoomService(files.data, { codex, vault: new FakeVault(), fetch: async () => { throw new Error('External HTTP is prohibited in this fixture'); } });
+  const serviceOptions = { codex, vault: new FakeVault(), fetch: async () => { throw new Error('External HTTP is prohibited in this fixture'); } };
+  let service = new RoomService(files.data, serviceOptions);
   const project = service.addProject({ name: 'MCP HTTP fixture', path: files.project });
   const room = service.chat.addRoom({ title: 'Qwen MCP fixture', project_id: project.id });
   function member(name) {
@@ -19,11 +20,12 @@ async function setup(t) {
     return { person, card: service.resume.issue(person.id, room.id).card };
   }
   const first = member('Qwen fixture'), second = member('Peer fixture');
-  const server = createServer(service, { port: 0, token: 'fixture-control-token' }), port = await server.listen(), base = `http://127.0.0.1:${port}`;
+  let server = createServer(service, { port: 0, token: 'fixture-control-token' });
+  const port = await server.listen(), base = `http://127.0.0.1:${port}`;
   t.after(async () => { await server.close(); await service.close(); fs.rmSync(files.root, { recursive: true, force: true }); });
   function endpoint(card) { return createQwenMcpConfig(base, card).mcpServers.agentroom.url; }
   async function send(card, message, session, extra = {}) {
-    const response = await fetch(endpoint(card), { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream', ...session ? { 'Mcp-Session-Id': session, 'MCP-Protocol-Version': '2025-03-26' } : {}, ...extra.headers }, body: typeof message === 'string' ? message : JSON.stringify(message), ...extra });
+    const response = await fetch(endpoint(card), { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream', Connection: 'close', ...session ? { 'Mcp-Session-Id': session, 'MCP-Protocol-Version': '2025-03-26' } : {}, ...extra.headers }, body: typeof message === 'string' ? message : JSON.stringify(message), ...extra });
     const raw = await response.text();
     return { response, raw, data: raw ? JSON.parse(raw) : null };
   }
@@ -37,7 +39,13 @@ async function setup(t) {
     return session;
   }
   function invoke(card, session, name, args = {}) { return send(card, { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name, arguments: args } }, session); }
-  return { files, service, codex, room, project, first, second, base, endpoint, send, initialize, invoke };
+  async function restart() {
+    await server.close(); await service.close();
+    service = new RoomService(files.data, serviceOptions);
+    server = createServer(service, { port, token: 'new-controller-token-after-upgrade' });
+    assert.equal(await server.listen(), port);
+  }
+  return { files, get service() { return service; }, codex, room, project, first, second, base, endpoint, send, initialize, invoke, restart };
 }
 
 test('Streamable HTTP discovery stays unverified until an actual permitted member tool call', async t => {
@@ -94,7 +102,9 @@ test('HTTP MCP rechecks secrets, revocation, leave and origin on every request',
   const other = await h.initialize(h.second.card);
   h.service.chat.leave(h.room.id, h.second.person.id);
   const left = await h.send(h.second.card, { jsonrpc: '2.0', id: 3, method: 'tools/list' }, other);
-  assert.equal(left.response.status, 403);
+  assert.equal(left.response.status, 200);
+  const forbidden = await h.invoke(h.second.card, other, 'agentroom_chat_history', { room_id: h.room.id });
+  assert.equal(forbidden.data.result.isError, true);
 });
 
 test('HTTP MCP denies administrative, cross-room and spoofed member tool calls', async t => {
@@ -215,4 +225,77 @@ test('every imported address resumes, even if the member already has a working c
     assert.equal(result.data.result?.isError, undefined, result.raw);
     assert.equal(result.data.result?.structuredContent.current_room_id, fresh.id, result.raw);
   }
+});
+
+test('an imported HTTP client keeps its session and reads pending messages after a backend restart', async t => {
+  const h = await setup(t), session = await h.initialize(h.first.card), originalUrl = h.endpoint(h.first.card);
+  const message = h.service.chat.store.post({ room_id: h.room.id, to_member_id: h.first.person.id, text: '更新后仍可领取', idempotency_key: 'survives-upgrade' });
+  await h.restart();
+  assert.equal(h.endpoint(h.first.card), originalUrl);
+  const listed = await h.send(h.first.card, { jsonrpc: '2.0', id: 3, method: 'tools/list' }, session);
+  assert.equal(listed.response.status, 200, listed.raw);
+  assert.equal(h.service.resume.credential(h.first.card.credential_id).status, 'pending', 'restoring protocol state is not a member handshake');
+  const inbox = await h.invoke(h.first.card, session, 'agentroom_chat_inbox');
+  assert.deepEqual(inbox.data.result?.structuredContent.items.map(item => item.id), [message.id]);
+  const swapped = await h.send(h.second.card, { jsonrpc: '2.0', id: 4, method: 'tools/list' }, session);
+  assert.equal(swapped.response.status, 403);
+  h.service.resume.revoke(h.first.card.credential_id); await h.restart();
+  assert.equal((await h.send(h.first.card, { jsonrpc: '2.0', id: 5, method: 'tools/list' }, session)).response.status, 410);
+});
+
+test('HTTP session persistence stores only a hash and retains initialization ordering after restart', async t => {
+  const h = await setup(t);
+  const initial = await h.send(h.first.card, { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-03-26' } });
+  const session = initial.response.headers.get('mcp-session-id');
+  await h.restart();
+  const uninitialized = await h.send(h.first.card, { jsonrpc: '2.0', id: 2, method: 'tools/list' }, session);
+  assert.equal(uninitialized.response.status, 400);
+  const notified = await h.send(h.first.card, { jsonrpc: '2.0', method: 'notifications/initialized' }, session);
+  assert.equal(notified.response.status, 202);
+  const rows = JSON.stringify(h.service.store.db.prepare('SELECT * FROM mcp_http_sessions').all());
+  assert.equal(rows.includes(session), false); assert.equal(rows.includes(h.first.card.secret), false);
+  assert.equal((await h.send(h.first.card, { jsonrpc: '2.0', id: 3, method: 'tools/list' }, session)).response.status, 200);
+});
+
+test('one imported connection receives messages in newly joined rooms and reports current seats', async t => {
+  const h = await setup(t), session = await h.initialize(h.first.card), url = h.endpoint(h.first.card);
+  const fresh = h.service.chat.addRoom({ title: '新房间', project_id: h.project.id }); h.service.chat.join(fresh.id, h.first.person.id);
+  const old = h.service.chat.store.post({ room_id: h.room.id, to_member_id: h.first.person.id, text: '原房间', idempotency_key: 'old-room' });
+  const current = h.service.chat.store.post({ room_id: fresh.id, to_member_id: h.first.person.id, text: '新房间', idempotency_key: 'new-room' });
+  const inbox = await h.invoke(h.first.card, session, 'agentroom_chat_inbox');
+  assert.equal(h.endpoint(h.first.card), url);
+  assert.deepEqual(inbox.data.result.structuredContent.items.map(item => item.id), [old.id, current.id]);
+  assert.equal(inbox.data.result.structuredContent.connection.member_id, h.first.person.id);
+  assert.equal(inbox.data.result.structuredContent.connection.room_scope, 'joined_rooms');
+  assert.deepEqual(new Set(inbox.data.result.structuredContent.connection.rooms.map(room => room.id)), new Set([h.room.id, fresh.id]));
+  assert.ok(inbox.data.result.content[1].text.includes(fresh.id));
+  const history = await h.invoke(h.first.card, session, 'agentroom_chat_history', { room_id: fresh.id });
+  assert.equal(history.data.result.isError, undefined);
+  h.service.chat.store.deleteRoom(h.room.id, () => {}, { force: true });
+  const moved = await h.invoke(h.first.card, session, 'agentroom_chat_inbox');
+  assert.equal(moved.data.result.structuredContent.connection.default_room_id, fresh.id);
+  assert.deepEqual(moved.data.result.structuredContent.connection.rooms.map(room => room.id), [fresh.id]);
+  h.service.chat.join(fresh.id, h.second.person.id);
+  const automaticHistory = await h.invoke(h.first.card, session, 'agentroom_chat_history');
+  assert.equal(automaticHistory.data.result.structuredContent.room.id, fresh.id);
+  const automaticPost = await h.invoke(h.first.card, session, 'agentroom_chat_post', { to_member_id: h.second.person.id, text: '无需用户给出房间 ID', idempotency_key: 'implicit-room' });
+  assert.equal(automaticPost.data.result.isError, undefined);
+  assert.equal(automaticPost.data.result.structuredContent.room_id, fresh.id);
+});
+
+test('having no room keeps the identity connection alive without exposing deleted room data', async t => {
+  const h = await setup(t), session = await h.initialize(h.first.card);
+  h.service.chat.store.deleteRoom(h.room.id, () => {}, { force: true });
+  const paused = await h.send(h.first.card, { jsonrpc: '2.0', id: 3, method: 'tools/list' }, session);
+  assert.equal(paused.response.status, 200);
+  const rooms = await h.invoke(h.first.card, session, 'agentroom_chat_rooms');
+  assert.deepEqual(rooms.data.result.structuredContent.rooms, []);
+  const inbox = await h.invoke(h.first.card, session, 'agentroom_chat_inbox');
+  assert.deepEqual(inbox.data.result.structuredContent.items, []);
+  assert.equal(inbox.data.result.structuredContent.connection.default_room_id, null);
+  const forbidden = await h.invoke(h.first.card, session, 'agentroom_chat_history', { room_id: h.room.id });
+  assert.equal(forbidden.data.result.isError, true);
+  assert.notEqual(h.service.resume.credential(h.first.card.credential_id).status, 'revoked');
+  const fresh = h.service.chat.addRoom({ title: '重新入座', project_id: h.project.id }); h.service.chat.join(fresh.id, h.first.person.id);
+  assert.equal((await h.send(h.first.card, { jsonrpc: '2.0', id: 4, method: 'tools/list' }, session)).response.status, 200);
 });

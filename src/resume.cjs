@@ -102,7 +102,9 @@ class ResumeAccess {
     const hash = crypto.createHash('sha256').update(parsed.secret).digest();
     if (!crypto.timingSafeEqual(hash, Buffer.from(row.secret_hash, 'hex'))) throw new RoomError('恢复入口凭据无效。', 403, 'invalid_resume_secret');
     if (row.status === 'revoked') throw new RoomError('恢复入口已撤销，请从原聊天室获取新的入口卡。', 410, 'resume_revoked');
-    this.chat.requireParticipant(row.room_id, row.member_id);
+    // Authenticate the member independently of its seats. Leaving the last
+    // conversation removes access to messages, not the long-lived connection.
+    this.chat.member(row.member_id);
     return { row, card: { ...parsed, room_id: row.room_id } };
   }
   inspect(card) {
@@ -111,7 +113,7 @@ class ResumeAccess {
       valid: true, instance_id: this.instanceId, room_id: row.room_id, member_id: row.member_id,
       credential: this.publicCredential(row),
       member: { id: row.member_id, name: this.chat.member(row.member_id).name, adapter: this.chat.member(row.member_id).adapter },
-      room: { id: row.room_id, title: this.chat.room(row.room_id).title },
+      room: this.chat.joined(row.room_id,row.member_id) ? { id: row.room_id, title: this.chat.room(row.room_id).title } : null,
       data_directory: this.dataDirectory,
       location_hint_matches: path.resolve(parsed.data_directory) === path.resolve(this.dataDirectory)
     };
