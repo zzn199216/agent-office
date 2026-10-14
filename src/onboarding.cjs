@@ -46,6 +46,8 @@ class OnboardingManager{
   }
   row(runId){const row=this.db.prepare('SELECT * FROM onboarding_runs WHERE id=?').get(runId);if(!row)throw new RoomError('接入进度不存在。',404,'onboarding_not_found');this.service.chat.store.room(row.room_id);return row;}
   set(runId,fields){
+    const current=this.db.prepare('SELECT room_id,status FROM onboarding_runs WHERE id=?').get(runId);
+    if(current?.status==='cancelled'||current&&this.service.chat.roomDeleted?.(current.room_id))return;
     const allowed=new Set(['status','stage','launch_session_id','runtime_result','error']);
     const pairs=Object.entries(fields).filter(([key])=>allowed.has(key));
     if(!pairs.length)return;
@@ -91,7 +93,7 @@ class OnboardingManager{
       install_runtime:input.install_runtime===undefined?!!row.install_runtime:input.install_runtime===true});
   }
   async run(row){
-    if(this.closing)return;
+    if(this.closing||this.service.chat.roomDeleted?.(row.room_id))return;
     if(row.mode==='managed'&&DESKTOP.has(row.provider)){
       this.set(row.id,{status:'needs_action',stage:'requires_explicit_backend_selection'});return;
     }
@@ -100,6 +102,7 @@ class OnboardingManager{
       // This hook is a trusted provider installer. No command, URL, package or
       // account supplied by a chat participant can become executable input.
       const raw=await this.options.runtimeInstaller({provider:row.provider,requested_provider:row.requested_provider,mode:row.mode,room_id:row.room_id,run_id:row.id});
+      if(this.service.chat.roomDeleted?.(row.room_id))return;
       const result={status:typeof raw?.status==='string'?raw.status:'needs_setup',installed:raw?.installed===true,
         ...(typeof raw?.signed_in==='boolean'?{signed_in:raw.signed_in}:{}),
         ...(raw?.reason?{reason:safeText(raw.reason)}:{}),...(raw?.detail?{detail:safeText(raw.detail)}:{})};
@@ -107,7 +110,7 @@ class OnboardingManager{
       if(['needs_login','awaiting_auth','login_required'].includes(result.status)||result.signed_in===false){this.set(row.id,{status:'needs_action',stage:'awaiting_auth'});return;}
       if(!result.installed||['needs_setup','failed','error','needs_manual_install'].includes(result.status)){this.set(row.id,{status:'needs_action',stage:'awaiting_runtime_install'});return;}
     }
-    if(this.closing)return;
+    if(this.closing||this.service.chat.roomDeleted?.(row.room_id))return;
     this.set(row.id,{stage:'preparing_connection'});
     let launch;
     try{launch=this.service.launch.prepare({room_id:row.room_id,providers:[row.provider],install_clients:!!row.install_client,goal:row.goal||''});}
@@ -193,7 +196,7 @@ class OnboardingManager{
     if(base.local_verified){
       if(base.can_wake||base.response_mode==='manual_mailbox'){
         base.status='ready';base.stage=base.can_wake?'ready_automatic':'ready_mailbox';base.error=null;
-        base.detail=base.can_wake?'已验证，可在后台处理群里的委托。':'已接入消息信箱；需在本人窗口领取和回复，不能后台唤醒。';
+        base.detail=base.can_wake?member.config?.connection_verification==='local_mcp'?'本机 MCP 通信与登录已核对，可后台接收任务；模型回复时会单独显示等待进度。':'已验证，可在后台处理群里的委托。':'已接入消息信箱；需在本人窗口领取和回复，不能后台唤醒。';
         if(base.native_group_status==='pending')base.next_actions=[action('open_native_group','加入你指定的 Grok 群',{operation:'native_group_handoff'})];
         return base;
       }

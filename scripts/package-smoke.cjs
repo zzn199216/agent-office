@@ -31,16 +31,22 @@ async function main(){
     const control=JSON.parse(fs.readFileSync(path.join(data,'control.json'),'utf8')),removed=await fetch(start.url+`/api/chat/rooms/${managedRoom.id}`,{method:'DELETE',headers:{Authorization:'Bearer '+control.token,'Content-Type':'application/json'},body:'{}'});
     if(removed.status!==200||(await removed.json()).status!=='deleted')throw new Error('Packaged controller room deletion failed.');
     evidence.archive_restore_verified=true;evidence.controller_room_deletion_verified=true;
+    const forcedRoom=await roomApi(data,'/api/chat/rooms',{project_id:status.projects[0].id,title:'确认后停止待办打包验收'}),mail=await roomApi(data,'/api/chat/members',{name:'打包删除信箱 fixture',adapter:'mailbox'});
+    await roomApi(data,`/api/chat/rooms/${forcedRoom.id}/join`,{member_id:mail.id});await roomApi(data,'/api/chat/messages',{room_id:forcedRoom.id,to_member_id:mail.id,text:'仅用于本机删除验证，不执行',idempotency_key:crypto.randomUUID()});
+    const preview=await roomApi(data,`/api/chat/rooms/${forcedRoom.id}/deletion`);if(!preview.tasks.some(value=>value.kind==='message'&&value.status==='queued'))throw new Error('Packaged deletion preview omitted queued work.');
+    const forceResponse=await fetch(start.url+`/api/chat/rooms/${forcedRoom.id}`,{method:'DELETE',headers:{Authorization:'Bearer '+control.token,'Content-Type':'application/json'},body:JSON.stringify({force:true,confirmation_token:preview.confirmation_token})});if(forceResponse.status!==200||(await forceResponse.json()).status!=='deleted')throw new Error('Packaged confirmed force deletion failed.');evidence.confirmed_force_deletion_verified=true;
     if(process.argv.includes('--chat-live')){
       const {apiCall}=require('../src/main.cjs'),{CodexClient}=require('../src/codex.cjs');const api=(route,input)=>apiCall(data,route,input);
       const room=await api('/api/chat/rooms',{project_id:status.projects[0].id,title:'打包聊天室验收'}),member=await api('/api/chat/members',{name:'Codex 打包验收',adapter:'codex'});
-      await api(`/api/chat/members/${member.id}/connect`,{room_id:room.id});const end=Date.now()+180000;
+      const handshakeStart=Date.now();await api(`/api/chat/members/${member.id}/connect`,{room_id:room.id});const end=Date.now()+180000;
       for(;;){const m=await api(`/api/chat/members/${member.id}`);if(m.status==='ready'){evidence.chat_handshake_verified=!!m.verified_at;break;}if(m.status==='connection_failed')throw new Error(m.error);if(Date.now()>end)throw new Error('Packaged room handshake timed out');await new Promise(r=>setTimeout(r,500));}
+      evidence.handshake_ms=Date.now()-handshakeStart;const connected=await api(`/api/chat/rooms/${room.id}`),nativeThread=connected.participants.find(value=>value.id===member.id).native_thread_id,reader=new CodexClient({dataDir:data});
+      try{if((await reader.read(nativeThread)).turns.length)throw new Error('Packaged handshake unexpectedly started a model turn.');evidence.handshake_model_turns=0;}finally{await reader.close();}
       const question=await api('/api/chat/messages',{room_id:room.id,sender_id:'user',to_member_id:member.id,text:'请仅回复“打包聊天室已收到”。不调用工具，不修改文件。',idempotency_key:crypto.randomUUID()});let result;
       do{result=await api(`/api/chat/messages/${question.id}/wait?seconds=20`);}while(!result.responses.length&&!['failed','uncertain','cancelled'].includes(result.message.status)&&Date.now()<end);
       const answer=result.responses[0]?.text||'';if(!answer.includes('打包聊天室已收到'))throw new Error('Packaged room answer missing: '+(result.message.error||answer));
-      const snapshot=await api(`/api/chat/rooms/${room.id}`),client=new CodexClient();try{const thread=await client.read(snapshot.participants[0].native_thread_id);evidence.native_join_trace_verified=thread.turns.some(t=>(t.items||[]).some(i=>i.type==='mcpToolCall'&&i.server==='agentroom'&&i.tool==='agentroom_join'&&i.status==='completed'));}finally{await client.close();}
-      if(!evidence.native_join_trace_verified)throw new Error('Packaged native join trace missing.');evidence.chat_answer_verified=true;evidence.answer=answer;evidence.room_id=room.id;
+      const snapshot=await api(`/api/chat/rooms/${room.id}`),client=new CodexClient({dataDir:data});try{const thread=await client.read(nativeThread);if(snapshot.participants.find(value=>value.id===member.id).native_thread_id!==nativeThread||thread.turns.length!==1)throw new Error('Packaged reply did not retain the single original thread.');evidence.native_protocol_handshake_verified=true;}finally{await client.close();}
+      evidence.chat_answer_verified=true;evidence.answer=answer;evidence.room_id=room.id;
     }
     if(process.argv.includes('--live')){
       const discussion=JSON.parse(await run(exe,['discuss','--data-dir',data,'--project',status.projects[0].id,'--title','打包端到端验证']));

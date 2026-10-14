@@ -1,6 +1,8 @@
 'use strict';
 const readline=require('node:readline'),{randomUUID}=require('node:crypto');const threads=new Map();
 const send=v=>process.stdout.write(JSON.stringify(v)+'\n');
+const failIndex=process.argv.indexOf('--startup-failure');
+if(failIndex>=0){const fs=require('node:fs'),marker=process.argv[failIndex+1],mode=process.argv[failIndex+2],count=fs.existsSync(marker)?Number(fs.readFileSync(marker,'utf8')):0;fs.writeFileSync(marker,String(count+1));if(mode!=='once'||!count){process.stderr.write(mode==='generic'?'Unrelated startup failure\n':'Error: failed to initialize sqlite state runtime under owned-test-home\n');process.exit(1);}}
 readline.createInterface({input:process.stdin}).on('line',async line=>{const m=JSON.parse(line),p=m.params || {};if(m.id===undefined)return;
   let result={};
   if(m.method==='initialize')result={userAgent:'fake-protocol-test-only'};

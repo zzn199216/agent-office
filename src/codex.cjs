@@ -27,10 +27,19 @@ function detectCodex() {
   }
   return null;
 }
+// Apply only to the private office thread. Keep custom routing and credentials;
+// the reserved built-in OpenAI provider cannot be redefined in configuration.
+function backgroundTransport(config={}) {
+  const provider=config.model_provider||'openai';
+  if(['ollama','lmstudio'].includes(provider))return {};
+  if(provider!=='openai')return { [`model_providers.${provider}.supports_websockets`]:false };
+  return {model_provider:'agentoffice_http','model_providers.agentoffice_http':{name:'OpenAI',wire_api:'responses',requires_openai_auth:true,supports_websockets:false,...config.openai_base_url?{base_url:config.openai_base_url}:{}}};
+}
 class CodexClient extends EventEmitter {
   constructor(options = {}) { super(); this.executable = options.executable || detectCodex(); this.spawnArgs = options.args || []; this.mcpEnvironment=options.mcpEnvironment||{};this.dataDir=options.dataDir;this.extraInstructions=options.developerInstructions||'';this.workspace=options.dataDir&&options.isolate!==false?new CodexWorkspace(options.dataDir,{legacyHome:options.legacyHome}):null;this.legacyHome=options.legacyHome; this.pending = new Map(); this.nextId = 1; this.child = null; this.readyPromise = null; this.closed = false; }
   legacyClient(){return new CodexClient({executable:this.executable,args:this.spawnArgs,isolate:false,legacyHome:this.workspace?.legacyHome||this.legacyHome});}
   async ready() {
+    if(this.closed)throw new RoomError('后台连接已停止。',409,'cancelled');
     if (this.readyPromise) return this.readyPromise;
     this.readyPromise = this.connect().catch(e => { this.readyPromise = null; throw e; }); return this.readyPromise;
   }
@@ -38,17 +47,29 @@ class CodexClient extends EventEmitter {
     if (!this.executable) throw new RoomError('没有找到 Codex。请先安装并登录 Codex，再点击检查连接。', 503, 'codex_missing');
     if(this.workspace)await this.workspace.prepare(async()=>{const legacy=this.legacyClient();try{await legacy.ready();return (await legacy.call('config/read',{includeLayers:false})).config||{};}finally{await legacy.close();}});
     const env=this.workspace?this.workspace.environment():this.legacyHome?{...process.env,CODEX_HOME:this.legacyHome}:process.env;
+    // A cold private home may fail after creating its SQLite files. Retry only
+    // that recognized startup failure, before a thread or model turn exists.
+    for(let attempt=0;attempt<2;attempt++){
+      try{return await this.startServer(env);}catch(error){if(error.code!=='codex_state_init_failed'||attempt||this.closed)throw error;}
+    }
+  }
+  async startServer(env) {
+    if(this.closed)throw new RoomError('后台连接已停止。',409,'cancelled');
     const child = spawn(this.executable, [...this.spawnArgs, 'app-server', '--listen', 'stdio://'], { env, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
-    this.child = child; this.closed = false;
-    child.on('error', e => this.disconnect(new RoomError(`Codex 无法启动：${e.code || 'unknown'}`, 503, 'codex_start_failed')));
-    child.on('exit', () => this.disconnect(new RoomError('Codex 连接结束，运行中的结果需要核对。', 503, 'connection_lost')));
+    this.child = child;let initialized=false,stateInitFailed=false,stderr='';
+    const lost=error=>{if(this.child===child)this.disconnect(error,!initialized);};
+    child.on('error', e => lost(new RoomError(`Codex 无法启动：${e.code || 'unknown'}`, 503, 'codex_start_failed')));
+    child.on('exit', () => lost(new RoomError(stateInitFailed?'Codex 本机状态库初始化失败。':'Codex 连接结束，运行中的结果需要核对。',503,stateInitFailed?'codex_state_init_failed':'connection_lost')));
     // Never publish raw stderr; only fixed messages for known transport stages.
     child.stderr.setEncoding('utf8');child.stderr.on('data',chunk=>{
-      if(/falling back to HTTP/i.test(chunk))this.emit('transport-progress','模型连接已切换到 HTTP，正在等待回复。');
-      else if(/request timed out|prewarm.*time(?:d? ?out)|retrying/i.test(chunk))this.emit('transport-progress','模型网络连接超时，正在重试；本机接入仍在等待模型调用握手工具。');
+      stderr=(stderr+chunk).slice(-4000);
+      if(/failed to initialize sqlite state runtime/i.test(stderr))stateInitFailed=true;
+      if(/falling back to HTTP/i.test(stderr)){this.emit('transport-progress','模型连接已切换到 HTTP，正在等待回复。');stderr='';}
+      else if(/request timed out|prewarm.*time(?:d? ?out)|retrying/i.test(stderr)){this.emit('transport-progress','模型网络连接超时，正在等待模型回复。');stderr='';}
     });
-    child.stdin.on('error', () => this.disconnect(new RoomError('Codex 输入通道结束。', 503, 'connection_lost')));
+    child.stdin.on('error', () => lost(new RoomError('Codex 输入通道结束。', 503, 'connection_lost')));
     readline.createInterface({ input: child.stdout, crlfDelay: Infinity }).on('line', line => {
+      if(this.child!==child)return;
       let m; try { m = JSON.parse(line); } catch { return; }
       if (m.id !== undefined && !m.method) {
         const pending = this.pending.get(String(m.id)); if (!pending) return;
@@ -58,12 +79,12 @@ class CodexClient extends EventEmitter {
       else if (m.method) this.emit('notification', m);
     });
     const info = await this.call('initialize', { clientInfo: { name: 'agentroom_local', title: 'AgentRoom', version: require('./util.cjs').VERSION },capabilities:{experimentalApi:true} });
-    this.send({ method: 'initialized', params: {} }); return info;
+    this.send({ method: 'initialized', params: {} });initialized=true; return info;
   }
-  disconnect(error) {
-    this.child = null; this.readyPromise = null;
+  disconnect(error,starting=false) {
+    this.child = null;if(!starting)this.readyPromise = null;
     for (const p of this.pending.values()) { clearTimeout(p.timer); p.reject(error); }
-    this.pending.clear(); this.emit('disconnected', error);
+    this.pending.clear();if(!starting)this.emit('disconnected', error);
   }
   send(value) {
     if (!this.child?.stdin.writable) throw new RoomError('Codex 未连接。', 503, 'connection_lost');
@@ -104,6 +125,7 @@ class CodexClient extends EventEmitter {
     // Trust only our server; other MCP servers and execution approvals retain
     // the user's policies. This does not grant filesystem or publishing rights.
     const config = { 'mcp_servers.agentroom': { command: own.command, args: [...own.args, 'mcp','--data-dir',this.dataDir||dataDirectory()], env: { AGENTROOM_CALLER: 'codex',...this.mcpEnvironment,...this.mcpEnvironment.AGENTROOM_MEMBER_ID?{AGENTROOM_ROOM_ID:discussion.id}:{} }, startup_timeout_sec: 20, default_tools_approval_mode: 'approve' } };
+    if(this.workspace)Object.assign(config,backgroundTransport((await this.call('config/read',{includeLayers:false})).config||{}));
     if(this.mcpEnvironment.AGENTROOM_MEMBER_ID)config['mcp_servers.agentroom'].enabled_tools=['agentroom_join','agentroom_chat_rooms','agentroom_chat_history','agentroom_chat_post','agentroom_chat_wait','agentroom_chat_inbox','agentroom_chat_image','agentroom_chat_reply','agentroom_chat_ack','agentroom_room_state','agentroom_room_ensure','agentroom_member_wake','agentroom_heartbeat',...TEAM_TOOLS];
     if (discussion.binding_state === 'creation_uncertain') throw new RoomError('上一次创建结果不明确，请先核对 Codex 会话，不会自动再建一个。', 409, 'creation_uncertain');
     if (discussion.thread_id) {
@@ -126,9 +148,23 @@ class CodexClient extends EventEmitter {
     await this.call('thread/name/set', { threadId: thread.id, name: `AgentRoom · ${project.name} · ${discussion.title}` });
     return thread.id;
   }
+  async handshake({project,discussion,invitation,onBinding,onProgress,signal}) {
+    const check=()=>{if(signal?.aborted||this.closed)throw new RoomError('接入已停止。',409,'cancelled');};
+    check();onProgress('正在连接本机 Codex 并核对登录…');await this.ready();check();
+    const account=await this.call('account/read',{refreshToken:false});
+    if(account.requiresOpenaiAuth===true&&!account.account)throw new RoomError('后台 Codex 尚未登录，请完成一次登录。',503,'codex_login_required');
+    const threadId=await this.bind(project,discussion,onBinding);check();onProgress('正在通过 Codex 本机 MCP 通道验证房间通信…');
+    // App-server calls the bounded tool over this exact thread's real MCP
+    // connection. No model turn, prompt, file command or inferred handshake.
+    const result=await this.call('mcpServer/tool/call',{threadId,server:'agentroom',tool:'agentroom_join',arguments:{invite_id:invitation.id,nonce:invitation.nonce}},20000);check();
+    if(result.isError||result.structuredContent?.ok!==true||result.structuredContent?.room_id!==discussion.id||result.structuredContent?.member?.id!==this.mcpEnvironment.AGENTROOM_MEMBER_ID)throw new RoomError('Codex 本机 MCP 握手失败，请检查接入配置。',503,'codex_mcp_setup');
+    return {threadId,local_protocol_verified:true};
+  }
   async run({ project, discussion, request, onBinding, onTurn, onProgress, onApproval, signal, timeout = 300000 }) {
+    if(signal?.aborted||this.closed)throw new RoomError('请求已取消。',409,'cancelled');
     if(this.workspace){await this.ready();const account=await this.call('account/read',{refreshToken:false});if(account.requiresOpenaiAuth===true&&!account.account)throw new RoomError('AgentRoom 后台 Codex 尚未登录。请在成员接入页完成一次独立登录，再继续原会话。',503,'codex_login_required');}
     const threadId = await this.bind(project, discussion, onBinding);
+    if(signal?.aborted||this.closed)throw new RoomError('请求已取消。',409,'cancelled');
     let turnId = null;
     const messages = new Map(); let finished = false; let resolveEnd; let rejectEnd;
     const ended = new Promise((resolve, reject) => { resolveEnd = resolve; rejectEnd = reject; });
@@ -184,4 +220,4 @@ class CodexClient extends EventEmitter {
     await new Promise(resolve => { const timer = setTimeout(() => { child.kill(); resolve(); }, 4000); child.once('exit', () => { clearTimeout(timer); resolve(); }); });
   }
 }
-module.exports = { CodexClient, detectCodex };
+module.exports = { CodexClient, detectCodex,backgroundTransport };

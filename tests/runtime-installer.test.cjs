@@ -4,6 +4,14 @@ const assert=require('node:assert/strict');
 const fs=require('node:fs'),path=require('node:path'),os=require('node:os'),crypto=require('node:crypto');
 const {RuntimeInstaller,zipEntries,validOfficialUrl}=require('../src/runtime-installer.cjs');
 const hash=buffer=>crypto.createHash('sha256').update(buffer).digest('hex');
+test('room cancellation aborts its owned runtime download without retrying another transport or publishing',async t=>{
+  const v=fixture(t,{options:{systemFallback:true},fetch:async(_url,{signal})=>new Promise((resolve,reject)=>signal.addEventListener('abort',()=>{const e=new Error('cancelled');e.name='AbortError';reject(e);},{once:true}))});
+  const pending=v.installer.install({provider:'claude-code',room_id:'own-room'});v.installer.cancelRoom('own-room');const result=await pending;assert.equal(result.status,'cancelled');assert.equal(result.reason,'cancelled');assert.equal(v.metadata.length,0);assert.equal(v.settings.size,0);
+});
+test('shared runtime installation remains active for another room after one owner cancels',async t=>{
+  const v=fixture(t);let release,signal;v.installer.fetch=async(_url,options)=>{signal=options.signal;return new Promise(resolve=>release=()=>resolve({ok:false,status:503}));};
+  const first=v.installer.install({provider:'claude-code',room_id:'first'}),second=v.installer.install({provider:'claude-code',room_id:'second'});assert.equal(first,second);v.installer.cancelRoom('first');assert.equal(signal.aborted,false);release();await first;assert.equal(v.settings.size,0);
+});
 
 function zip(files){
   const locals=[],central=[];let offset=0;

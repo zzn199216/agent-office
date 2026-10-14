@@ -20,7 +20,7 @@ let desktopState = null, desktopBusy = false, desktopReady = false, desktopProbe
 let inspectorOpen = false, inspectorTab = 'members', inspectorMemberId = null, officeView = localStorage.getItem('agentoffice-room-view') === 'office', officeScene = null, appearanceDraft = null, appearanceDirty = false, appearanceBusy = false, appearanceUploading = false, appearanceUploadVersion = 0;
 let officeComposerOpen = false;
 let connectionDoctor = null, connectionDoctorBusy = false, connectionDoctorError = '', connectionDoctorRoom = null, connectionDoctorSequence = 0;
-let deleteRoomId = null, deletingRoom = false;
+let deleteRoomId = null, deletingRoom = false, deletePreview = null;
 let managedRoomId=null,managingRoom=false;
 let secretaryOpenRoom = null, secretaryPickingRoom = null, secretaryBusy = false, secretaryStartBusy = false, secretaryError = '', secretaryConnectRoom = null, secretaryConnectJob = null, secretaryGoalVersion = 0;
 let secretaryFinishing=false;
@@ -464,18 +464,27 @@ function renderSidebar() {
   $('discussions').innerHTML = old.map(discussion => `<button class="discussion-button ${discussion.id === legacyId ? 'active' : ''}" data-discussion="${escape(discussion.id)}" title="${escape(discussion.title)}">${escape(discussion.title)}</button>`).join('');
   if (desktop?.offline) $('discussions').querySelectorAll('button').forEach(button => {button.disabled=true;button.title='开启服务后可查看旧讨论';});
 }
-function showDeleteRoom(id) {
+async function loadDeletePreview(id) {
+  deletePreview=null;$('delete-room-confirm').disabled=true;$('delete-room-confirm').textContent='读取任务…';
+  const preview=await api(`/api/chat/rooms/${encodeURIComponent(id)}/deletion`);
+  if(deleteRoomId!==id||!$('delete-room-dialog').open)return;
+  deletePreview=preview;
+  $('delete-room-blockers').innerHTML=(preview.total?`<p>确认后将停止以下 ${preview.total} 项本房间工作：</p>`:'<p>当前没有未完成任务。</p>')+preview.tasks.map(item=>`<div class="delete-blocker"><span><strong>${escape(item.name)}</strong> · ${escape(labels[item.status]||({connecting:'接入握手中',creating:'正在创建工作记录',waiting:'等待中',active:'进行中',preparing:'准备中',pending:'排队中',creation_uncertain:'创建结果待核对',outcome_uncertain:'执行结果待核对',resume_uncertain:'恢复结果待核对'})[item.status]||item.status)}<br>${escape(item.title||'')}</span></div>`).join('')+(preview.external_warning?`<p class="error-note">${escape(preview.external_warning)}</p>`:'');
+  $('delete-room-confirm').textContent=preview.total?'停止任务并删除聊天室':'删除聊天室';$('delete-room-confirm').disabled=false;
+}
+async function showDeleteRoom(id) {
   const target=state?.chat?.rooms?.find(room=>room.id===id);
   if(!target||!webConnected||deletingRoom)return;
   deleteRoomId=id;$('delete-room-name').textContent=target.title;
-  $('delete-room-error').textContent='';$('delete-room-blockers').replaceChildren();$('delete-room-confirm').disabled=false;
+  $('delete-room-error').textContent='';$('delete-room-blockers').replaceChildren();
   $('delete-room-dialog').showModal();
+  try{await loadDeletePreview(id);}catch(error){if(deleteRoomId===id)$('delete-room-error').textContent=error.message;}
 }
 async function confirmDeleteRoom() {
-  const id=deleteRoomId;if(!id||deletingRoom)return;
-  deletingRoom=true;$('delete-room-confirm').disabled=true;$('delete-room-error').textContent='';
+  const id=deleteRoomId;if(!id||deletingRoom||deletePreview?.room_id!==id)return;
+  deletingRoom=true;$('delete-room-confirm').disabled=true;$('delete-room-confirm').textContent='正在停止并删除…';$('delete-room-error').textContent='';
   try {
-    const result=await api(`/api/chat/rooms/${encodeURIComponent(id)}`,{},'DELETE');
+    const result=await api(`/api/chat/rooms/${encodeURIComponent(id)}`,{force:true,confirmation_token:deletePreview.confirmation_token},'DELETE');
     if(result.status!=='deleted')throw new Error('删除结果尚未确认，请检查聊天室列表。');
     resumeEntries=Object.fromEntries(Object.entries(resumeEntries).filter(([,entry])=>entry.room_id!==id));
     localStorage.setItem(entryCacheKey,JSON.stringify(resumeEntries));
@@ -487,9 +496,8 @@ async function confirmDeleteRoom() {
     await refresh();toast('聊天室已删除');
   } catch(error) {
     $('delete-room-error').textContent=/^(Failed to fetch|Load failed|NetworkError)/i.test(error.message||'')?'未确认删除结果，请先检查连接和房间列表。':error.message;
-    const blockers=error.details?.room_id===id?error.details.blockers||[]:[];
-    $('delete-room-blockers').innerHTML=blockers.map(item=>`<div class="delete-blocker"><span>${escape(item.name)} · ${escape(labels[item.status]||item.status)}${item.created?` · ${escape(time(item.created))}`:''}</span><button type="button" class="secondary" data-delete-blocker="${escape(item.id)}" data-blocker-kind="${escape(item.kind)}">查看并处理</button></div>`).join('');
-  } finally {deletingRoom=false;$('delete-room-confirm').disabled=false;}
+    if(['room_delete_tasks_changed','room_delete_confirmation_expired','room_busy'].includes(error.code)){try{await loadDeletePreview(id);}catch(refreshError){deletePreview=null;$('delete-room-error').textContent=refreshError.message;}}
+  } finally {deletingRoom=false;$('delete-room-confirm').disabled=!deletePreview;$('delete-room-confirm').textContent=deletePreview?.total?'停止任务并删除聊天室':'删除聊天室';}
 }
 function renderSettings() {
   const codex = state.codex || {}, grok = state.grok || {}; $('codex-detail').textContent = codex.error || (codex.connected ? codex.signedIn ? '本机入口已连接' : '入口已连接，请核对登录与模型配置' : '检测本机安装与登录');

@@ -6,7 +6,7 @@ const {RoomError,id,now,sleep,cleanText,readableError,ownCommand,quotedCommand,a
 const terminal=s=>['answered','delivered','failed','uncertain','cancelled'].includes(s);
 class BridgeManager {
   constructor(chat,options={}){
-    this.chat=chat;this.service=chat.service;this.store=new BridgeStore(chat.store);this.options=options;this.jobs=new Map();this.closing=false;
+    this.chat=chat;this.service=chat.service;this.store=new BridgeStore(chat.store);this.options=options;this.jobs=new Map();this.testAborts=new Map();this.closing=false;
     this.store.db.exec(`CREATE TABLE IF NOT EXISTS bridge_setup_tests(id TEXT PRIMARY KEY,member_id TEXT NOT NULL,room_id TEXT NOT NULL,status TEXT NOT NULL,summary TEXT NOT NULL,error TEXT,evidence TEXT,created TEXT NOT NULL,updated TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS bridge_user_confirmations(entry_id TEXT PRIMARY KEY REFERENCES bridge_entries(id),confirmed TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS bridge_current_contexts(binding_id TEXT PRIMARY KEY REFERENCES bridge_bindings(id));
@@ -81,15 +81,19 @@ class BridgeManager {
   runLocalTest(input){const {room}=this.context(input.member_id,input.room_id),target=this.chat.store.member(input.target_member_id);this.chat.store.requireParticipant(room.id,target.id);if(target.adapter!=='codex')throw new RoomError('本机自动测试请选择 Codex 原生接入成员。');
     const running=this.store.db.prepare("SELECT id FROM bridge_setup_tests WHERE member_id=? AND status='waiting'").get(input.member_id);if(running)return this.test(running.id);
     const testId=id();this.store.db.prepare("INSERT INTO bridge_setup_tests VALUES(?,?,?,'waiting',?,NULL,NULL,?,?)").run(testId,input.member_id,room.id,'正在隔离验证本机命令与 Codex 回答；不发送 Grok 消息。',now(),now());
-    const work=this.executeTest(testId,this.service.store.project(room.project_id),target).then(evidence=>this.finishTest(testId,'passed','本机命令 → Codex → 来源关联答案通过。Grok 握手和原群回传仍需实际 Bot。',null,evidence)).catch(e=>this.finishTest(testId,'failed','本机测试未完成，请查看原因。',readableError(e))).finally(()=>this.jobs.delete(testId));this.jobs.set(testId,work);this.service.changed();return this.test(testId);
+    const abort=new AbortController();this.testAborts.set(testId,{roomId:room.id,abort});
+    const work=this.executeTest(testId,this.service.store.project(room.project_id),target,abort.signal).then(evidence=>this.finishTest(testId,'passed','本机命令 → Codex → 来源关联答案通过。Grok 握手和原群回传仍需实际 Bot。',null,evidence)).catch(e=>this.finishTest(testId,'failed','本机测试未完成，请查看原因。',readableError(e))).finally(()=>{this.jobs.delete(testId);this.testAborts.delete(testId);});this.jobs.set(testId,work);this.service.changed();return this.test(testId);
   }
-  finishTest(testId,status,summary,error=null,evidence=null){this.store.db.prepare('UPDATE bridge_setup_tests SET status=?,summary=?,error=?,evidence=?,updated=? WHERE id=?').run(status,summary,error,evidence?JSON.stringify(evidence):null,now(),testId);this.service.changed();}
-  helper(args,{dir,input,timeout=40000}={}){if(this.options.helper)return this.options.helper(args,{dir,input,timeout});const own=ownCommand();return new Promise((resolve,reject)=>{
+  cancelRoomTests(roomId){for(const value of this.testAborts.values())if(value.roomId===roomId)value.abort.abort();}
+  finishTest(testId,status,summary,error=null,evidence=null){this.store.db.prepare("UPDATE bridge_setup_tests SET status=?,summary=?,error=?,evidence=?,updated=? WHERE id=? AND status!='cancelled'").run(status,summary,error,evidence?JSON.stringify(evidence):null,now(),testId);this.service.changed();}
+  helper(args,{dir,input,timeout=40000,signal}={}){if(signal?.aborted)return Promise.reject(new RoomError('本机测试已取消。',409,'cancelled'));if(this.options.helper)return this.options.helper(args,{dir,input,timeout,signal});const own=ownCommand();return new Promise((resolve,reject)=>{
     const child=spawn(own.command,[...own.args,...args,'--data-dir',dir],{windowsHide:true,stdio:['pipe','pipe','pipe'],env:{...process.env,AGENTROOM_DATA_DIR:dir,AGENTROOM_LOCAL_TEST:'1'}});let output='',errors='';
-    const timer=setTimeout(()=>{child.kill();reject(new RoomError('本机测试命令超时，没有重发。',504));},timeout);child.stdout.setEncoding('utf8');child.stderr.setEncoding('utf8');child.stdout.on('data',v=>{output+=v;if(output.length>500000)child.kill();});child.stderr.on('data',v=>errors=(errors+v).slice(-3000));child.on('error',e=>{clearTimeout(timer);reject(e);});child.on('exit',code=>{clearTimeout(timer);try{if(code!==0)throw new RoomError(readableError({message:output||errors}));resolve(JSON.parse(output));}catch(e){reject(e);}});child.stdin.end(input||'');
+    const abort=()=>{child.kill();reject(new RoomError('本机测试已取消。',409,'cancelled'));};signal?.addEventListener('abort',abort,{once:true});
+    const cleanup=()=>{clearTimeout(timer);signal?.removeEventListener('abort',abort);};
+    const timer=setTimeout(()=>{child.kill();reject(new RoomError('本机测试命令超时，没有重发。',504));},timeout);child.stdout.setEncoding('utf8');child.stderr.setEncoding('utf8');child.stdout.on('data',v=>{output+=v;if(output.length>500000)child.kill();});child.stderr.on('data',v=>errors=(errors+v).slice(-3000));child.on('error',e=>{cleanup();reject(e);});child.on('exit',code=>{cleanup();try{if(code!==0)throw new RoomError(readableError({message:output||errors}));resolve(JSON.parse(output));}catch(e){reject(e);}});child.stdin.end(input||'');
   });}
-  async executeTest(testId,project,target){
-    const dir=path.join(this.service.store.dir,'bridge-tests',testId),command=(args,extra={})=>this.helper(args,{dir,...extra});let evidence;fs.mkdirSync(dir,{recursive:true});
+  async executeTest(testId,project,target,signal){
+    const dir=path.join(this.service.store.dir,'bridge-tests',testId),command=(args,extra={})=>this.helper(args,{dir,signal:args[0]==='stop'?undefined:signal,...extra});let evidence;fs.mkdirSync(dir,{recursive:true});
     try{
       const p=await command(['add-project','--path',project.path,'--name','AgentRoom 只读接入检查']);const r=await command(['chat-room','--project',p.id,'--title','隔离本机往返测试']);
       const bridge=await command(['chat-member','--name','本机测试桥接','--adapter','mailbox']);const native=await command(['chat-member','--name',target.name,'--adapter','codex',...(target.config.executable?['--executable',target.config.executable]:[])]);
@@ -102,6 +106,9 @@ class BridgeManager {
       if(e.status!=='answered'||!e.response_text.includes(marker)||e.origin.provider!=='local-test'||e.origin.conversation_ref!==`local-test:${testId}`||e.native_delivery_receipt)throw new RoomError(e.error||'未取得匹配来源和校验值的实际回答。');
       evidence={test_id:testId,actual_grok:false,helper_process:true,codex_member_id:native.id,room_id:r.id,entry_id:e.id,status:e.status,response_text:e.response_text,origin:e.origin,checked_at:now()};return evidence;
     }finally{
+      // This UUID directory belongs only to this local validation job. A user
+      // cancellation must also stop its private daemon while it is busy.
+      if(signal?.aborted&&!this.options.helper){try{await require('./main.cjs').apiCall(dir,'/api/shutdown',{},5000);}catch{}}
       try{await command(['stop']);}catch{}
       const stopped=()=>{try{const control=JSON.parse(fs.readFileSync(path.join(dir,'control.json'),'utf8'));return !livePid(control.pid);}catch(e){return e.code==='ENOENT';}};
       for(let i=0;!stopped()&&i<50;i++)await sleep(100);

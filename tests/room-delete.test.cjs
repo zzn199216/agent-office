@@ -4,7 +4,7 @@ const assert=require('node:assert/strict');
 const fs=require('node:fs'),path=require('node:path'),os=require('node:os');
 const {RoomService}=require('../src/service.cjs');
 const {createServer}=require('../src/http.cjs');
-const {deleteRoom}=require('../src/room-lifecycle.cjs');
+const {deleteRoom,deletionPreview,forceDeleteRoom}=require('../src/room-lifecycle.cjs');
 const {openDisk,readEntry,assertEntryScope}=require('../src/entry.cjs');
 const {createRecoveringApi}=require('../src/main.cjs');
 const {createQwenMcpConfig}=require('../src/mcp-http.cjs');
@@ -23,6 +23,82 @@ function setup(t){
   return {...files,project,room,other,shared,get service(){return service;},async restart(){await service.close();service=new RoomService(files.data,{...options,codex:new FakeCodex()});return service;}};
 }
 function immutableRows(db,table){return db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all();}
+test('confirmed Windows stop terminates only the owned process tree, including a spawned task', {skip:process.platform!=='win32'},async t=>{
+  const {spawn}=require('node:child_process'),{stopOwnedChildTree}=require('../src/room-lifecycle.cjs'),{livePid,sleep}=require('../src/util.cjs');
+  const parent=spawn(process.execPath,['-e',"const {spawn}=require('node:child_process');const c=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{windowsHide:true,stdio:'ignore'});console.log(c.pid);setInterval(()=>{},1000)"],{windowsHide:true,stdio:['ignore','pipe','ignore']}),other=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{windowsHide:true,stdio:'ignore'});
+  t.after(()=>{stopOwnedChildTree(parent);stopOwnedChildTree(other);});
+  const grandchild=await new Promise(resolve=>parent.stdout.once('data',data=>resolve(Number(String(data).trim()))));assert.ok(livePid(grandchild));assert.ok(livePid(other.pid));stopOwnedChildTree(parent);
+  for(let i=0;i<20&&(livePid(parent.pid)||livePid(grandchild));i++)await sleep(50);
+  assert.equal(livePid(parent.pid),false);assert.equal(livePid(grandchild),false);assert.equal(livePid(other.pid),true);
+});
+
+test('preview is read-only; confirmed force deletion cancels all room work atomically and retains external uncertainty',async t=>{
+  const v=setup(t),s=v.service,c=s.chat.store,db=s.store.db,stamp=now();
+  const queued=c.post({room_id:v.room.id,to_member_id:v.shared.id,text:'排队任务',idempotency_key:'queued'}),uncertain=c.post({room_id:v.room.id,to_member_id:v.shared.id,text:'外部结果待核对',idempotency_key:'uncertain'});
+  c.updateMessage(uncertain.id,{status:'uncertain',request_id:'retained-turn'});c.bind(v.room.id,v.shared.id,'outcome_uncertain','retained-native-thread');
+  const keep=c.post({room_id:v.other.id,to_member_id:v.shared.id,text:'其他房间任务',idempotency_key:'keep'});
+  const active=new AbortController();let closed=0;s.chat.active.set(v.shared.id,{abort:active,roomId:v.room.id,connecting:true});s.chat.clients.set(v.shared.id,{close:async()=>{closed++;}});
+  const launch=id(),onboarding=id(),check=id();
+  db.prepare("INSERT INTO launch_sessions(id,room_id,status,goal,candidates,created,updated) VALUES(?,?,'preparing','fixture','[]',?,?)").run(launch,v.room.id,stamp,stamp);
+  db.prepare("INSERT INTO onboarding_runs(id,room_id,requested_provider,provider,mode,status,stage,created,updated) VALUES(?,?,'codex','codex','managed','running','connecting',?,?)").run(onboarding,v.room.id,stamp,stamp);
+  db.prepare("INSERT INTO bridge_setup_tests(id,member_id,room_id,status,summary,created,updated) VALUES(?,?,?,'waiting','fixture',?,?)").run(check,v.shared.id,v.room.id,stamp,stamp);
+  const goal=s.team.create('goal',v.room.id,'fixture-goal',{title:'待完成目标',status:'active'},null);
+  const card=s.entry.issue(v.shared.id,v.room.id),old=JSON.parse(fs.readFileSync(card.file,'utf8'));
+  const before=immutableRows(db,'chat_messages'),preview=deletionPreview(s,v.room.id);
+  assert.deepEqual(immutableRows(db,'chat_messages'),before);assert.equal(active.signal.aborted,false);assert.ok(preview.tasks.some(value=>value.kind==='worker'&&value.status==='connecting'));assert.ok(preview.tasks.some(value=>value.kind==='onboarding'));assert.match(preview.external_warning,/无法保证撤回/);
+  const result=await forceDeleteRoom(s,v.room.id,preview.confirmation_token);assert.equal(result.status,'deleted');assert.equal(active.signal.aborted,true);assert.equal(closed,1);s.chat.active.clear();
+  for(const msg of [queued,uncertain])assert.equal(db.prepare('SELECT status FROM chat_messages WHERE id=?').get(msg.id).status,'cancelled');
+  assert.equal(db.prepare('SELECT request_id FROM chat_messages WHERE id=?').get(uncertain.id).request_id,'retained-turn');assert.equal(db.prepare('SELECT binding_state FROM chat_bindings WHERE room_id=?').get(v.room.id).binding_state,'outcome_uncertain');
+  assert.equal(JSON.parse(db.prepare('SELECT body FROM team_records WHERE id=?').get(goal.id).body).status,'cancelled');
+  for(const [table,key]of [['launch_sessions',launch],['onboarding_runs',onboarding],['bridge_setup_tests',check]])assert.equal(db.prepare(`SELECT status FROM ${table} WHERE id=?`).get(key).status,'cancelled');
+  s.onboarding.set(onboarding,{status:'ready',stage:'completed'});s.bridge.finishTest(check,'passed','late result');assert.equal(db.prepare('SELECT status FROM onboarding_runs WHERE id=?').get(onboarding).status,'cancelled');assert.equal(s.bridge.test(check).status,'cancelled');
+  assert.equal(c.message(keep.id).status,'queued');assert.equal(c.joined(v.other.id,v.shared.id),true);assert.throws(()=>s.resume.inspect(old),{code:'resume_revoked'});
+  assert.equal((await forceDeleteRoom(s,v.room.id,preview.confirmation_token)).already_deleted,true);
+});
+
+test('force confirmation is room scoped and requires another confirmation only for new tasks',async t=>{
+  const v=setup(t),s=v.service,c=s.chat.store,preview=deletionPreview(s,v.room.id);
+  await assert.rejects(forceDeleteRoom(s,v.other.id,preview.confirmation_token),{code:'room_delete_confirmation_expired'});
+  const message=c.post({room_id:v.room.id,to_member_id:v.shared.id,text:'new work after preview',idempotency_key:'new'});
+  await assert.rejects(forceDeleteRoom(s,v.room.id,preview.confirmation_token),{code:'room_delete_tasks_changed'});assert.equal(c.message(message.id).status,'queued');assert.equal(c.room(v.room.id).id,v.room.id);
+  const fresh=deletionPreview(s,v.room.id);c.updateMessage(message.id,{status:'answered'});assert.equal((await forceDeleteRoom(s,v.room.id,fresh.confirmation_token)).status,'deleted');
+});
+
+test('preview and forced DELETE require controller authority and a matching issued confirmation',async t=>{
+  const v=setup(t),s=v.service,token=id(),server=createServer(s,{port:0,token}),port=await server.listen(),base='http://127.0.0.1:'+port,route='/api/chat/rooms/'+v.room.id;t.after(()=>server.close());
+  const card=s.resume.issue(v.shared.id,v.room.id).card;for(const credential of [null,card.secret]){const response=await fetch(base+route+'/deletion',{headers:credential?{Authorization:'Bearer '+credential}:{}});assert.equal(response.status,401);}
+  const headers={Authorization:'Bearer '+token,'Content-Type':'application/json'},preview=await(await fetch(base+route+'/deletion',{headers})).json();
+  assert.equal(preview.room_id,v.room.id);const message=s.chat.store.post({room_id:v.room.id,to_member_id:v.shared.id,text:'queued after preview',idempotency_key:'new-http'});
+  const remove=async(path,value)=>{const response=await fetch(base+path,{method:'DELETE',headers,body:JSON.stringify(value)});return {status:response.status,value:await response.json()};};
+  assert.equal((await remove(route,{force:true,confirmation_token:'0'.repeat(48)})).value.code,'room_delete_confirmation_expired');assert.equal((await remove('/api/chat/rooms/'+v.other.id,{force:true,confirmation_token:preview.confirmation_token})).value.code,'room_delete_confirmation_expired');
+  assert.equal((await remove(route,{force:true,confirmation_token:preview.confirmation_token})).value.code,'room_delete_tasks_changed');assert.equal(s.chat.store.message(message.id).status,'queued');
+  const fresh=await(await fetch(base+route+'/deletion',{headers})).json();assert.equal((await remove(route,{force:true,confirmation_token:fresh.confirmation_token})).status,200);assert.equal(s.chat.store.room(v.other.id).id,v.other.id);
+});
+
+test('failed force revocation rolls back cancellation and never aborts the owned worker',async t=>{
+  const v=setup(t),s=v.service,c=s.chat.store,db=s.store.db,abort=new AbortController();s.entry.issue(v.shared.id,v.room.id);
+  const message=c.post({room_id:v.room.id,to_member_id:v.shared.id,text:'keep on rollback',idempotency_key:'rollback'});s.chat.active.set(v.shared.id,{roomId:v.room.id,abort});const preview=deletionPreview(s,v.room.id);
+  db.exec("CREATE TRIGGER fixture_deny_force BEFORE UPDATE OF status ON chat_resume_credentials BEGIN SELECT RAISE(ABORT,'fixture force denied'); END;");
+  await assert.rejects(forceDeleteRoom(s,v.room.id,preview.confirmation_token),/fixture force denied/);assert.equal(abort.signal.aborted,false);assert.equal(c.message(message.id).status,'queued');assert.equal(c.room(v.room.id).id,v.room.id);db.exec('DROP TRIGGER fixture_deny_force');s.chat.active.clear();
+});
+
+test('late native handshake after confirmed deletion cannot restore availability or publish progress',async t=>{
+  const v=setup(t),s=v.service;let release,work;
+  s.chat.options.clientFactory=()=>({run:async input=>{work=input;await new Promise(resolve=>release=resolve);input.onBinding('bound','late-thread');input.onProgress('late progress');return {answer:'late answer'};},close:async()=>{release();}});
+  const member=s.chat.addMember({name:'late native fixture',adapter:'codex'});await s.chat.connect(member.id,v.room.id);
+  const pending=s.chat.connecting.get(v.room.id+':'+member.id),preview=deletionPreview(s,v.room.id);await forceDeleteRoom(s,v.room.id,preview.confirmation_token);await pending;
+  assert.ok(work.signal.aborted);assert.equal(s.chat.active.size,0);assert.equal(s.chat.connecting.size,0);assert.equal(s.chat.connectionProgress.size,0);assert.equal(s.chat.connectedMembers.has(member.id),false);assert.notEqual(s.chat.store.member(member.id).status,'ready');assert.deepEqual(s.chat.store.rooms().map(value=>value.id),[v.other.id]);
+});
+
+test('force deletion stops the owned running turn and ignores late output while another room keeps running',async t=>{
+  const v=setup(t),s=v.service,c=s.chat.store;let release,input,closes=0;const member=s.chat.addMember({name:'running native fixture',adapter:'codex'});s.chat.join(v.room.id,member.id);c.updateMember(member.id,{status:'ready',verified_at:now()});
+  s.chat.options.clientFactory=()=>({run:async value=>{input=value;value.onTurn('original-running-turn');await new Promise(resolve=>release=resolve);value.onProgress('late output');value.onApproval({id:123,method:'fixture'},'read-only');return {answer:'late result must not publish'};},close:async()=>{closes++;release();}});
+  const otherAbort=new AbortController();s.chat.active.set(v.shared.id,{roomId:v.other.id,abort:otherAbort});
+  const message=s.chat.post({room_id:v.room.id,to_member_id:member.id,text:'running fixture task',idempotency_key:'running'});assert.equal(c.message(message.id).status,'processing');
+  const result=await forceDeleteRoom(s,v.room.id,deletionPreview(s,v.room.id).confirmation_token);await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(result.status,'deleted');assert.ok(input.signal.aborted);assert.equal(closes,1);assert.equal(otherAbort.signal.aborted,false);assert.equal(s.chat.active.get(v.shared.id).roomId,v.other.id);assert.equal(s.chat.progress.size,0);assert.equal(s.approvals.size,0);assert.equal(s.chat.connectedMembers.has(member.id),false);
+  assert.equal(s.store.db.prepare('SELECT status FROM chat_messages WHERE id=?').get(message.id).status,'cancelled');assert.equal(s.store.db.prepare("SELECT count(*) n FROM chat_messages WHERE room_id=? AND kind='reply'").get(v.room.id).n,0);s.chat.active.clear();
+});
 
 test('controller deletes only one local room atomically, revokes its entrances and keeps shared identities and history',async t=>{
   const v=setup(t),s=v.service,db=s.store.db,c=s.chat.store;

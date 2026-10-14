@@ -9,6 +9,7 @@ readline.createInterface({input:process.stdin}).on('line',line=>{const m=JSON.pa
   try{let result={};if(m.method==='initialize')result={userAgent:'protocol-fixture'};
     if(m.method==='config/read')result={config:{model:'fixture-model',model_provider:'fixture-provider',model_providers:{'fixture-provider':{name:'Fixture',base_url:'http://127.0.0.1:1',env_key:'FIXTURE_KEY',wire_api:'responses',requires_openai_auth:false}},notify:['personal-popup'],hooks:{Stop:[]},mcp_servers:{personal:{command:'never-run'}}}};
     if(m.method==='account/read')result={account:{type:'chatgpt'},requiresOpenaiAuth:true};
+    if(m.method==='mcpServer/tool/call')result={content:[{type:'text',text:'fixture tool response'}],structuredContent:{ok:p.arguments.nonce!=='invalid',room_id:p.arguments.invite_id,member:{id:'fixture-member'}}};
     if(m.method==='thread/start'){const thread={id:randomUUID(),cwd:p.cwd,name:null,status:{type:'idle'},turns:[]};write(thread);result={thread:read(thread.id)};}
     if(m.method==='thread/name/set'){const thread=read(p.threadId);thread.name=p.name;write(thread);}
     if(m.method==='thread/read')result={thread:read(p.threadId)};

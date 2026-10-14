@@ -62,7 +62,7 @@ class LaunchManager{
     const session={id:id(),room_id:room.id,status:'preparing',goal:input.goal?redact(cleanText(input.goal,1200,'协作目标')):'',candidates:JSON.stringify(scan.candidates),install_clients:input.install_clients===true?1:0,error:null,created:now(),updated:now(),selected_providers:JSON.stringify(providers)};
     this.db.prepare('INSERT INTO launch_sessions(id,room_id,status,goal,candidates,install_clients,error,created,updated,selected_providers) VALUES(:id,:room_id,:status,:goal,:candidates,:install_clients,:error,:created,:updated,:selected_providers)').run(session);
     const selected=scan.candidates.filter(candidate=>providers.includes(candidate.provider));
-    const work=this.run(session,selected).catch(e=>{this.db.prepare("UPDATE launch_sessions SET status='needs_setup',error=?,updated=? WHERE id=?").run(redact(e.message).slice(0,1200),now(),session.id);this.service.changed();}).finally(()=>this.jobs.delete(session.id));this.jobs.set(session.id,work);this.service.changed();return this.state({session_id:session.id});
+    const work=this.run(session,selected).catch(e=>{this.db.prepare("UPDATE launch_sessions SET status='needs_setup',error=?,updated=? WHERE id=? AND status!='cancelled'").run(redact(e.message).slice(0,1200),now(),session.id);this.service.changed();}).finally(()=>this.jobs.delete(session.id));this.jobs.set(session.id,work);this.service.changed();return this.state({session_id:session.id});
   }
   backend(room,candidate){
     const chat=this.service.chat,participants=chat.store.participants(room.id);let existing;
@@ -94,7 +94,7 @@ class LaunchManager{
   async run(session,candidates){
     const room=this.service.chat.store.room(session.room_id);
     for(const candidate of candidates){
-      if(this.closing)return;
+      if(this.closing||this.service.chat.roomDeleted(session.room_id))return;
       if(candidate.provider==='grok-bot'&&candidate.adapter==='grok-bridge'&&candidate.capabilities?.manual_connect===true){
         const member=this.prepareGrok(room),stored=JSON.parse(this.db.prepare('SELECT candidates FROM launch_sessions WHERE id=?').get(session.id).candidates);
         const selected=stored.find(item=>item.provider==='grok-bot');if(selected)selected.prepared_member_id=member.id;
@@ -110,6 +110,7 @@ class LaunchManager{
       if(managed&&(backend.config.executable!==candidate.executable||JSON.stringify(backend.config.executable_args||[])!==JSON.stringify(candidate.executable_args||[]))){
         if(this.service.chat.active.has(backend.id))throw new RoomError('该成员正在工作，等待本轮结束后重试接入。',409,'launch_busy');
         const client=this.service.chat.clients.get(backend.id);this.service.chat.clients.delete(backend.id);if(client)await client.close();
+        if(this.service.chat.roomDeleted(room.id))return;
         this.service.chat.store.updateMember(backend.id,{config:{...backend.config,executable:candidate.executable,executable_args:candidate.executable_args||[]}});backend=this.service.chat.store.member(backend.id);
       }
       const proxy=this.proxy(room,candidate,backend),backendEntry=this.service.entry.issue(backend.id,room.id,{repair_invalid:true});
@@ -123,21 +124,25 @@ class LaunchManager{
           atomicWrite(file,JSON.stringify(createQwenMcpConfig(this.service._localUrl,card),null,2)+'\n');
           result={status:'awaiting_import',installed:false,configured:false,connected:false,can_wake:false,needs_import:true,configuration_file:file,detail:'请在 Qwen 本人窗口的 MCP 设置中通过 JSON 导入该本机配置，再实际调用接入工具。'};
         }
+        if(this.service.chat.roomDeleted(room.id))return;
         this.db.prepare('UPDATE launch_proxies SET installation=?,updated=? WHERE id=?').run(JSON.stringify(result),now(),proxy.id);
       }
       if(preparedManualProviders.has(candidate.provider)){
         const own=ownCommand();let result;
         try{result=prepareManualClient({provider:candidate.provider,data_dir:this.service.store.dir,command:own.command,args:own.args,entry_file:backendEntry.file,local_url:this.service._localUrl});}
         catch(error){result={status:'needs_setup',installed:false,connected:false,can_wake:false,detail:redact(error.message).slice(0,1000)};}
+        if(this.service.chat.roomDeleted(room.id))return;
         this.db.prepare('UPDATE launch_proxies SET installation=?,updated=? WHERE id=?').run(JSON.stringify(result),now(),proxy.id);
       }
       if(session.install_clients&&['codex','claude-code','claude-desktop'].includes(candidate.provider)){
         const own=ownCommand();let result;
         try{if(candidate.provider==='codex'&&!this.options.installer)result={status:'managed_session',installed:false,needs_reload:false,connected:false,configuration_file:null,reason:'成员通信随专属后台会话加载，真实握手另行验证；无需修改个人 Codex MCP 配置。'};else result=await (this.options.installer||installClient)({provider:candidate.provider,executable:candidate.executable,executable_args:candidate.executable_args||[],command:own.command,args:own.args,entry_file:backendEntry.file},this.options.installerOptions||{});}catch(e){result={status:'needs_setup',installed:false,connected:false,reason:redact(e.message).slice(0,1000)};}
+        if(this.service.chat.roomDeleted(room.id))return;
         this.db.prepare('UPDATE launch_proxies SET installation=?,updated=? WHERE id=?').run(JSON.stringify(result),now(),proxy.id);
       }
-      if(this.closing)return;
+      if(this.closing||this.service.chat.roomDeleted(session.room_id))return;
       if(managed)await this.service.entry.wake(room.id,backend.id);
+      if(this.service.chat.roomDeleted(room.id))return;
       this.role(proxy);this.service.changed();
     }
     this.db.prepare("UPDATE launch_sessions SET status='awaiting_grok',updated=? WHERE id=?").run(now(),session.id);this.handoff(session.id);this.service.changed();

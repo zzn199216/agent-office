@@ -155,7 +155,7 @@ class ChatStore {
       return this.room(roomId);
     });
   }
-  deleteRoom(roomId, checkBusy = () => {}) {
+  deleteRoom(roomId, checkBusy = () => {}, {force=false} = {}) {
     if(this.readOnly)throw new RoomError('只读检查不能删除聊天室。',403,'read_only_state');
     if(typeof roomId!=='string'||!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(roomId))throw new RoomError('聊天室标识无效。',400,'room_delete_input_invalid');
     // An immediate write lock makes checking work and recording the tombstone
@@ -167,6 +167,7 @@ class ChatStore {
       if(previous)return {ok:true,room_id:roomId,status:'deleted',deleted_at:previous.deleted_at,already_deleted:true};
       const hasTable=name=>!!this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(name);
       const busy=()=>{throw new RoomError('聊天室仍有待办、正在处理或结果待核对的任务。请先处理或停止待办任务，并核对不确定的结果，再删除聊天室。',409,'room_busy');};
+      if(!force){
       if(this.db.prepare("SELECT 1 FROM chat_messages WHERE room_id=? AND (status NOT IN ('posted','answered','completed','failed','cancelled','consumed') OR status='consumed' AND kind NOT IN ('reply','acknowledgment')) LIMIT 1").get(roomId))busy();
       if(this.db.prepare("SELECT 1 FROM chat_bindings WHERE room_id=? AND binding_state IN ('creating','creation_uncertain','outcome_uncertain','resume_uncertain') LIMIT 1").get(roomId))busy();
       if(this.db.prepare("SELECT 1 FROM chat_notifications n JOIN chat_messages m ON m.id=n.message_id WHERE m.room_id=? AND n.status='sending' LIMIT 1").get(roomId))busy();
@@ -174,6 +175,7 @@ class ChatStore {
       if(hasTable('onboarding_runs')&&this.db.prepare("SELECT 1 FROM onboarding_runs WHERE room_id=? AND status='running' LIMIT 1").get(roomId))busy();
       if(hasTable('bridge_entries')&&this.db.prepare("SELECT 1 FROM bridge_entries e JOIN bridge_bindings b ON b.id=e.binding_id WHERE b.room_id=? AND e.status NOT IN ('answered','delivered','failed','cancelled') LIMIT 1").get(roomId))busy();
       if(hasTable('bridge_setup_tests')&&this.db.prepare("SELECT 1 FROM bridge_setup_tests WHERE room_id=? AND status IN ('running','waiting','uncertain') LIMIT 1").get(roomId))busy();
+      }
       checkBusy(roomId,busy);
       const stamp=now();
       this.db.prepare('INSERT INTO chat_room_tombstones(room_id,deleted_at) VALUES(?,?)').run(roomId,stamp);

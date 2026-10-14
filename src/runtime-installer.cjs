@@ -2,6 +2,8 @@
 const fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypto');
 const zlib=require('node:zlib');
 const {spawn}=require('node:child_process');
+const {AsyncLocalStorage}=require('node:async_hooks');
+const installationContext=new AsyncLocalStorage();
 const {RoomError,id,now,atomicWrite,readableError}=require('./util.cjs');
 const QWEN_HOST='qwen-code-assets.oss-cn-hangzhou.aliyuncs.com';
 const CLAUDE_HOST='downloads.claude.ai';
@@ -80,10 +82,12 @@ function tarEntries(compressed,options={}){
   if(!ended||!entries.length)throw new RoomError('官方 npm TAR 缺少完整结束标记。',409,'runtime_archive_invalid');checkNames(names);return entries;
 }
 function defaultRunner(command,args,options={}){
+  if(options.signal?.aborted)return Promise.reject(new RoomError('本房间的安装已停止。',409,'cancelled'));
   return new Promise((resolve,reject)=>{
     const child=spawn(command,args,{cwd:options.cwd,env:options.env||process.env,windowsHide:true,shell:false,stdio:['pipe','pipe','pipe']});let stdout='',stderr='',finished=false;
     const timer=setTimeout(()=>{child.kill();done(new RoomError('官方运行时元数据检查超时。',503,'runtime_metadata_timeout'));},options.timeout||20000);
-    const done=(error,result)=>{if(finished)return;finished=true;clearTimeout(timer);if(error)reject(error);else resolve(result);};
+    const abort=()=>{child.kill();done(new RoomError('本房间的安装已停止。',409,'cancelled'));};options.signal?.addEventListener('abort',abort,{once:true});
+    const done=(error,result)=>{if(finished)return;finished=true;clearTimeout(timer);options.signal?.removeEventListener('abort',abort);if(error)reject(error);else resolve(result);};
     child.on('error',error=>done(error));child.stdout.on('data',data=>{stdout+=data.toString('utf8');if(stdout.length>1024*1024){child.kill();done(new Error('metadata output too large'));}});child.stderr.on('data',data=>{stderr+=data.toString('utf8');if(stderr.length>1024*1024){child.kill();done(new Error('metadata output too large'));}});
     child.on('close',exitCode=>done(null,{exitCode,stdout,stderr}));child.stdin.on('error',()=>{});child.stdin.end(options.input||'');
   });
@@ -95,14 +99,16 @@ async function defaultExtractor(archive,target,options={}){
   if(result.exitCode!==0)throw new RoomError('官方运行时 ZIP 展开失败。',503,'runtime_extract_failed');
 }
 class RuntimeInstaller{
-  constructor(service,options={}){this.service=service;this.options=options;this.fetch=options.fetch||globalThis.fetch;this.runner=options.runner||defaultRunner;this.extractor=options.extractor||defaultExtractor;this.jobs=new Map();this.root=path.resolve(service.store.dir,'runtimes');this.systemHosts=new Set();
+  constructor(service,options={}){this.service=service;this.options=options;this.fetch=options.fetch||globalThis.fetch;const runner=options.runner||defaultRunner;this.runner=async(command,args,input={})=>{this.checkCancelled();const result=await runner(command,args,{...input,signal:installationContext.getStore()?.abort.signal});this.checkCancelled();return result;};this.extractor=options.extractor||defaultExtractor;this.jobs=new Map();this.jobOwners=new Map();this.root=path.resolve(service.store.dir,'runtimes');this.systemHosts=new Set();
     // Injected fetches are self-contained by default. A trusted fixture can
     // explicitly enable this path with its own runner; browser inputs cannot.
     this.systemFallback=(options.systemFallback===true||options.fetch===undefined&&options.systemFallback!==false)&&(options.platform||process.platform)==='win32';}
   async bytes(url,maxBytes){
+    this.checkCancelled();
     const official=validOfficialUrl(url),host=new URL(official).hostname;
     if(this.systemFallback&&this.systemHosts.has(host))return this.systemBytes(official,maxBytes);
     try{return await this.nodeBytes(official,maxBytes);}catch(error){
+      this.checkCancelled();
       const code=error?.cause?.code||error?.code;
       const network=['ECONNREFUSED','ECONNRESET','ENOTFOUND','EAI_AGAIN','ETIMEDOUT','UND_ERR_CONNECT_TIMEOUT','UND_ERR_SOCKET'].includes(code)||['AbortError','TimeoutError'].includes(error?.name)||error instanceof TypeError&&error.message==='fetch failed';
       if(!this.systemFallback||!network)throw error;
@@ -113,7 +119,9 @@ class RuntimeInstaller{
     let current=validOfficialUrl(url);const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),120000);
     try{
       for(let redirect=0;redirect<4;redirect++){
-        const response=await this.fetch(current,{redirect:'manual',signal:controller.signal});
+        const signal=installationContext.getStore()?.abort.signal;
+        const response=await this.fetch(current,{redirect:'manual',signal:signal?AbortSignal.any([controller.signal,signal]):controller.signal});
+        this.checkCancelled();
         if(response.status>=300&&response.status<400){const location=response.headers?.get('location');if(!location)throw new RoomError('官方下载返回了无效跳转。',503,'runtime_download_failed');current=validOfficialUrl(new URL(location,current).toString());continue;}
         if(!response.ok)throw new RoomError('暂时无法下载官方运行时，请稍后重试。',503,'runtime_download_failed');
         const length=Number(response.headers?.get('content-length')||0);if(length>maxBytes)throw new RoomError('官方运行时下载超过大小限制。',409,'runtime_download_too_large');
@@ -150,10 +158,13 @@ class RuntimeInstaller{
   }
   install(input={}){
     if(!['qwen-code','claude-code','gemini-cli'].includes(input.provider))return Promise.reject(new RoomError('这个 agent 没有受支持的官方运行时安装器。',409,'runtime_provider_unsupported'));
-    if(this.jobs.has(input.provider))return this.jobs.get(input.provider);
-    const work=this.perform(input.provider).catch(error=>({status:'needs_setup',installed:false,reason:error.code||'runtime_install_failed',...(error.stage?{stage:error.stage}:{}),detail:input.provider==='gemini-cli'&&!(error instanceof RoomError)?'官方 Gemini 运行时安装未完成，请重试该步骤。':readableError(error)})).finally(()=>this.jobs.delete(input.provider));
+    if(this.jobs.has(input.provider)){this.jobOwners.get(input.provider)?.rooms.add(input.room_id||'*');return this.jobs.get(input.provider);}
+    const owner={abort:new AbortController(),rooms:new Set([input.room_id||'*'])};this.jobOwners.set(input.provider,owner);
+    const work=installationContext.run(owner,()=>this.perform(input.provider)).catch(error=>({status:owner.abort.signal.aborted?'cancelled':'needs_setup',installed:false,reason:owner.abort.signal.aborted?'cancelled':error.code||'runtime_install_failed',...(error.stage?{stage:error.stage}:{}),detail:input.provider==='gemini-cli'&&!(error instanceof RoomError)?'官方 Gemini 运行时安装未完成，请重试该步骤。':readableError(error)})).finally(()=>{this.jobs.delete(input.provider);this.jobOwners.delete(input.provider);});
     this.jobs.set(input.provider,work);return work;
   }
+  checkCancelled(){if(installationContext.getStore()?.abort.signal.aborted)throw new RoomError('本房间的安装已停止。',409,'cancelled');}
+  cancelRoom(roomId){for(const owner of this.jobOwners.values())if(owner.rooms.delete(roomId)&&!owner.rooms.size)owner.abort.abort();}
   assertOwned(target){
     const absolute=path.resolve(target);if(!inside(this.root,absolute))throw new RoomError('运行时路径超出了本机专用目录。',403,'runtime_path_invalid');
     let current=absolute;
@@ -165,6 +176,7 @@ class RuntimeInstaller{
     return absolute;
   }
   publish(record){
+    this.checkCancelled();
     this.service.store.setting(`runtime.${record.provider}`,record);
     const env=this.service.chat?.discovery?.env;
     if(env){if(record.provider==='qwen-code'){env.AGENTROOM_QWEN_CODE_PATH=record.executable;env.AGENTROOM_QWEN_CODE_SCRIPT=record.executable_args[0];}else if(record.provider==='gemini-cli'){env.AGENTROOM_GEMINI_PATH=record.executable;env.AGENTROOM_GEMINI_SCRIPT=record.executable_args[0];}else env.AGENTROOM_CLAUDE_CODE_PATH=record.executable;}

@@ -96,11 +96,14 @@ function createServer(service,{token,port=47831,onShutdown}={}) {
         if(q.get('format')==='base64')return json(res,{id:row.id,name:row.name,mime:row.mime,data:bytes.toString('base64')});
         res.writeHead(200,{'Content-Type':row.mime,'Content-Length':bytes.length,'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});return res.end(bytes);
       }
+      const deletion=pathname.match(/^\/api\/chat\/rooms\/([a-f0-9-]{36})\/deletion$/i);
+      if(req.method==='GET'&&deletion){if(new URL(req.url,'http://127.0.0.1').search)throw new RoomError('删除预览的请求范围无效。',400,'room_delete_input_invalid');return json(res,require('./room-lifecycle.cjs').deletionPreview(service,deletion[1]));}
       const chat=pathname.match(/^\/api\/chat\/(rooms|members|messages)\/([a-f0-9-]{36})(?:\/(join|leave|connect|setup|wait|reply|cancel|ack|heartbeat|grok-configure|reconcile))?$/i);
       if(req.method==='DELETE'&&pathname.startsWith('/api/chat/rooms/')){
         const route=new URL(req.url,'http://127.0.0.1'),input=await body(req);
-        if(!chat||chat[1]!=='rooms'||chat[3]||route.search||!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).length)throw new RoomError('删除聊天室的请求范围无效。',400,'room_delete_input_invalid');
-        const lifecycle=require('./room-lifecycle.cjs');await lifecycle.settleInterruptedWork(service,chat[2]);return json(res,lifecycle.deleteRoom(service,chat[2]));
+        const forced=input?.force===true&&typeof input.confirmation_token==='string'&&/^[a-f0-9]{48}$/.test(input.confirmation_token)&&Object.keys(input).length===2;
+        if(!chat||chat[1]!=='rooms'||chat[3]||route.search||!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).length&&!forced)throw new RoomError('删除聊天室的请求范围无效。',400,'room_delete_input_invalid');
+        const lifecycle=require('./room-lifecycle.cjs');if(forced)return json(res,await lifecycle.forceDeleteRoom(service,chat[2],input.confirmation_token));await lifecycle.settleInterruptedWork(service,chat[2]);return json(res,lifecycle.deleteRoom(service,chat[2]));
       }
       if(req.method==='GET' && chat){const q=new URL(req.url,`http://${req.headers.host}`).searchParams;
         if(chat[1]==='rooms')return json(res,service.chat.room(chat[2],{...(q.has('before_seq')?{before_seq:Number(q.get('before_seq'))}:{}),...(q.has('limit')?{limit:Number(q.get('limit'))}:{})}));
