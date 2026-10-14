@@ -84,7 +84,8 @@ test('preparing bridge setup creates instructions while actual handshake and nat
   const state = setup(t), { service, bridgeMember, room } = state;
   const setupResult = service.bridge.setup(bridgeMember.id, room.id, { group_label: '待实际引用的群' });
   assert.match(setupResult.setup_prompt, /缺少本机执行授权/);
-  assert.match(setupResult.setup_prompt, /没有明确目标先让我选定群/);
+  assert.match(setupResult.setup_prompt, /不需要先创建或加入群聊/);
+  assert.match(setupResult.setup_prompt, /无法唯一定位时再确认/);
   assert.equal(setupResult.stages.find(stage => stage.id === 'prompt').state, 'complete');
   assert.equal(setupResult.stages.find(stage => stage.id === 'handshake').state, 'pending');
   assert.equal(setupResult.stages.find(stage => stage.id === 'native_return').state, 'pending');
@@ -93,6 +94,20 @@ test('preparing bridge setup creates instructions while actual handshake and nat
   assert.equal(service.bridge.entries().length, 0);
   assert.throws(() => service.bridge.request(input(state)), { status: 409, code: 'bridge_not_joined' });
   assert.equal(state.clients.size, 0);
+});
+
+test('a single Grok Bot can handshake and bridge a direct conversation without a group', async t => {
+  const state = setup(t), { service, bridgeMember, room } = state;
+  const guide = service.bridge.setup(bridgeMember.id, room.id, {});
+  assert.match(guide.setup_prompt, /未指定群聊，先完成单 Bot 接入/);
+  assert.equal(service.chat.store.member(bridgeMember.id).config.bridge_setup.group_label, '');
+  const card = JSON.parse(fs.readFileSync(guide.resume_entry.file, 'utf8'));
+  service.entry.accept(card);
+  const reply = await answered(state, { conversation_ref: 'fixture-native/direct-bot-dialogue' });
+  assert.equal(reply.origin.conversation_ref, 'fixture-native/direct-bot-dialogue');
+  assert.equal(reply.status, 'answered');
+  assert.equal(service.bridge.setup(bridgeMember.id, room.id).connection.verified, true);
+  assert.equal(reply.return_verification, 'unverified', 'a local answer must not invent a native conversation receipt');
 });
 
 test('a chat answer, a bridge report and a human origin check are three separate states', async t => {

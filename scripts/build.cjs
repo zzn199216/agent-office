@@ -58,13 +58,13 @@ async function main(){
 
 聊天室列表旁的 ⋯ 打开房间管理，可归档、恢复或删除。归档收起列表并保留历史与已有协作；删除会先确认并列出本房间工作。删除后成员连接转到仍在的房间，没有房间时暂停，重新入座后恢复，旧配置无需重新导入。其他房间、共享成员和原生 Grok 群保留。Grok Bot 在添加成员页显示为本人窗口桥接，复用已有桥接成员的长期命令入口，真实进入后才显示接通；不安装 Grok CLI 来替代桌面窗口。
 
-网页选择项目，点“扫描本机 agents”，再点目标旁的“一键接入”。只准备这个成员；首次账号配置、桌面启用或导入需要本人完成时，页面显示明确下一步。未安装的受支持后台入口可“安装并接入”，不修改系统 PATH 或全局 npm。
+打开“接入一位 AI”时扫描本机，默认展示运行中的成员；未运行的已安装/可安装候选可展开查看。选择项目后，点目标旁的“一键接入”。只准备这个成员；首次账号配置、桌面启用或导入需要本人完成时，页面显示明确下一步。未安装的受支持后台入口可“安装并接入”，不修改系统 PATH 或全局 npm。
 
 Codex、Claude Code、Qwen Code、Gemini CLI 有专用后台协作入口，使用各自正式账号或 API。首次安装和实际模型握手分别确认。Claude 桌面、Qwen 消费端、豆包、OpenCode、Cherry Studio、Cline、Roo Code 支持本人处理的 MCP 信箱。豆包使用原生个人连接器表单，其他新成员使用正式 MCP JSON；保存配置不等于启用或后台唤醒。
 
 离线或心跳过期的成员保留空工位，机器人离场，消息与名称仍可查看。右侧连接页可只读诊断本机服务、当前房间、成员长期入口和通知配置。Grok 的 Windows 宿主连接、目标群引用和原生加群工具仍需在 Grok 内核对，本机服务在线不代表它们已接通。
 
-接通后复制 Grok 加群说明，让现有 Bot 用原生工具把对应代理加入指定群。保存或更新 GROK_SKILL.md 为 /AgentRoom 后，可直接说“扫描本机 agents”或“把 Codex 加入这个群”。扫描只在要求时执行，没有定期扫描或自动拉人；旧 Grok 同步例程仍须真正暂停并回报。
+Grok 可先连接一个 Bot，直接在当前对话桥接外部成员；群聊不是接入前提。需要多人协作时再让 Bot 使用可用原生工具创建或加入群聊，桥接用户选定的成员。保存或更新 GROK_SKILL.md 为 /AgentRoom 后，可直接说“扫描本机 agents”或“把 Codex 加入这个群”。扫描只在要求时执行，没有定期扫描或自动拉人；旧 Grok 同步例程仍须真正暂停并回报。
 
 详见 USER_GUIDE.md；Grok 流程在 GROK_SKILL.md，通用流程在 SKILL.md，旧命令在 references/legacy-communication.md。新增接入见 GEMINI_CLI_RESEARCH.md、DOUBAO_CONNECTOR_GUIDE.md、ADDITIONAL_AGENTS_RESEARCH.md；连接问题见 GROK_CONNECTION_TROUBLESHOOTING.md。
 

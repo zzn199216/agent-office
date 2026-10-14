@@ -144,16 +144,19 @@ function renderLaunchCandidates() {
   const signature = JSON.stringify([launchScanning,launchBusy,launchCandidates,webConnected,projectId,[...onboardingStarting],[...onboardingJobs.values()].map(job => [job.id,job.status,job.updated_at])]);
   if (signature === lastLaunchCandidates) { $('launch-candidates').querySelectorAll('[data-launch-provider]').forEach(input => { input.checked = launchSelection.has(input.dataset.launchProvider); }); return; }
   lastLaunchCandidates = signature;
+  const othersOpen = $('launch-candidates').querySelector('.launch-other-candidates')?.open === true;
   if (launchScanning) { $('launch-candidates').innerHTML = '<div class="launch-scan-note"><span class="pulse-dot"></span> 正在查看本机安装和运行情况…</div>'; return; }
   if (!launchCandidates) { $('launch-candidates').innerHTML = '<div class="launch-scan-note">点击扫描，找到想接入的成员，再点“一键接入”。</div>'; return; }
   const visible = launchCandidates.filter(candidate => candidate.id !== 'mailbox' && (candidate.installed || candidate.running || onboardingCanInstall(candidate) || candidate.capabilities?.automatic_launch || candidate.capabilities?.mcp_prepare));
-  $('launch-candidates').innerHTML = visible.length ? visible.map(candidate => {
+  const renderCandidate = candidate => {
     const provider = launchProvider(candidate), selectable = launchSelectable(candidate), canJoin = onboardingSelectable(candidate), mode = onboardingMode(candidate), job = onboardingForProvider(provider), pending = onboardingStarting.has(provider) || onboardingRunning(job);
     const availability = !canJoin ? candidate.support === 'unsupported' ? '已发现，接口待适配' : !candidate.installed ? mode === 'managed' ? '需安装官方 CLI · 查看说明' : '尚未安装 · 查看官方接入说明' : '已发现 · 待适配' : !candidate.installed ? '尚未安装 · 可安装接入' : candidate.running ? '正在运行 · 接入后验证通信' : '已安装 · 可接入';
     const label = pending ? '正在接入…' : onboardingReady(job) ? '重新检查' : job?.status === 'needs_action' ? '继续接入' : !candidate.installed && canJoin ? '安装并接入' : '一键接入';
     const accountNote = mode === 'bridge' ? '复用桥接 Bot 的本人窗口；复制接入说明后完成实际握手' : provider === 'qwen-code' ? '首次配置 API 或 Token 计划凭据' : provider === 'gemini-cli' ? '使用 Gemini CLI 自己的账号或 API；网页登录不会自动代替' : provider === 'doubao' ? '本人设置中添加自定义连接器，启用后验证工具握手' : '';
     return `<article class="launch-candidate ${canJoin ? '' : 'unavailable'}"><label class="launch-candidate-select"><input type="checkbox" data-launch-provider="${escape(provider)}" aria-label="批量选择 ${escape(candidate.name || provider)}" ${launchSelection.has(provider) ? 'checked' : ''} ${selectable && !launchBusy ? '' : 'disabled'}></label>${avatar(candidate.name,provider)}<div class="launch-candidate-info"><strong>${escape(candidate.name || provider)}</strong><span class="launch-mode ${mode === 'managed' && canJoin ? 'automatic' : ''}">${escape(mode === 'bridge' ? '本人窗口 · 桥接' : mode === 'managed' ? '后台 CLI · 独立会话' : candidate.capabilities?.mcp_prepare ? '本人 MCP · 信箱' : '接口待适配')}</span><small>${escape(availability)}</small>${accountNote ? `<small>${escape(accountNote)}</small>` : ''}</div><button type="button" class="${canJoin ? 'primary' : 'secondary'} onboarding-start" ${canJoin ? 'data-onboarding-provider' : 'data-onboarding-requirements'}="${escape(provider)}" aria-label="${escape(candidate.name || provider)} ${escape(canJoin ? label : '查看接入要求')}" ${!pending && !launchBusy && !launchScanning && (webConnected || !canJoin) ? '' : 'disabled'}>${escape(canJoin ? label : '查看接入要求')}</button></article>`;
-  }).join('') : '<div class="launch-scan-note">本次未发现可用成员。可以在专业视图接入通用 MCP 客户端。</div>';
+  };
+  const running = visible.filter(candidate => candidate.running === true), others = visible.filter(candidate => candidate.running !== true);
+  $('launch-candidates').innerHTML = (running.length ? running.map(renderCandidate).join('') : '<div class="launch-scan-note">未发现正在运行的成员。可以打开 AI 应用后重新扫描，或展开其他候选。</div>') + (others.length ? `<details class="launch-other-candidates" ${othersOpen ? 'open' : ''}><summary>其他已安装 / 可安装的成员（${others.length}）</summary>${others.map(renderCandidate).join('')}</details>` : '');
 }
 function renderLaunch() {
   const projects = state?.projects || [], selectedProject = projects.find(project => project.id === projectId);
@@ -219,10 +222,10 @@ async function refreshLaunch() {
   catch (error) { if (selected === roomId) { launchError = error.message; renderLaunch(); } }
   finally { launchFetching = false; if (launchAgain) { launchAgain = false; launchTimer = setTimeout(() => action(refreshLaunch),200); } else if (launchSession?.status === 'preparing') launchTimer = setTimeout(() => action(refreshLaunch),2000); }
 }
-async function scanLaunch() {
+async function scanLaunch({quiet = false} = {}) {
   if (launchScanning || launchBusy) return;
   launchScanning = true; launchError = ''; renderLaunch();
-  try { const result = await api('/api/launch/scan',{}); launchCandidates = result.candidates || []; launchScannedAt = result.scanned_at || result.at || new Date().toISOString(); launchSelection.clear(); toast('扫描完成。点击成员旁的“一键接入”。'); }
+  try { const result = await api('/api/launch/scan',{}); launchCandidates = result.candidates || []; launchScannedAt = result.scanned_at || result.at || new Date().toISOString(); launchSelection.clear(); if (!quiet) toast('扫描完成。点击成员旁的“一键接入”。'); }
   catch (error) { launchError = error.message; }
   finally { launchScanning = false; renderLaunch(); }
 }
@@ -875,11 +878,14 @@ function renderSecretary() {
   $('secretary-error').classList.toggle('hidden',!secretaryError); $('secretary-error').textContent = secretaryError;
   $('secretary-role-card').innerHTML = `<div class="secretary-role-heading"><span class="secretary-role-mark">✦</span><div><strong>${escape(selected.name || '办公室秘书')}</strong><small>${escape(secretaryStatusText(selected))}</small></div></div><p>${selected.member_id ? '梳理目标、安排任务并跟进交付。添加其他 AI 仍由你选择。' : '先选一位成员，和它一起组织这间办公室。'}</p><button type="button" class="secondary" data-secretary-open>${selected.member_id ? '管理秘书 / 查看教程' : '选择 AI 秘书'}</button>${selected.member_id ? `<button type="button" class="text-button" data-secretary-reset ${!webConnected || secretaryBusy ? 'disabled' : ''}>清除秘书角色</button>` : ''}`;
   $('secretary-role-card').classList.toggle('hidden',!roomId || !!legacyId);
-  $('secretary-connect-status').textContent = !webConnected ? '服务未连接，请先开启本机服务。' : secretaryConnectRoom === roomId ? '先接通一位可后台回答的秘书；成功后自动进入办公室。' : '你已切换房间。关闭此页后，在目标房间重新接入。';
+  $('secretary-connect-status').textContent = !webConnected ? '服务未连接，请先开启本机服务。' : secretaryConnectRoom === roomId ? '优先显示本机正在运行的 AI。选择成员接入，通信方式见每张卡片。' : '你已切换房间。关闭此页后，在目标房间重新接入。';
   $('secretary-scan-agents').disabled = !webConnected || launchScanning || secretaryConnectRoom !== roomId;
-  $('secretary-connect-candidates').innerHTML = $('launch-candidates').innerHTML;
-  $('secretary-connect-candidates').querySelectorAll('.launch-candidate').forEach(card=>{const provider=card.querySelector('[data-launch-provider]')?.dataset.launchProvider;card.classList.toggle('hidden',!['codex','claude-code','qwen-code','gemini-cli'].includes(provider));});
-  $('secretary-connect-candidates').querySelectorAll('.launch-candidate-select').forEach(element=>element.remove());
+  const othersOpen = $('secretary-connect-candidates').querySelector('.launch-other-candidates')?.open === true;
+  const candidateCopy = $('launch-candidates').cloneNode(true);
+  candidateCopy.querySelectorAll('.launch-candidate-select').forEach(element=>element.remove());
+  const otherCandidates = candidateCopy.querySelector('.launch-other-candidates');
+  if (otherCandidates) otherCandidates.open = othersOpen;
+  if ($('secretary-connect-candidates').innerHTML !== candidateCopy.innerHTML) $('secretary-connect-candidates').innerHTML = candidateCopy.innerHTML;
   const attempt=onboardingJobs.get(secretaryConnectJob)||currentOnboardingJobs().find(job=>onboardingRunning(job))||currentOnboardingJobs()[0];
   $('secretary-connect-progress').innerHTML=attempt?onboardingJobMarkup(attempt):'';
   $('secretary-connect-candidates').querySelectorAll('button').forEach(button => { if(secretaryConnectRoom !== roomId||onboardingRunning(attempt)) button.disabled = true; });
@@ -948,6 +954,7 @@ function discussWithSecretary() {
 }
 function openSecretaryConnect() {
   if (!roomId || !webConnected) return; secretaryConnectRoom = roomId; secretaryConnectJob = null; secretaryError = ''; renderSecretary(); $('secretary-connect-dialog').showModal();
+  void scanLaunch({quiet:true});
 }
 function updateOfficeScene() {
   if(!officeView || !professionalView || !history?.room || legacyId) return;
@@ -1446,18 +1453,18 @@ function renderBridge() {
   $('bridge-regenerate-prompt').disabled = bridgeCopying;
   const sameLabel = cached && cached.groupLabel === $('bridge-group-label').value.trim();
   $('bridge-copy-prompt').innerHTML = bridgeCopying ? '正在生成…' : sameLabel ? '复制完整说明 <span>↗</span>' : cached ? '按新名称生成并复制 <span>↗</span>' : prepared ? '重新生成并复制说明 <span>↗</span>' : '生成并复制完整说明 <span>↗</span>';
-  $('bridge-copy-note').textContent = cached ? '请发给 Grok。入口长期保留，接入进度另行验证。' : prepared ? '已生成过说明。可再次复制同一个房间的入口。' : '说明会带上同一个房间的长期本机入口。';
+  $('bridge-copy-note').textContent = cached ? '请发给 Grok。入口长期保留，接入进度另行验证。' : prepared ? '已生成过说明。可再次复制这位 Bot 的入口。' : '说明会带上这位 Bot 的长期本机入口。';
   $('bridge-handshake-state').textContent = verified ? '本机握手已验证' : '等待 Bot 加入'; $('bridge-handshake-state').className = `bridge-step-state ${verified ? 'verified' : ''}`;
-  $('bridge-handshake-detail').textContent = verified ? '这个桥接成员已执行真实本机握手。接下来分别确认协作通路和 Grok 原群回报。' : 'Grok Bot 执行本机加入握手后，这里才会显示已验证。复制说明、创建 Bot 和通信接通是不同的步骤。';
+  $('bridge-handshake-detail').textContent = verified ? '这个桥接成员已执行真实本机握手。接下来分别确认协作通路和 Grok 原对话回报。' : 'Grok Bot 执行本机加入握手后，这里才会显示已验证。复制说明、创建 Bot 和通信接通是不同的步骤。';
   $('bridge-stage-list').innerHTML = stages.map(stage => { const status = stage.id === 'native_return' && !nativeVerified && stage.state === 'complete' ? 'needs_action' : stage.state, prompt = stage.id === 'prompt', complete = status === 'complete' && !prompt, label = prompt ? '完整接入说明' : stage.label, detail = prompt ? status === 'complete' ? '仅表示说明已生成，仍需交给 Grok 执行。' : '先生成说明，再交给 Grok 安排创建与接入。' : stage.detail; return `<div class="bridge-stage ${complete ? 'complete' : ''}"><span class="bridge-stage-icon">${complete ? '✓' : '○'}</span><div><strong>${escape(label)}</strong>${detail ? `<small>${escape(detail)}</small>` : ''}</div><span>${prompt && status === 'complete' ? '已生成说明' : complete ? '已确认' : status === 'needs_action' ? '需要操作' : '待确认'}</span></div>`; }).join('');
   $('bridge-local-proof').textContent = localVerified ? '本机通路已验证' : ['waiting','running','queued'].includes(bridgeTestState(latestTest)) ? '检查中…' : ['failed','uncertain'].includes(bridgeTestState(latestTest)) ? '检查未完成' : '尚未测试'; $('bridge-local-proof').className = localVerified ? 'proof-verified' : '';
-  $('bridge-native-proof').textContent = nativeVerified ? '你已确认原群回报' : bridgeEntries.some(bridgeReported) ? 'Bot 已报告 · 等待你核对' : '尚未验证'; $('bridge-native-proof').className = nativeVerified ? 'proof-verified' : '';
+  $('bridge-native-proof').textContent = nativeVerified ? '你已确认原对话回报' : bridgeEntries.some(bridgeReported) ? 'Bot 已报告 · 等待你核对' : '尚未验证'; $('bridge-native-proof').className = nativeVerified ? 'proof-verified' : '';
   const selectedTarget = $('bridge-test-target').value, targets = state?.chat?.members?.filter(item => ['codex','native'].includes(item.adapter) && (history?.participants || []).some(participant => participant.id === item.id)) || [];
   $('bridge-test-target').innerHTML = targets.length ? targets.map(target => `<option value="${escape(target.id)}">${escape(target.name)}</option>`).join('') : '<option value="">先给聊天室添加 Codex 成员</option>';
   if (targets.some(target => target.id === selectedTarget)) $('bridge-test-target').value = selectedTarget;
   const waiting = bridgeTesting || ['waiting','running','queued'].includes(bridgeTestState(bridgeTest)); $('bridge-run-test').disabled = waiting || !targets.length; $('bridge-run-test').textContent = waiting ? '检查中…' : '检查本机通路';
   $('bridge-test-result').classList.toggle('hidden', !latestTest);
-  $('bridge-test-result').textContent = latestTest ? `${latestTest.summary || (waiting ? '正在独立测试房间验证本机通路…' : '测试状态已保存。')}${latestTest.error ? `\n${latestTest.error}` : ''}\n这是本机通路检查，Grok 原群回报仍需实际验证。` : '';
+  $('bridge-test-result').textContent = latestTest ? `${latestTest.summary || (waiting ? '正在独立测试房间验证本机通路…' : '测试状态已保存。')}${latestTest.error ? `\n${latestTest.error}` : ''}\n这是本机通路检查，Grok 原对话回报仍需实际验证。` : '';
   $('bridge-binding-list').innerHTML = bindings.length ? bindings.map(binding => { const current = binding.mode === 'current-context' || bridgeEntries.some(entry => entry.binding_id === binding.id && entry.origin?.mode === 'current-context'); return `<div class="bridge-binding"><span>◌</span><div><strong>${escape(binding.label || (current ? '发起请求的当前对话' : 'Grok 来源'))}</strong><small>${binding.provider === 'local-test' ? '本机隔离测试来源 · 不涉及 Grok' : current ? '仅保存当前对话关联 · 尚无原群定位值' : '已保存来源引用 · 原群回报另行核对'}</small></div><span class="status-pill">${current ? '当前对话关联' : '来源已保存'}</span></div>`; }).join('') : '<p class="bridge-record-empty">尚未绑定原群。Bot 接入后可保存真实来源，你无需提前查找或猜测群 ID。</p>';
   const entriesSignature = JSON.stringify([bridgeKey(),bridgeEntries]);
   if (entriesSignature !== bridgeEntriesSignature) {
