@@ -1,6 +1,6 @@
 {
   "name": "agent-office-local",
-  "version": "0.15.0-preview.3",
+  "version": "0.15.0-preview.4",
   "description": "Agent Office Local: local agent collaboration with text chat and a customizable office scene.",
   "private": true,
   "license": "MIT",

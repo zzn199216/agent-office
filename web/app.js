@@ -655,7 +655,7 @@ function selectApprovalQuestionChoice(button) {
 }
 function approvalContentMarkup(approval,attribute='data-approve') {
   const id=escape(approval.id);
-  return `${approval.reason ? `<p>${escape(approval.reason)}</p>` : ''}${approval.command ? `<details class="approval-operation"><summary>查看具体操作</summary><pre>${escape(approval.command)}</pre></details>` : ''}${approval.type === 'url' && approval.url ? `<a class="secondary" href="${escape(approval.url)}" target="_blank" rel="noreferrer">在对应服务完成确认 ↗</a>` : ''}${approval.type === 'input' ? (approval.questions || []).map(approvalQuestionMarkup).join('') : ''}${approval.type === 'form' ? Object.entries(approval.schema?.properties || {}).map(([key,property]) => `<label>${escape(property.title || property.description || key)}${property.type === 'boolean' ? `<input type="checkbox" data-form-field="${escape(key)}" data-field-type="boolean">` : `<input data-form-field="${escape(key)}" data-field-type="${escape(property.type || 'string')}" ${/password|secret|token|key/i.test(key) ? 'type="password"' : ''} placeholder="${property.enum ? escape(property.enum.join(' / ')) : '填写内容'}">`}</label>`).join('') : ''}<div class="actions">${approval.type === 'input' ? `<button class="primary" data-input-submit="${id}">提交回答</button>` : approval.type === 'form' ? `<button class="primary" data-form-submit="${id}">提交表单</button><button class="secondary" ${attribute}="${id}" data-decision="decline">取消</button>` : `<button class="primary" ${attribute}="${id}" data-decision="accept">${approval.type === 'url' ? '已完成，继续' : '允许这次操作'}</button>${approvalSessionAllowed(approval)?`<button class="secondary" ${attribute}="${id}" data-decision="acceptForSession">本会话允许此操作</button>`:''}<button class="secondary" ${attribute}="${id}" data-decision="decline">不允许</button>`}</div>`;
+  return `${approval.reason ? `<p>${escape(approval.reason)}</p>` : ''}${approval.command ? `<details class="approval-operation"><summary>查看具体操作</summary><pre>${escape(approval.command)}</pre></details>` : ''}${approval.type === 'url' && approval.url ? `<a class="secondary" href="${escape(approval.url)}" target="_blank" rel="noreferrer">在对应服务完成确认 ↗</a>` : ''}${approval.type === 'input' ? (approval.questions || []).map(approvalQuestionMarkup).join('') : ''}${approval.type === 'form' ? Object.entries(approval.schema?.properties || {}).map(([key,property]) => `<label>${escape(property.title || property.description || key)}${property.type === 'boolean' ? `<input type="checkbox" data-form-field="${escape(key)}" data-field-type="boolean">` : `<input data-form-field="${escape(key)}" data-field-type="${escape(property.type || 'string')}" ${/password|secret|token|key/i.test(key) ? 'type="password"' : ''} placeholder="${property.enum ? escape(property.enum.join(' / ')) : '填写内容'}">`}</label>`).join('') : ''}<div class="actions">${approval.type === 'input' ? `<button class="primary" data-input-submit="${id}">提交回答</button>` : approval.type === 'form' ? `<button class="primary" data-form-submit="${id}">提交表单</button><button class="secondary" ${attribute}="${id}" data-decision="decline">取消</button>` : `<button class="primary" ${attribute}="${id}" data-decision="accept">${approval.type === 'url' ? '已完成，继续' : '允许这次操作'}</button>${approvalSessionAllowed(approval)?`<button class="secondary" ${attribute}="${id}" data-decision="acceptForSession">本会话允许此操作</button>`:''}<button class="secondary" ${attribute}="${id}" data-decision="decline">不允许</button>`}</div>${approvalSessionAllowed(approval)?'<p class="approval-note"><small>「本会话允许」由 Codex 原生记住这一类操作，此对话内后续同类请求不再询问；只想放行这一次，请选「允许这次操作」。</small></p>':''}`;
 }
 function roomApprovals(messages) {
   const pending=new Map();
@@ -680,9 +680,10 @@ function roomApprovalReviews(messages) {
   }
   return [...reviews.values()];
 }
+function approvalReviewActive(task) { return !!task && !['posted','answered','consumed','completed','failed','cancelled','uncertain'].includes(task.status); }
 function renderApprovalReviewMessage(review,messages) {
   const task=messages.find(message=>message.id===review.request_id || message.request_id===review.request_id),member=memberById(review.member_id || task?.to_member_id),name=member?.name||'这位成员';
-  return `<article class="chat-message approval-review-message" data-approval-review="${escape(review.id)}"><div class="message-header">${avatar(name,member?.adapter,member?.appearance,member?.id)}<button type="button" class="message-sender" ${member?`data-open-member="${escape(member.id)}"`:'disabled'}>${escape(name)}</button><span class="message-target">${review.status==='denied'?'操作检查未通过':'操作检查未完成'}</span><time>${time(review.created)}</time></div><div class="message-body">${task?`<div class="quoted-message"><strong>当前任务</strong><span>${escape((task.coordination?.title||plainMarkdown(task.text)).slice(0,180))}</span><button type="button" class="text-button" data-approval-task="${escape(task.id)}">查看委托消息 ↗</button></div>`:''}<p>${escape(review.reason||'请补充操作目的与要求，让成员核对下一步。')}</p>${review.command?`<details class="approval-operation"><summary>查看具体操作</summary><pre>${escape(review.command)}</pre></details>`:''}${member?`<button type="button" class="secondary" data-review-member="${escape(member.id)}" ${task?`data-review-task="${escape(task.id)}"`:''}>补充要求</button>`:''}</div></article>`;
+  return `<article class="chat-message approval-review-message" data-approval-review="${escape(review.id)}"${approvalReviewActive(task)?' data-review-active="1"':''}><div class="message-header">${avatar(name,member?.adapter,member?.appearance,member?.id)}<button type="button" class="message-sender" ${member?`data-open-member="${escape(member.id)}"`:'disabled'}>${escape(name)}</button><span class="message-target">${review.status==='denied'?'操作检查未通过':'操作检查未完成'}</span><time>${time(review.created)}</time></div><div class="message-body">${task?`<div class="quoted-message"><strong>当前任务</strong><span>${escape((task.coordination?.title||plainMarkdown(task.text)).slice(0,180))}</span><button type="button" class="text-button" data-approval-task="${escape(task.id)}">查看委托消息 ↗</button></div>`:''}<p>${escape(review.reason||'请补充操作目的与要求，让成员核对下一步。')}</p>${review.command?`<details class="approval-operation"><summary>查看具体操作</summary><pre>${escape(review.command)}</pre></details>`:''}${member?`<button type="button" class="secondary" data-review-member="${escape(member.id)}" ${task?`data-review-task="${escape(task.id)}"`:''}>补充要求</button>`:''}</div></article>`;
 }
 function approvalTimelineMarkup(approvals,messages,reviews=[]) {
   const cards=[...[...new Map(approvals.map(approval=>[approval.id,approval])).values()].map(value=>({value,review:false})),...[...new Map(reviews.map(review=>[review.id,review])).values()].map(value=>({value,review:true}))];
@@ -925,6 +926,8 @@ function openInspector(tab='members',memberId) {
 }
 function selectRoomView(office) {
   if(legacyId || !roomId) return;
+  // Choosing the text view is the person taking over; a pending guided flow must not pull them back.
+  if(!office)secretaryNavigation=null;
   if(!officeView)rememberTextScroll();
   officeView=!!office;localStorage.setItem('agentoffice-room-view',officeView?'office':'chat');applyRoomView();updateOfficeScene();
   if(!officeView){const saved=textScroll.get(roomId);if(saved)requestAnimationFrame(()=>{const stream=$('chat-stream');stream.scrollTop=saved.atEnd?stream.scrollHeight:saved.top;});}
@@ -966,7 +969,8 @@ function toggleOfficeComposer(open=!officeComposerOpen) {
   }
 }
 function updateOfficeApprovalAlert() {
-  const count=$('approval-panel').querySelectorAll('[data-approval]').length+$('messages').querySelectorAll('[data-approval],[data-approval-review]').length;
+  // Finished tasks keep their denial note in the timeline, but it no longer asks for attention.
+  const count=$('approval-panel').querySelectorAll('[data-approval]').length+$('messages').querySelectorAll('[data-approval],[data-approval-review][data-review-active]').length;
   $('office-approval-alert').classList.toggle('hidden',!document.body.classList.contains('office-view') || !count);
   $('office-approval-alert').textContent=`${count} 项需要确认 ↗`;
 }
@@ -1074,7 +1078,8 @@ function finishSecretaryNavigation(flow,expected) {
   if(flow.source==='picker' && secretaryConnectRoom===flow.roomId && $('secretary-connect-dialog').open)$('secretary-connect-dialog').close();
   if(selectedSetupMember===(flow.memberId||selected.member_id) && $('member-setup-dialog').open)$('member-setup-dialog').close();
   secretaryPickingRoom=null;closeSecretaryTutorial();setProfessionalView(true);selectRoomView(true);
-  $('recipient').value=selected.member_id;updateRecipientNote();
+  // Only a newly seated secretary becomes the recipient; connecting another member keeps the person's choice.
+  if(!flow.memberId || flow.memberId===selected.member_id){$('recipient').value=selected.member_id;updateRecipientNote();}
   toast(flow.memberId && flow.memberId!==selected.member_id?'成员已真实接通，已进入办公室。':'秘书已真实接通，可以在办公室交代目标。');return true;
 }
 function secretaryResponse(value, selectedRoom) {
@@ -1591,7 +1596,7 @@ $('composer').onsubmit = event => { event.preventDefault(); if (submitting) retu
     await refresh(); if(!officeView)$('chat-stream').scrollTop = $('chat-stream').scrollHeight;
   }finally { submitting = false; $('send-button').disabled = !webConnected;updateOfficeComposerPresentation(); }
 }); };
-$('prompt').oninput = ()=>{renderMentions();updateOfficeComposerPresentation();};
+$('prompt').oninput = ()=>{secretaryNavigation=null;renderMentions();updateOfficeComposerPresentation();};
 $('prompt').onkeydown = event => {
   if (event.isComposing || event.keyCode === 229) return;
   const picking = !$('mention-choices').classList.contains('hidden');

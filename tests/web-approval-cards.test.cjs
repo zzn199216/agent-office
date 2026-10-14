@@ -138,3 +138,14 @@ test('a changed onboarding stage retains the pending form draft and focus in the
   vm.runInContext(section('function renderOnboarding()', 'async function refreshOnboarding('),f.context);f.context.renderOnboarding();
   assert.equal(replacement,previous);assert.equal(field.value,'typed answer');assert.deepEqual(plain(focuses),[{preventScroll:true}]);
 });
+
+test('a denial note asks for attention only while its task is unfinished, and the session choice explains its reach',()=>{
+  const f=fixture();
+  for(const [status,active] of [['processing',true],['queued',true],['answered',false],['completed',false],['failed',false],['cancelled',false]]){
+    f.messages[0].status=status;const html=f.context.renderApprovalReviewMessage(approval({id:'r-'+status,status:'denied'}),f.messages);
+    assert.equal(/data-review-active="1"/.test(html),active,status);assert.match(html,/data-approval-review=/);
+  }
+  assert.equal(/data-review-active/.test(f.context.renderApprovalReviewMessage(approval({id:'orphan',status:'denied',request_id:'gone'}),f.messages)),false);
+  const withSession=f.context.approvalContentMarkup(approval({session_allowed:true})),without=f.context.approvalContentMarkup(approval({session_allowed:false}));
+  assert.match(withSession,/approval-note/);assert.match(withSession,/只想放行这一次/);assert.doesNotMatch(without,/approval-note|acceptForSession/);
+});

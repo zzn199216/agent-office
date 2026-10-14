@@ -2,7 +2,13 @@
 
 更新：2026-10-15。分支 `claude/pixel-office-overhaul`。`claude/connect-overhaul` 已快进合并进这个分支，可以删除。
 
-## 最新续修（0.15.0-preview.3）
+## 最新续修（0.15.0-preview.4）
+
+- 审计修正，仅改 web/app.js、src/service.cjs：①被拒绝的操作检查/客户端权限拒绝记录（approval_reviews）原先永不清除，且被计入办公室「N 项需要确认」，现在只在对应任务未结束时计入提醒（卡片带 data-review-active），服务端 24 小时后丢弃；②Gemini 只返回笼统 denied 时，卡片显示「受限操作」而非字面 denied；③「本会话允许此操作」下方说明由 Codex 原生记住同类操作、只想放行一次请选「允许这次操作」；④秘书自动进入办公室的 flow 在用户切到文字视图或开始输入时取消，接入非秘书成员不再改写收件人。
+- 未改：approvalsReviewer:auto_review 的语义（Codex 已用真实 binary 验证被接受，可写项目下由原生审查自动放行日常操作属产品决策）；workspaceOwner 要求标记里的 legacy_home 与当前一致（显式更换 Codex 保存目录会报身份不匹配）；秘书长时间未就绪时每次 refresh 多触发一次状态刷新（至多两倍，不递归）。
+- 新增测试 4 项（approvals、web-approval-cards、web-secretary-navigation）。
+
+## 上一版续修（0.15.0-preview.3）
 
 - 用户要求通用权限规则：已授权日常读取与 AO 协作自动继续；风险/未知操作在对应 agent 最新消息位置提出具体选择。新增 operation-policy，共享到 Codex、三种 CLI、原生桌面派发及 STDIO/HTTP MCP 握手说明。Codex 使用 exact 0.162 schema 支持的 approvalsReviewer:auto_review，保留 on-request 和项目 sandbox；三 CLI 原只读工具/MCP 许可集合保持，不增加 bypass/yolo。原生权限拒绝（包括 success 带 permissionDenials）统一显示成员风险提示；没有 pause/approve/resume 接口的客户端不伪造许可。MCP 握手说明不等于存量客户端已重新加载模型指令。
 - 人工审批卡移到消息末尾，带人物、原委托和原因；具体操作默认折叠，表单刷新保留输入和焦点。原生提问显示真实选项与说明，点选只填答案，保留自定义输入，提交才返回客户端。仅 native advertised acceptForSession 显示会话选项。serverRequest/resolved 按 client/thread/RPC id 清理；同任务多个待办未全部处理前保持 waiting_input。已执行终态不会被晚到确认恢复为 running。

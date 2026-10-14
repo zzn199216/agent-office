@@ -8,11 +8,13 @@ const { RoomError, id, now, sleep, readableError, redact, quotedCommand } = requ
 
 const terminal = r => ['completed','failed','cancelled','outcome_uncertain'].includes(r.status);
 const publicRequest = r => ({ ...r, request_id:r.id });
+// A denial record is context for the person, not a permanent to-do item.
+const APPROVAL_REVIEW_TTL_MS = 24 * 60 * 60 * 1000;
 class RoomService extends EventEmitter {
   constructor(dir, options = {}) {
     super(); this.store = new Store(dir); this.vault = options.vault || new Vault(dir);
     this.codex = options.codex || new CodexClient({ executable: this.store.setting('codex_path') || undefined,dataDir:dir });
-    this.fetch = options.fetch || globalThis.fetch; this.active = null; this.approvals = new Map(); this.approvalReviews = new Map(); this.revision = 0; this.closing = false; this.pumping = false;
+    this.fetch = options.fetch || globalThis.fetch; this.active = null; this.approvals = new Map(); this.approvalReviews = new Map(); this.approvalReviewTimes = new WeakMap(); this.revision = 0; this.closing = false; this.pumping = false;
     this.store.recovery(); this.flushExports();
     const {ChatManager}=require('./chat.cjs');this.chat=new ChatManager(this,options.chat||{});
     const {AppearanceManager}=require('./appearance.cjs');this.appearance=new AppearanceManager(this);
@@ -33,7 +35,7 @@ class RoomService extends EventEmitter {
   changed() { this.revision++; this.emit('change', this.revision); }
   flushExports() { try { this.store.exportPending(); this.exportError = null; } catch { this.exportError = '部分 Markdown 记录暂未写入，后台会继续补写。'; } }
   snapshot() {
-    return { version: require('./util.cjs').VERSION, instance_id:this.runtime.instanceId,runtime:this.runtime.offlineSnapshot(),chat:this.chat.snapshot(),office:this.office.snapshot(),secretaries:this.secretary.snapshot(),activeSetup:{onboarding:this.onboarding.jobs.size,runtime_installs:this.runtimeInstaller.jobs.size,launch:this.launch.jobs.size}, projects: this.store.projects(), discussions: this.store.discussions(), activeRequest: this.active?.requestId || null, approvals: [...this.approvals.values()].map(a => a.public), approval_reviews:[...this.approvalReviews.values()], grok: this.vault.status(), codex: this.codexHealth || { connected: false, executable: this.codex.executable || null }, revision: this.revision, exportError: this.exportError, dataDirectory: this.store.dir };
+    return { version: require('./util.cjs').VERSION, instance_id:this.runtime.instanceId,runtime:this.runtime.offlineSnapshot(),chat:this.chat.snapshot(),office:this.office.snapshot(),secretaries:this.secretary.snapshot(),activeSetup:{onboarding:this.onboarding.jobs.size,runtime_installs:this.runtimeInstaller.jobs.size,launch:this.launch.jobs.size}, projects: this.store.projects(), discussions: this.store.discussions(), activeRequest: this.active?.requestId || null, approvals: [...this.approvals.values()].map(a => a.public), approval_reviews:this.liveApprovalReviews(), grok: this.vault.status(), codex: this.codexHealth || { connected: false, executable: this.codex.executable || null }, revision: this.revision, exportError: this.exportError, dataDirectory: this.store.dir };
   }
   history(discussionId) { return { discussion: this.store.discussion(discussionId), requests: this.store.history(discussionId).map(r => ({ ...publicRequest(r), delivery: this.store.deliveryFor(r.id) })) }; }
   async health() {
@@ -140,11 +142,22 @@ class RoomService extends EventEmitter {
     const message=this.store.db.prepare('SELECT room_id,to_member_id FROM chat_messages WHERE id=?').get(requestId);
     return {room_id:context.room_id||message?.room_id||null,member_id:context.member_id||message?.to_member_id||(typeof requestId==='string'&&requestId.startsWith('connect:')?requestId.slice(8):null)};
   }
+  rememberApprovalReview(key,review) {
+    this.approvalReviews.delete(key);this.approvalReviews.set(key,review);this.approvalReviewTimes.set(review,Date.now());
+    while(this.approvalReviews.size>100)this.approvalReviews.delete(this.approvalReviews.keys().next().value);
+  }
+  liveApprovalReviews() {
+    const cutoff=Date.now()-APPROVAL_REVIEW_TTL_MS;
+    for(const [key,review] of this.approvalReviews)if((this.approvalReviewTimes.get(review)||0)<cutoff)this.approvalReviews.delete(key);
+    return [...this.approvalReviews.values()];
+  }
   onPermissionDenials(requestId,denials,context={}) {
     if(!Array.isArray(denials)||!denials.length)return;
-    const names=[...new Set(denials.map(value=>redact(String(value?.tool_name||'受限操作')).slice(0,200)))].slice(0,20);
+    // Some CLIs only report that something was denied, not what; do not show the bare word as a command.
+    const label=value=>{const name=String(value?.tool_name||'').trim();return !name||/^denied$/i.test(name)?'受限操作':redact(name).slice(0,200);};
+    const names=[...new Set(denials.map(label))].slice(0,20);
     const key=requestId+':native-permissions';
-    this.approvalReviews.set(key,{id:key,request_id:requestId,...this.approvalScope(requestId,context),created:now(),status:'denied',risk_level:null,reason:redact(context.reason||'客户端拒绝了超出当前权限的操作。可补充要求或选择安全方案；该操作没有被 AO 自动重试。').slice(0,4000),command:names.join(' / '),source:'native_permissions'});
+    this.rememberApprovalReview(key,{id:key,request_id:requestId,...this.approvalScope(requestId,context),created:now(),status:'denied',risk_level:null,reason:redact(context.reason||'客户端拒绝了超出当前权限的操作。可补充要求或选择安全方案；该操作没有被 AO 自动重试。').slice(0,4000),command:names.join(' / '),source:'native_permissions'});
     while(this.approvalReviews.size>100)this.approvalReviews.delete(this.approvalReviews.keys().next().value);
     this.changed();
   }
@@ -155,7 +168,7 @@ class RoomService extends EventEmitter {
     if(review.status==='approved'){if(this.approvalReviews.delete(key))this.changed();return;}
     const action=p.action||{},command=action.type==='command'?action.command:action.type==='execve'?[action.program,...Array.isArray(action.argv)?action.argv:[]].join(' '):action.type==='applyPatch'?(Array.isArray(action.files)?action.files:[]).join('\n'):action.type==='networkAccess'?action.target:action.type==='mcpToolCall'?[action.server,action.toolName].join(' / '):'';
     const stamp=Number.isFinite(p.completedAtMs)&&Math.abs(p.completedAtMs)<=8640000000000000?p.completedAtMs:Date.now();
-    this.approvalReviews.set(key,{id:key,request_id:requestId,...this.approvalScope(requestId,context),created:new Date(stamp).toISOString(),status:review.status,risk_level:review.riskLevel||null,reason:redact(review.rationale||'操作检查未完成，请核对具体原因。').slice(0,4000),command:redact(command||'').slice(0,4000),source:'native_auto_review'});
+    this.rememberApprovalReview(key,{id:key,request_id:requestId,...this.approvalScope(requestId,context),created:new Date(stamp).toISOString(),status:review.status,risk_level:review.riskLevel||null,reason:redact(review.rationale||'操作检查未完成，请核对具体原因。').slice(0,4000),command:redact(command||'').slice(0,4000),source:'native_auto_review'});
     while(this.approvalReviews.size>100)this.approvalReviews.delete(this.approvalReviews.keys().next().value);
     this.changed();
   }

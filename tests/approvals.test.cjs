@@ -51,3 +51,13 @@ test('answering one of several pending choices does not mark the whole task runn
   const [first,last]=service.snapshot().approvals;service.respondApproval(first.id,{decision:'decline'});assert.equal(service.store.request(r.id).status,'waiting_input');
   service.respondApproval(last.id,{decision:'decline'});assert.equal(service.store.request(r.id).status,'running');
 });
+
+test('denial notes expire instead of becoming permanent to-do items, and a bare CLI denial is not shown as a command',t=>{
+  const {service}=setup(t),room=service.chat.addRoom({project_id:service.store.projects()[0].id,title:'Expiry room'}),member=service.chat.addMember({name:'Expiry member',adapter:'mailbox'});
+  service.chat.join(room.id,member.id);const message=service.chat.store.post({room_id:room.id,to_member_id:member.id,text:'Inspect',idempotency_key:'expiry-fixture'});
+  const start=Date.now();service.onPermissionDenials(message.id,[{tool_name:'denied'}],{room_id:room.id,member_id:member.id});
+  const [review]=service.snapshot().approval_reviews;assert.equal(review.command,'受限操作');assert.equal(review.source,'native_permissions');
+  t.mock.method(Date,'now',()=>start+23*3600*1000);assert.equal(service.snapshot().approval_reviews.length,1);
+  t.mock.method(Date,'now',()=>start+25*3600*1000);assert.equal(service.snapshot().approval_reviews.length,0);
+  service.onPermissionDenials(message.id,[{tool_name:'Bash'}],{room_id:room.id,member_id:member.id});assert.equal(service.snapshot().approval_reviews[0].command,'Bash');
+});

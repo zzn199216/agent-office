@@ -107,3 +107,16 @@ test('canonical ready without this room member, or a different setup selection, 
 test('a ready room loaded without an active user flow never navigates',()=>{
   const f=fixture();f.context.state.secretaries.room={...f.ready};f.context.onboardingJobs.set('old-job',{status:'ready_automatic',room_id:'room',member_id:'member',can_wake:true});f.context.secretaryConnectJob='old-job';f.context.returnSecretaryAfterOnboarding();assert.equal(f.navigation.length,0);assert.equal(f.context.secretaryOpenRoom,'room');
 });
+
+test('taking over the text view cancels a pending guided flow, but entering the office does not',()=>{
+  const f=fixture(),stubs={legacyId:null,roomId:'room',officeView:true,textScroll:new Map(),localStorage:{setItem(){}},applyRoomView(){},updateOfficeScene(){},rememberTextScroll(){},requestAnimationFrame(){}};
+  const context=vm.createContext({$:f.$,...stubs,secretaryNavigation:null});vm.runInContext(section('function selectRoomView(','// Late layout'),context);
+  context.secretaryNavigation=f.context.beginSecretaryNavigation('picker');context.selectRoomView(true);assert.ok(context.secretaryNavigation,'office view keeps the flow');
+  context.selectRoomView(false);assert.equal(context.secretaryNavigation,null,'text view cancels it');
+});
+test('connecting a different member to a ready room never replaces the person’s chosen recipient',async()=>{
+  const f=fixture();f.context.history.participants.push({id:'other',verified_at:'verified',status:'ready'});f.context.state.secretaries.room={...f.ready};f.$('recipient').value='keep-me';
+  connectFlow(f,'picker',{id:'job',room_id:'room',member_id:'other',provider:'qwen-desktop',status:'ready_automatic',can_wake:true});
+  await f.context.returnSecretaryAfterOnboarding();
+  assert.equal(f.$('recipient').value,'keep-me');assert.equal(f.calls.filter(call=>call.route==='/api/secretary').length,0);assert.deepEqual(f.navigation,[['workspace',true],['office',true]]);assert.ok(f.notices.includes('成员已真实接通，已进入办公室。'));
+});
