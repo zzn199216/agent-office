@@ -1,18 +1,197 @@
 'use strict';
 
 const {RoomError} = require('./util.cjs');
+const {createHash} = require('node:crypto');
 
 const DOUBAO_NATIVE_CONTRACT = Object.freeze({
   version:'doubao-desktop-native-v1',
+  adapterRevision:'doubao-native-adapter-v4',
   researchedProductVersion:'2.32.4',
   runtimeGlobals:Object.freeze(['@flow-web/desktop:stable','webpackChunkflow_web_extension']),
 });
+
+// Qualified against the installed Windows resources and two real consecutive
+// native SDK turns. This is a source qualification, not MCP/tool evidence.
+const DOUBAO_NATIVE_PREPARATION = Object.freeze({
+  contractVersion:DOUBAO_NATIVE_CONTRACT.version,
+  runtimeGlobal:'@flow-web/desktop:stable',
+  chunks:Object.freeze([
+    Object.freeze({id:'93166',path:'static/js/async/93166.9fd1cd0c29.js',sha256:'437e5d6d56f0a24a982624e359041f9b7532b46bbda5e13d6bec4def4034380f',kind:'services'}),
+    Object.freeze({id:'9365',path:'static/js/async/9365.691800dd08.js',sha256:'43654b79deb1546bf04608be18ec2d32c0340b7baa893930b9dc4c08f4d6cb36',kind:'conversations'}),
+  ]),
+  factorySha256:Object.freeze({
+    conversations:'c83d4ccb1d9a8848dd727178fc1b338f97e2a423b0220a07abfaa9065a0275ec',
+    services:'ee9cc4431e2228b07e8bc858692cbeb00bcf6b691fcf4196c149593c7301aedf',
+    messages:'e5c218d5befe2dac4e5552b1c1dde26884055f3c4f6aba7727b6e66cedb675d8',
+    text:'c766c785f75f212234a79fc7478d476a8ca2dd5de6110421746bd0d368fd8b45',
+    messageStore:'1d15c6fad0f12412cf47d8d9ba867610296c0ef760bb3a039052addc1683bea6',
+    // The normal message-error lazy chunk changes only minifier bindings.
+    conversationInfo:Object.freeze(['2da587c4e01a8b7b5bcbaea93f8172fab4d3b7f0e9a45e00d58f4160fecd984f','b6f5b2318a59a2f4615d09b95c4ca401ec6af6070b0668cce9c199313bb248f9']),
+    complete:'6c8a33e8bbf6680cbdadb74b76b17f3c220d9d5cb82917ab64287c4ab0b5ef4b',
+    identity:'b9c0379cee8f359435147242fab33498be90ea8fe76518c42a53e5a81a866178',
+  }),
+  externalModuleIds:Object.freeze([71197,71834,98027,135193,201183,201753,246058,253349,325457,367173,368415,376999,378437,386196,456462,460932,470476,540864,542525,544349,557526,600919,609347,632649,656207,687323,708078,718587,737937,744331,761336,788925,834523,860268,894119,879807,521109,196183,491575,37476,198837,17344]),
+});
+
+// Empty Webpack chunks capture only the runtime; no business factory is called.
+// The cache keeps each runtime namespace separate and rejects replaced arrays.
+async function captureDoubaoRuntime(runtimeGlobal) {
+  const chunks = window[runtimeGlobal];
+  if (!Array.isArray(chunks)) throw Error('DOUBAO_NATIVE_PREPARATION_UNSUPPORTED_RUNTIME');
+  const symbol = Symbol.for('agentoffice.doubao.webpack.v1');
+  let cache = window[symbol];
+  if (!cache) {cache=new Map();Object.defineProperty(window,symbol,{value:cache});}
+  if (!(cache instanceof Map)) throw Error('DOUBAO_NATIVE_PREPARATION_UNSUPPORTED_RUNTIME');
+  let entry = cache.get(runtimeGlobal);
+  if (entry && entry.chunks !== chunks) throw Error('DOUBAO_NATIVE_PREPARATION_RUNTIME_CHANGED');
+  if (!entry) {
+    entry = {chunks,promise:null};
+    let timer;
+    entry.promise = Promise.race([
+      new Promise(resolve=>chunks.push([['ao_native_'+crypto.randomUUID()],{},resolve])),
+      new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('DOUBAO_NATIVE_BOOTSTRAP_TIMEOUT')),3000);}),
+    ]).finally(()=>clearTimeout(timer));
+    cache.set(runtimeGlobal,entry);
+  }
+  try {
+    const req = await entry.promise;
+    if (typeof req !== 'function' || !req.m || window[runtimeGlobal] !== chunks) throw Error('DOUBAO_NATIVE_PREPARATION_UNSUPPORTED_RUNTIME');
+    return {req,chunks,runtimeGlobal};
+  } catch(error) {if(cache.get(runtimeGlobal)===entry)cache.delete(runtimeGlobal);throw error;}
+}
+
+// Serialized into the renderer with the fixed qualification above. The
+// qualification argument allows isolated fixtures; public preparation cannot
+// override it. This phase does not require modules, accounts, stores, or chats.
+async function verifyDoubaoNativeFactories(req, qualification, allowMissing = false) {
+  const missing=[],observed=[];
+  const digest = async bytes => [...new Uint8Array(await crypto.subtle.digest('SHA-256',bytes))].map(value=>value.toString(16).padStart(2,'0')).join('');
+  for (const [kind,expected] of Object.entries(qualification.factorySha256)) {
+    let entry;try{entry=findDoubaoModule(req,kind,allowMissing && qualification.chunks.some(chunk=>chunk.kind===kind));}
+    catch{throw Error('DOUBAO_NATIVE_PREPARATION_UNSUPPORTED_SOURCE');}
+    if (!entry) {missing.push(kind);continue;}
+    if (!(Array.isArray(expected)?expected:[expected]).includes(await digest(new TextEncoder().encode(entry.source)))) throw Error('DOUBAO_NATIVE_PREPARATION_UNSUPPORTED_SOURCE');
+    observed.push(entry);
+  }
+  for (const entry of observed) if (typeof req.m[entry.id]!=='function' || Function.prototype.toString.call(req.m[entry.id])!==entry.source) throw Error('DOUBAO_NATIVE_PREPARATION_UNSUPPORTED_SOURCE');
+  return missing;
+}
+
+async function prepareDoubaoNativeFactories(req, qualification, assertRuntime = ()=>{}) {
+  if (!req?.m || typeof req.u !== 'function' || req.p !== '/') throw Error('DOUBAO_NATIVE_PREPARATION_UNSUPPORTED_RUNTIME');
+  const mapper=req.u;
+  const digest = async bytes => [...new Uint8Array(await crypto.subtle.digest('SHA-256',bytes))].map(value=>value.toString(16).padStart(2,'0')).join('');
+  const checkMapping = () => {
+    assertRuntime();
+    if (req.u!==mapper || req.p!=='/' || qualification.chunks.some(chunk=>mapper(chunk.id)!==chunk.path)) throw Error('DOUBAO_NATIVE_PREPARATION_UNSUPPORTED_SOURCE');
+  };
+  checkMapping();
+  // Reject unknown already-loaded variants instead of overwriting their
+  // factories: cached exports might still have come from that old source.
+  await verifyDoubaoNativeFactories(req,qualification,true);
+  if ((qualification.externalModuleIds || []).some(id=>typeof req.m[id]!=='function')) throw Error('DOUBAO_NATIVE_PREPARATION_DEPENDENCY_MISSING');
+  const sources=await Promise.all(qualification.chunks.map(async chunk=>{
+    let response;try{response=await fetch('/'+chunk.path,{credentials:'omit',redirect:'error'});}catch{throw Error('DOUBAO_NATIVE_PREPARATION_SOURCE_UNAVAILABLE');}
+    if (!response.ok || response.redirected) throw Error('DOUBAO_NATIVE_PREPARATION_SOURCE_UNAVAILABLE');
+    const bytes=await response.arrayBuffer();
+    if (!bytes.byteLength || bytes.byteLength>1000000 || await digest(bytes)!==chunk.sha256) throw Error('DOUBAO_NATIVE_PREPARATION_UNSUPPORTED_SOURCE');
+    const source=new TextDecoder('utf-8',{fatal:true}).decode(bytes);
+    if(await digest(new TextEncoder().encode(source))!==chunk.sha256)throw Error('DOUBAO_NATIVE_PREPARATION_UNSUPPORTED_SOURCE');
+    return {id:chunk.id,source};
+  }));
+  checkMapping();
+  const missing=await verifyDoubaoNativeFactories(req,qualification,true);
+  return {contractVersion:qualification.contractVersion,runtimeGlobal:qualification.runtimeGlobal,factorySha256:{...qualification.factorySha256},
+    sources:sources.filter(source=>missing.includes(qualification.chunks.find(chunk=>chunk.id===source.id).kind))};
+}
+
+async function applyDoubaoNativeFactories(req, qualification, registrations, assertRuntime = ()=>{}) {
+  const mapper=req.u;
+  const checkMapping=()=>{assertRuntime();if(req.p!=='/'||typeof mapper!=='function'||req.u!==mapper||qualification.chunks.some(chunk=>mapper(chunk.id)!==chunk.path))throw Error('DOUBAO_NATIVE_PREPARATION_UNSUPPORTED_SOURCE');};
+  checkMapping();
+  const missing=await verifyDoubaoNativeFactories(req,qualification,true);
+  checkMapping();
+  for (const chunk of qualification.chunks) if (missing.includes(chunk.kind)) {
+    const register=registrations[chunk.id];
+    if(typeof register!=='function')throw Error('DOUBAO_NATIVE_PREPARATION_SOURCE_UNAVAILABLE');
+    // These callbacks contain the exact host-verified pure-push bytes. Chunk
+    // registration marks them loaded; no second download or req.e is needed.
+    register();checkMapping();
+  }
+  await verifyDoubaoNativeFactories(req,qualification,false);checkMapping();
+  return {contractVersion:qualification.contractVersion,runtimeGlobal:qualification.runtimeGlobal,factorySha256:{...qualification.factorySha256}};
+}
+
+function buildDoubaoNativePreparation() {
+  return `(async()=>{
+    if(!['doubao:','chrome:'].includes(location.protocol)||location.hostname!=='doubao-chat'||!/^\\/chat(?:\\/|$)/.test(location.pathname))throw Error('DOUBAO_NATIVE_TARGET_MISMATCH');
+    const findDoubaoModule=${findDoubaoModule.toString()};
+    const captureDoubaoRuntime=${captureDoubaoRuntime.toString()};
+    const verifyDoubaoNativeFactories=${verifyDoubaoNativeFactories.toString()};
+    const prepareDoubaoNativeFactories=${prepareDoubaoNativeFactories.toString()};
+    const qualification=${JSON.stringify(DOUBAO_NATIVE_PREPARATION)};
+    const captured=await captureDoubaoRuntime(qualification.runtimeGlobal);
+    const assertRuntime=()=>{if(window[qualification.runtimeGlobal]!==captured.chunks)throw Error('DOUBAO_NATIVE_PREPARATION_RUNTIME_CHANGED');};
+    const symbol=Symbol.for('agentoffice.doubao.preparation.v1');
+    let state=window[symbol];
+    if(state&&(state.req!==captured.req||state.chunks!==captured.chunks))throw Error('DOUBAO_NATIVE_PREPARATION_RUNTIME_CHANGED');
+    if(!state){state={req:captured.req,chunks:captured.chunks,pending:null};Object.defineProperty(window,symbol,{value:state});}
+    if(!state.pending)state.pending=prepareDoubaoNativeFactories(captured.req,qualification,assertRuntime).finally(()=>{state.pending=null;});
+    const result=await state.pending;assertRuntime();return result;
+  })()`;
+}
+
+function buildDoubaoNativeRegistration(sources) {
+  if(!Array.isArray(sources)||sources.length>2)throw new RoomError('原生豆包资源未通过源码校验。',409,'desktop_adapter_unsupported');
+  const ids=new Set();
+  for(const entry of sources){
+    const chunk=DOUBAO_NATIVE_PREPARATION.chunks.find(chunk=>chunk.id===entry?.id);
+    if(!chunk||ids.has(entry.id)||typeof entry.source!=='string'||createHash('sha256').update(entry.source,'utf8').digest('hex')!==chunk.sha256)throw new RoomError('原生豆包资源未通过源码校验。',409,'desktop_adapter_unsupported');
+    ids.add(entry.id);
+  }
+  return `(async()=>{
+    if(!['doubao:','chrome:'].includes(location.protocol)||location.hostname!=='doubao-chat'||!/^\\/chat(?:\\/|$)/.test(location.pathname))throw Error('DOUBAO_NATIVE_TARGET_MISMATCH');
+    const findDoubaoModule=${findDoubaoModule.toString()};
+    const captureDoubaoRuntime=${captureDoubaoRuntime.toString()};
+    const verifyDoubaoNativeFactories=${verifyDoubaoNativeFactories.toString()};
+    const applyDoubaoNativeFactories=${applyDoubaoNativeFactories.toString()};
+    const qualification=${JSON.stringify(DOUBAO_NATIVE_PREPARATION)};
+    const captured=await captureDoubaoRuntime(qualification.runtimeGlobal);
+    const assertRuntime=()=>{if(window[qualification.runtimeGlobal]!==captured.chunks)throw Error('DOUBAO_NATIVE_PREPARATION_RUNTIME_CHANGED');};
+    const symbol=Symbol.for('agentoffice.doubao.preparation.apply.v1');let state=window[symbol];
+    if(state&&(state.req!==captured.req||state.chunks!==captured.chunks))throw Error('DOUBAO_NATIVE_PREPARATION_RUNTIME_CHANGED');
+    if(!state){state={req:captured.req,chunks:captured.chunks,pending:null};Object.defineProperty(window,symbol,{value:state});}
+    const registrations={${sources.map(entry=>`${JSON.stringify(entry.id)}:()=>{\n${entry.source}\n}`).join(',')}};
+    if(!state.pending)state.pending=applyDoubaoNativeFactories(captured.req,qualification,registrations,assertRuntime).finally(()=>{state.pending=null;});
+    const result=await state.pending;assertRuntime();return result;
+  })()`;
+}
+
+async function prepareDoubaoNativeRuntime(transport) {
+  if(typeof transport?.evaluate!=='function')throw new RoomError('需要已连接的原生桌面通道。',400,'desktop_bridge_unavailable');
+  const fetched=await transport.evaluate(buildDoubaoNativePreparation(),30000);
+  const valid=state=>state?.contractVersion===DOUBAO_NATIVE_CONTRACT.version&&state.runtimeGlobal===DOUBAO_NATIVE_PREPARATION.runtimeGlobal
+    &&JSON.stringify(state.factorySha256)===JSON.stringify(DOUBAO_NATIVE_PREPARATION.factorySha256);
+  if(!valid(fetched))throw new RoomError('原生豆包资源尚未通过源码校验。',409,'desktop_adapter_unsupported');
+  const prepared=await transport.evaluate(buildDoubaoNativeRegistration(fetched.sources),30000);
+  if(!valid(prepared))throw new RoomError('原生豆包资源尚未通过源码校验。',409,'desktop_adapter_unsupported');
+  return {contractVersion:prepared.contractVersion,runtimeGlobal:prepared.runtimeGlobal,factorySha256:{...DOUBAO_NATIVE_PREPARATION.factorySha256}};
+}
 
 // Source discovery precedes require: a guessed missing module poisons Webpack's
 // cache. These exports/markers were checked in the installed Windows 2.32.4
 // resources; the actual renderer must supply the same unique contracts.
 function findDoubaoModule(req, kind, optional = false) {
-  const exported = (source,names) => names.every(name => new RegExp('\\b'+name+'\\s*:').test(source));
+  const exported = (source,names) => {
+    // Only the factory's Webpack require.d(exports, {...}) table declares its
+    // exports. A caller can destructure identical names in its function body.
+    const parameters = source.match(/^(?:function(?:\s+[$\w]+)?\s*)?\(\s*[$\w]+\s*,\s*([$\w]+)\s*,\s*([$\w]+)\s*\)/);
+    if (!parameters) return false;
+    const escape = value => value.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+    const pattern = new RegExp('(?:^|[^\\w$])'+escape(parameters[2])+'\\.d\\(\\s*'+escape(parameters[1])+'\\s*,\\s*\\{([^{}]*)\\}\\s*\\)','g');
+    const tables = [...source.matchAll(pattern)].map(match=>match[1]);
+    return names.every(name=>tables.some(table=>new RegExp('(?:^|,)\\s*'+escape(name)+'\\s*:\\s*\\(\\s*\\)\\s*=>').test(table)));
+  };
   const contracts = {
     conversations:source => exported(source,['createConversation','createSendMessageConversationContext','getInfoByConversationId','MAIN_BOT_ID']),
     services:source => exported(source,['getChatService','getChatStore']),
@@ -21,7 +200,7 @@ function findDoubaoModule(req, kind, optional = false) {
     messageStore:source => exported(source,['useMessageStore']) && source.includes('useMessageStore is not initialized'),
     conversationInfo:source => exported(source,['fetchUpdateConversationInfo']) && source.includes('updateConversationInfo: invalid data from api'),
     identity:source => exported(source,['n5','bG']) && source.includes('user_id_str') && source.includes('isUserInfoLoaded'),
-    complete:source => source.includes('PushMessageStatus.Streaming') && source.includes('is_finish') && source.includes('async_task') && /\bz\s*:/.test(source),
+    complete:source => exported(source,['z']) && source.includes('PushMessageStatus.Streaming') && source.includes('is_finish') && source.includes('async_task'),
     cancellation:source => exported(source,['MessageBreak']) && source.includes('reply_msg_id') && source.includes('break_reason'),
   };
   if (!req?.m || !contracts[kind]) throw Error('DOUBAO_NATIVE_MODULE_DISCOVERY_UNAVAILABLE');
@@ -29,7 +208,7 @@ function findDoubaoModule(req, kind, optional = false) {
   if (!matches.length && optional) return null;
   if (matches.length !== 1) throw Error('DOUBAO_NATIVE_MODULE_CONTRACT_'+kind.toUpperCase()+'_'+(matches.length?'AMBIGUOUS':'MISSING'));
   const [id,factory] = matches[0];
-  return {id:Number(id),source:Function.prototype.toString.call(factory),exports:req(Number(id))};
+  return {id:Number(id),source:Function.prototype.toString.call(factory)};
 }
 
 // This function is serialized into the authenticated native desktop renderer.
@@ -40,40 +219,64 @@ function createDoubaoNativeBridge(req, options = {}, ownership = new Map()) {
   if (!/^[A-Za-z0-9_-]{1,160}$/.test(options.runtimeKey || '')) throw Error('DOUBAO_NATIVE_INVALID_RUNTIME_KEY');
   const modules = {};
   for (const kind of ['conversations','services','messages','text','messageStore','conversationInfo','complete','identity']) modules[kind] = findDoubaoModule(req,kind);
-  const conversations = modules.conversations.exports, services = modules.services.exports;
-  const messages = modules.messages.exports, text = modules.text.exports;
-  const store = modules.messageStore.exports.useMessageStore;
-  const fetchInfo = modules.conversationInfo.exports.fetchUpdateConversationInfo;
-  const isComplete = modules.complete.exports.z;
-  const currentAccount = modules.identity.exports.n5;
-  if (![conversations.createConversation,conversations.createSendMessageConversationContext,conversations.getInfoByConversationId,
-    services.getChatService,messages.createSendMessage,messages.combineBlocks,text.mapTextToTextBlock,
-    store?.getState,fetchInfo,isComplete,currentAccount].every(value => typeof value === 'function')) throw Error('DOUBAO_NATIVE_EXPORT_CONTRACT_MISMATCH');
-  if (!conversations.MAIN_BOT_ID && !options.botId) throw Error('DOUBAO_NATIVE_BOT_ID_UNAVAILABLE');
+  const normalizePins = value => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) throw Error('DOUBAO_NATIVE_INVALID_SOURCE_IDENTITY');
+    const entries = Object.entries(value).sort(([a],[b])=>a.localeCompare(b));
+    const infoVariants=['2da587c4e01a8b7b5bcbaea93f8172fab4d3b7f0e9a45e00d58f4160fecd984f','b6f5b2318a59a2f4615d09b95c4ca401ec6af6070b0668cce9c199313bb248f9'];
+    return Object.fromEntries(entries.map(([kind,expected])=>{
+      if(!Object.hasOwn(modules,kind))throw Error('DOUBAO_NATIVE_INVALID_SOURCE_IDENTITY');
+      if(Array.isArray(expected)){
+        if(kind!=='conversationInfo'||!expected.length||expected.length>2||expected.some(hash=>!infoVariants.includes(hash)))throw Error('DOUBAO_NATIVE_INVALID_SOURCE_IDENTITY');
+        return [kind,[...new Set(expected)].sort()];
+      }
+      if(typeof expected!=='string'||!/^[a-f0-9]{64}$/.test(expected))throw Error('DOUBAO_NATIVE_INVALID_SOURCE_IDENTITY');
+      return [kind,expected];
+    }));
+  };
+  const sourceIdentity = normalizePins(options.factorySha256 === undefined ? {} : options.factorySha256);
+  function assertSourceIdentity(value = {}) {
+    if (JSON.stringify(normalizePins(value)) !== JSON.stringify(sourceIdentity)) throw Error('DOUBAO_NATIVE_SOURCE_IDENTITY_CONFIG_CHANGED');
+  }
+  let conversations,services,messages,text,store,fetchInfo,isComplete,currentAccount,account;
   // Keep account identity inside the renderer closure; it is never returned to
   // AO, logged, or read from a profile/cookie store.
-  const account = String(currentAccount() || '');
-  if (!account || account==='0') throw Error('DOUBAO_NATIVE_ACCOUNT_UNAVAILABLE');
   const assertAccount = () => {if(String(currentAccount() || '')!==account)throw Error('DOUBAO_NATIVE_ACCOUNT_CHANGED');};
   const turns = new Map(), terminal = new Set(['completed','error','cancelled']);
-  let nativeChatId = null, creating = null, createUncertain = false, initializing = null, verified = false;
+  let nativeChatId = null, creating = null, createUncertain = false, initializing = null, verified = false, verifying = null;
   const own = id => {
     const owner = ownership.get(id);
     if (owner && owner !== options.runtimeKey) throw Error('DOUBAO_NATIVE_PERSON_CHAT_ALREADY_OWNED');
     ownership.set(id,options.runtimeKey);
   };
-  const summary = () => ({contract:options.contractVersion,detached:true,nativeChatId,creating:!!creating,createUncertain});
+  const summary = () => ({contract:options.contractVersion,detached:true,nativeChatId,creating:!!creating,createUncertain,initializing:!!initializing,verifying:!!verifying});
   const idText = value => typeof value === 'string' && value && value.length <= 160 && !value.includes('\0');
   async function verifyFactories() {
-    assertAccount();
-    if (verified) return;
-    for (const [kind,expected] of Object.entries(options.factorySha256 || {})) {
-      if (!modules[kind] || !/^[a-f0-9]{64}$/.test(expected)) throw Error('DOUBAO_NATIVE_INVALID_SOURCE_IDENTITY');
-      const digest = await crypto.subtle.digest('SHA-256',new TextEncoder().encode(modules[kind].source));
-      const actual = [...new Uint8Array(digest)].map(value=>value.toString(16).padStart(2,'0')).join('');
-      if (actual !== expected) throw Error('DOUBAO_NATIVE_SOURCE_IDENTITY_MISMATCH');
-    }
-    verified = true;
+    if (verified) {assertAccount();return;}
+    if (verifying) return verifying;
+    verifying = (async()=>{
+      // Factory discovery and every supplied pin are checked before any native
+      // business module is instantiated. Rejected sources cannot run effects.
+      for (const [kind,expected] of Object.entries(sourceIdentity)) {
+        const digest = await crypto.subtle.digest('SHA-256',new TextEncoder().encode(modules[kind].source));
+        const actual = [...new Uint8Array(digest)].map(value=>value.toString(16).padStart(2,'0')).join('');
+        if (!(Array.isArray(expected)?expected:[expected]).includes(actual)) throw Error('DOUBAO_NATIVE_SOURCE_IDENTITY_MISMATCH');
+      }
+      for (const entry of Object.values(modules)) if (typeof req.m[entry.id] !== 'function'
+        || Function.prototype.toString.call(req.m[entry.id]) !== entry.source) throw Error('DOUBAO_NATIVE_SOURCE_IDENTITY_MISMATCH');
+      for (const entry of Object.values(modules)) entry.exports = req(entry.id);
+      conversations = modules.conversations.exports;services = modules.services.exports;
+      messages = modules.messages.exports;text = modules.text.exports;
+      store = modules.messageStore.exports.useMessageStore;fetchInfo = modules.conversationInfo.exports.fetchUpdateConversationInfo;
+      isComplete = modules.complete.exports.z;currentAccount = modules.identity.exports.n5;
+      if (![conversations.createConversation,conversations.createSendMessageConversationContext,conversations.getInfoByConversationId,
+        services.getChatService,messages.createSendMessage,messages.combineBlocks,text.mapTextToTextBlock,
+        store?.getState,fetchInfo,isComplete,currentAccount].every(value => typeof value === 'function')) throw Error('DOUBAO_NATIVE_EXPORT_CONTRACT_MISMATCH');
+      if (!conversations.MAIN_BOT_ID && !options.botId) throw Error('DOUBAO_NATIVE_BOT_ID_UNAVAILABLE');
+      account = String(currentAccount() || '');
+      if (!account || account==='0') throw Error('DOUBAO_NATIVE_ACCOUNT_UNAVAILABLE');
+      verified = true;
+    })();
+    try {await verifying;} finally {verifying = null;}
   }
   async function loadConversation(id) {
     assertAccount();
@@ -160,7 +363,10 @@ function createDoubaoNativeBridge(req, options = {}, ownership = new Map()) {
   }
   function replyText(row) {
     const blocks = row.content_blocks_v2 || row.content_block || row.content_blocks;
-    if (Array.isArray(blocks)) return blocks.map(block=>typeof block.content?.text_block?.text==='string'?block.content.text_block.text:'').join('');
+    if (Array.isArray(blocks)) {
+      const value = blocks.map(block=>typeof block.content?.text_block?.text==='string'?block.content.text_block.text:'').join('');
+      if (value.trim()) return value;
+    }
     return typeof row.content_obj?.text === 'string' ? row.content_obj.text : '';
   }
   function query(requestId, {includeContent = false} = {}) {
@@ -237,26 +443,32 @@ function createDoubaoNativeBridge(req, options = {}, ownership = new Map()) {
       // The observed Windows 2.32.4 lazy chunk, not a scan or guessed module ID.
       await req.e('65703');entry = findDoubaoModule(req,'cancellation',true);
     }
-    if (typeof entry?.exports.MessageBreak !== 'function') throw Error('DOUBAO_NATIVE_CANCEL_CONTRACT_UNAVAILABLE');
+    const cancellation = entry && req(entry.id);
+    if (typeof cancellation?.MessageBreak !== 'function') throw Error('DOUBAO_NATIVE_CANCEL_CONTRACT_UNAVAILABLE');
     assertAccount();
-    const ack = await entry.exports.MessageBreak({conversation_id:nativeChatId,reply_id:t.userMessageId,break_reason:7});
+    const ack = await cancellation.MessageBreak({conversation_id:nativeChatId,reply_id:t.userMessageId,break_reason:7});
     if (Number(ack?.code) !== 0) throw Error('DOUBAO_NATIVE_CANCEL_REJECTED');
     t.cancelRequested = true;
     // A successful stop API acknowledgement is not a terminal reply record.
     return query(requestId);
   }
-  function inspect() { return {...summary(),moduleIds:Object.fromEntries(Object.entries(modules).map(([kind,value])=>[kind,value.id])),requests:turns.size}; }
-  return {initialize,createPersonConversation,send,snapshot:query,restore,cancel,inspect};
+  function inspect() { return {...summary(),adapterRevision:'doubao-native-adapter-v4',
+    moduleIds:Object.fromEntries(Object.entries(modules).map(([kind,value])=>[kind,value.id])),requests:turns.size,
+    pendingRequestIds:[...turns.values()].filter(t=>!terminal.has(t.status)).map(t=>t.requestId),
+    unsettledRequestIds:[...turns.values()].filter(t=>!t.settled).map(t=>t.requestId)}; }
+  return {adapterRevision:'doubao-native-adapter-v4',runtimeGlobal:options.chunkName||null,initialize,createPersonConversation,send,snapshot:query,restore,cancel,inspect,assertSourceIdentity,verifySourceIdentity:verifyFactories};
 }
 
 function buildDoubaoNativeBootstrap(options = {}) {
   if(options.contractVersion && options.contractVersion!==DOUBAO_NATIVE_CONTRACT.version)throw new RoomError('原生豆包接口版本不受支持。',409,'desktop_contract_mismatch');
-  const {runtimeKey,nativeChatId=null,nativeConversationId=null,botId,factorySha256={}} = options;
+  const {runtimeKey,nativeChatId=null,nativeConversationId=null,botId,factorySha256={},runtimeGlobal=null} = options;
   if (!/^[A-Za-z0-9_-]{1,160}$/.test(runtimeKey || '')) throw new RoomError('原生豆包人物引用无效。',400,'desktop_identity_mismatch');
-  const args = {runtimeKey,nativeChatId:nativeChatId || nativeConversationId,botId,factorySha256,contractVersion:DOUBAO_NATIVE_CONTRACT.version};
+  if(runtimeGlobal&&!DOUBAO_NATIVE_CONTRACT.runtimeGlobals.includes(runtimeGlobal))throw new RoomError('原生豆包运行时不受支持。',409,'desktop_adapter_unsupported');
+  const args = {runtimeKey,nativeChatId:nativeChatId || nativeConversationId,botId,factorySha256,runtimeGlobal,contractVersion:DOUBAO_NATIVE_CONTRACT.version,adapterRevision:DOUBAO_NATIVE_CONTRACT.adapterRevision};
   return `(async()=>{
     if(!['doubao:','chrome:'].includes(location.protocol)||location.hostname!=='doubao-chat'||!/^\\/chat(?:\\/|$)/.test(location.pathname))throw Error('DOUBAO_NATIVE_TARGET_MISMATCH');
     const findDoubaoModule=${findDoubaoModule.toString()};
+    const captureDoubaoRuntime=${captureDoubaoRuntime.toString()};
     const createDoubaoNativeBridge=${createDoubaoNativeBridge.toString()};
     const args=${JSON.stringify(args)};
     const symbol=Symbol.for('agentoffice.doubao.native.v1');
@@ -264,31 +476,70 @@ function buildDoubaoNativeBootstrap(options = {}) {
     if(registry&&registry.contract!==args.contractVersion)throw Error('DOUBAO_NATIVE_REGISTRY_VERSION_MISMATCH');
     if(!registry){registry={contract:args.contractVersion,bridges:new Map(),ownership:new Map()};Object.defineProperty(window,symbol,{value:registry});}
     let bridge=registry.bridges.get(args.runtimeKey);
-    if(!bridge){
-      const keys=${JSON.stringify(DOUBAO_NATIVE_CONTRACT.runtimeGlobals)}.filter(key=>Array.isArray(window[key]));
-      if(keys.length!==1)throw Error('DOUBAO_NATIVE_WEBPACK_RUNTIME_MISSING_OR_AMBIGUOUS');
-      let timer;const key=keys[0];
-      const req=await Promise.race([new Promise(resolve=>window[key].push([['ao_native_'+crypto.randomUUID()],{},resolve])),new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('DOUBAO_NATIVE_BOOTSTRAP_TIMEOUT')),3000);})]).finally(()=>clearTimeout(timer));
-      bridge=createDoubaoNativeBridge(req,{...args,chunkName:key},registry.ownership);registry.bridges.set(args.runtimeKey,bridge);
+    if(args.runtimeGlobal&&(!Array.isArray(window[args.runtimeGlobal])||bridge?.runtimeGlobal&&bridge.runtimeGlobal!==args.runtimeGlobal))throw Error('DOUBAO_NATIVE_PREPARATION_UNSUPPORTED_RUNTIME');
+    if(typeof bridge?.assertSourceIdentity==='function')bridge.assertSourceIdentity(args.factorySha256);
+    let legacy=null,restoreId=null;
+    const emptyOwnedLegacy=state=>state?.contract===args.contractVersion&&state.detached===true&&state.requests===0
+      &&state.creating===false&&state.createUncertain===false&&typeof state.nativeChatId==='string'
+      &&state.nativeChatId.length>0&&state.nativeChatId.length<=160&&!state.nativeChatId.includes('\\0')&&!state.nativeChatId.startsWith('local')
+      &&registry.ownership?.get(state.nativeChatId)===args.runtimeKey&&(!args.nativeChatId||args.nativeChatId===state.nativeChatId);
+    if(bridge&&(bridge.adapterRevision!==args.adapterRevision||typeof bridge.assertSourceIdentity!=='function')){
+      let state;try{state=typeof bridge.inspect==='function'?await bridge.inspect():null;}catch{}
+      if(!emptyOwnedLegacy(state)||typeof bridge.initialize!=='function')throw Error('DOUBAO_NATIVE_ADAPTER_REVISION_INCOMPATIBLE');
+      legacy=bridge;restoreId=state.nativeChatId;bridge=null;
     }
+    if(bridge&&args.runtimeGlobal&&bridge.runtimeGlobal!==args.runtimeGlobal)throw Error('DOUBAO_NATIVE_PREPARATION_UNSUPPORTED_RUNTIME');
+    if(!bridge){
+      const keys=(args.runtimeGlobal?[args.runtimeGlobal]:${JSON.stringify(DOUBAO_NATIVE_CONTRACT.runtimeGlobals)}).filter(key=>Array.isArray(window[key]));
+      if(keys.length!==1)throw Error('DOUBAO_NATIVE_WEBPACK_RUNTIME_MISSING_OR_AMBIGUOUS');
+      const key=keys[0];const {req}=await captureDoubaoRuntime(key);
+      bridge=createDoubaoNativeBridge(req,{...args,nativeChatId:restoreId||args.nativeChatId,chunkName:key},registry.ownership);
+      if(legacy){
+        // Upgrade only an empty, already-owned conversation. Keep the old slot
+        // until source verification and read-only restoration both succeed.
+        await bridge.verifySourceIdentity();
+        let oldProof;try{oldProof=await legacy.initialize({nativeChatId:restoreId});}catch{throw Error('DOUBAO_NATIVE_ADAPTER_REVISION_INCOMPATIBLE');}
+        if(oldProof?.contract!==args.contractVersion||oldProof.detached!==true||oldProof.nativeChatId!==restoreId)throw Error('DOUBAO_NATIVE_ADAPTER_REVISION_INCOMPATIBLE');
+        const state=await bridge.initialize({nativeChatId:restoreId});
+        let previous;try{previous=await legacy.inspect();}catch{}
+        if(registry.bridges.get(args.runtimeKey)!==legacy||!emptyOwnedLegacy(previous)||previous.nativeChatId!==restoreId)throw Error('DOUBAO_NATIVE_ADAPTER_REVISION_INCOMPATIBLE');
+        registry.bridges.set(args.runtimeKey,bridge);return state;
+      }
+      registry.bridges.set(args.runtimeKey,bridge);
+    }
+    bridge.assertSourceIdentity(args.factorySha256);
     return bridge.initialize({nativeChatId:args.nativeChatId});
   })()`;
 }
 
 class DesktopDoubao {
-  constructor({evaluate,runtimeKey,nativeChatId=null,nativeConversationId=null,botId,factorySha256={},contractVersion=DOUBAO_NATIVE_CONTRACT.version} = {}) {
+  constructor({evaluate,runtimeKey,nativeChatId=null,nativeConversationId=null,botId,factorySha256={},runtimeGlobal=null,contractVersion=DOUBAO_NATIVE_CONTRACT.version} = {}) {
     if (typeof evaluate !== 'function') throw new RoomError('需要已连接的原生桌面通道。',400,'desktop_bridge_unavailable');
     if(contractVersion!==DOUBAO_NATIVE_CONTRACT.version)throw new RoomError('原生豆包接口版本不受支持。',409,'desktop_contract_mismatch');
-    this.evaluate=evaluate;this.options={runtimeKey,nativeChatId:nativeChatId || nativeConversationId,botId,factorySha256};
+    this.evaluate=evaluate;this.options={runtimeKey,nativeChatId:nativeChatId || nativeConversationId,botId,factorySha256,runtimeGlobal};
     this.nativeChatId=this.options.nativeChatId;this.ready=false;
   }
   async initialize({nativeChatId=this.nativeChatId,nativeConversationId} = {}) {
     const expected=nativeChatId || nativeConversationId || null;
     if(this.ready && expected && expected!==this.nativeChatId)throw new RoomError('不能替换这位同事的原生豆包对话。',409,'desktop_identity_mismatch');
-    const state=await this.evaluate(buildDoubaoNativeBootstrap({...this.options,nativeChatId:expected}));
-    if(state?.contract!==DOUBAO_NATIVE_CONTRACT.version||state.detached!==true||!state.nativeChatId)throw new RoomError('原生豆包接口尚未完成绑定。',409,'desktop_contract_mismatch');
-    if(expected && expected!==state.nativeChatId)throw new RoomError('原生豆包返回了另一对话。',403,'desktop_identity_mismatch');
-    this.nativeChatId=state.nativeChatId;this.ready=true;return state;
+    try {
+      const state=await this.evaluate(buildDoubaoNativeBootstrap({...this.options,nativeChatId:expected}));
+      if(state?.contract!==DOUBAO_NATIVE_CONTRACT.version||state.detached!==true||!state.nativeChatId)throw new RoomError('原生豆包接口尚未完成绑定。',409,'desktop_contract_mismatch');
+      if(expected && expected!==state.nativeChatId)throw new RoomError('原生豆包返回了另一对话。',403,'desktop_identity_mismatch');
+      this.nativeChatId=state.nativeChatId;this.ready=true;return state;
+    } catch(error) {
+      // Runtime.evaluate may have lost its acknowledgement while creation kept
+      // running. Inspect only this runtime's metadata; never initialize again.
+      let proof;
+      try {proof=await this.evaluate(`(async()=>{const key=${JSON.stringify(this.options.runtimeKey)},r=window[Symbol.for('agentoffice.doubao.native.v1')];if(r?.contract!==${JSON.stringify(DOUBAO_NATIVE_CONTRACT.version)})return null;const b=r.bridges?.get(key);if(typeof b?.inspect!=='function')return null;const s=await b.inspect();return {runtimeKey:key,runtimeGlobal:b.runtimeGlobal,state:{contract:s?.contract,detached:s?.detached,nativeChatId:s?.nativeChatId,creating:s?.creating,createUncertain:s?.createUncertain,initializing:s?.initializing,verifying:s?.verifying,requests:s?.requests},owned:typeof s?.nativeChatId==='string'&&r.ownership?.get(s.nativeChatId)===key};})()`);}catch{}
+      const state=proof?.state,known=proof?.runtimeKey===this.options.runtimeKey&&state?.contract===DOUBAO_NATIVE_CONTRACT.version&&state.detached===true
+        &&(!this.options.runtimeGlobal||proof.runtimeGlobal===this.options.runtimeGlobal)&&typeof state.creating==='boolean'&&typeof state.createUncertain==='boolean'&&Number.isInteger(state.requests)&&state.requests>=0;
+      const id=state?.nativeChatId,serverId=typeof id==='string'&&id.length>0&&id.length<=160&&!id.includes('\0')&&!id.startsWith('local');
+      if(known&&serverId&&proof.owned===true&&(!expected||expected===id))error.nativeChatId=id;
+      if(error.code==='desktop_contract_mismatch'&&known&&state.requests===0&&state.nativeChatId===null&&state.creating===false&&state.createUncertain===false&&state.initializing===false&&state.verifying===false)error.creationNotDispatched=true;
+      else error.uncertain=true;
+      throw error;
+    }
   }
   async call(method,args) {
     if(!['createPersonConversation','send','snapshot','restore','cancel','inspect'].includes(method))throw new RoomError('原生豆包操作无效。',400,'desktop_method_rejected');
@@ -317,4 +568,5 @@ function createBridge(cdp,options = {}) {
   return new DesktopDoubao({...options,evaluate:cdp.evaluate.bind(cdp)});
 }
 
-module.exports={createBridge,DesktopDoubao,DOUBAO_NATIVE_CONTRACT,findDoubaoModule,createDoubaoNativeBridge,buildDoubaoNativeBootstrap};
+module.exports={createBridge,DesktopDoubao,DOUBAO_NATIVE_CONTRACT,DOUBAO_NATIVE_PREPARATION,findDoubaoModule,createDoubaoNativeBridge,buildDoubaoNativeBootstrap,
+  prepareDoubaoNativeRuntime,buildDoubaoNativePreparation,buildDoubaoNativeRegistration,captureDoubaoRuntime,verifyDoubaoNativeFactories,prepareDoubaoNativeFactories,applyDoubaoNativeFactories};

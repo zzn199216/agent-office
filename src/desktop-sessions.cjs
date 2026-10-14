@@ -30,11 +30,23 @@ class DesktopSessions{
     const input={event,session_ref:`desktop:${memberId}`,executor_kind:'desktop',provider:row.provider,...event==='runner_started'?{pid:process.pid}:{},...row.native_session_id?{native_session_id:row.native_session_id}:{},...fields};
     this.service.runtime.recordConnectionEvidence(memberId,input);
   }
+  transportDisconnected(memberId,transport){
+    if(this.closing||this.clients.get(memberId)?.transport!==transport)return;
+    const row=this.row(memberId),uncertainCreation=row&&!row.native_session_id&&['creating','creation_uncertain'].includes(row.state);
+    this.clients.delete(memberId);this.saveSession(memberId,{state:uncertainCreation?'creation_uncertain':'offline',error:'原生客户端连接结束；消息结果需按原引用核对。'});
+    this.service.runtime.releaseWorker(`desktop:${memberId}`);this.observe(memberId,'runner_stopped');this.service.changed();
+  }
   async defaultDriver(row){
     const target=await discoverDesktop(row.endpoint,row.provider,{fetchImpl:this.options.fetchImpl||this.service.fetch});
     const transport=await new DesktopTransport(target).connect();
-    transport.on('disconnected',()=>{if(this.closing||this.clients.get(row.member_id)?.transport!==transport)return;this.clients.delete(row.member_id);this.saveSession(row.member_id,{state:'offline',error:'原生客户端连接结束；消息结果需按原引用核对。'});this.service.runtime.releaseWorker(`desktop:${row.member_id}`);this.observe(row.member_id,'runner_stopped');this.service.changed();});
+    transport.on('disconnected',()=>this.transportDisconnected(row.member_id,transport));
     try{
+      if(row.provider==='doubao'){
+        const {createBridge,prepareDoubaoNativeRuntime}=require('./desktop-doubao.cjs');
+        const verified=await prepareDoubaoNativeRuntime(transport);
+        const driver=createBridge(transport,{...verified,runtimeKey:row.runtime_key,nativeChatId:row.native_session_id});
+        driver.transport=transport;driver.close=()=>transport.close();return driver;
+      }
       if(row.provider!=='qwen-desktop')throw new RoomError('这个客户端的原生对话适配器尚未完成实测。',409,'desktop_adapter_unverified');
       const {createBridge,QWEN_NATIVE_CONTRACT}=require('./desktop-qwen.cjs');
       const hash=await transport.evaluate(`(async()=>{const u=${JSON.stringify(QWEN_NATIVE_CONTRACT.moduleUrl)};if(![...document.scripts].some(s=>s.src===u))return null;const b=await(await fetch(u,{cache:'force-cache'})).arrayBuffer();return [...new Uint8Array(await crypto.subtle.digest('SHA-256',b))].map(x=>x.toString(16).padStart(2,'0')).join('');})()`);
@@ -76,10 +88,13 @@ class DesktopSessions{
         const savedId=this.row(memberId).native_session_id;
         if(!savedId){creating=true;this.saveSession(memberId,{state:'creating',error:null});}
         const info=await (typeof driver.createPersonConversation==='function'?driver.createPersonConversation(savedId):driver.initialize({nativeChatId:savedId}));
-        if(typeof driver.verifyConnection==='function'&&this.options.serverName!==null){const proof=await driver.verifyConnection();if(proof?.member_id!==memberId||proof?.instance_id!==this.service.runtime.instanceId)throw new RoomError('客户端连接器不属于这位同事或当前办公室实例。',403,'desktop_identity_mismatch');}
         if(info?.detached!==true)throw new RoomError('本人对话尚未隔离绑定，未开始后台派发。',409,'desktop_contract_mismatch');
         const nativeId=info.nativeChatId||info.nativeConversationId||null;
         if(savedId&&nativeId!==savedId)throw new RoomError('客户端未恢复这位同事原有的对话，未替换成新窗口。',409,'desktop_identity_mismatch');
+        // A confirmed native ID survives later connector verification failure;
+        // recovery must load this same person instead of creating another chat.
+        if(nativeId)this.saveSession(memberId,{native_session_id:nativeId});
+        if(typeof driver.verifyConnection==='function'&&this.options.serverName!==null){const proof=await driver.verifyConnection();if(proof?.member_id!==memberId||proof?.instance_id!==this.service.runtime.instanceId)throw new RoomError('客户端连接器不属于这位同事或当前办公室实例。',403,'desktop_identity_mismatch');}
         this.saveSession(memberId,{native_session_id:nativeId,state:nativeId?'connected':'prepared',error:null});
         if(this.closing)throw new RoomError('办公室服务正在停止。',503,'cancelled');
         this.observe(memberId,'protocol_verified',{source:'native_desktop_transport'});
@@ -87,7 +102,11 @@ class DesktopSessions{
         this.observe(memberId,'runner_started');this.service.runtime.workerHeartbeat(`desktop:${memberId}`,{member_id:memberId,pid:process.pid});this.service.runtime.heartbeat(memberId,{session_ref:`desktop:${memberId}`});
         this.chat.store.updateMember(memberId,{status:'ready',error:null,verified_at:member.verified_at||now(),config:{...member.config,connection_mode:'managed_desktop'}});
         this.service.changed();return this.state(memberId);
-      }catch(error){const driver=this.clients.get(memberId);this.clients.delete(memberId);driver?.close?.();this.saveSession(memberId,{state:creating&&(error.uncertain||/uncertain|connection_lost/.test(error.code||''))?'creation_uncertain':'offline',error:readableError(error)});this.service.runtime.releaseWorker(`desktop:${memberId}`);this.observe(memberId,'runner_stopped');this.observe(memberId,'failed',{error_stage:'dialogue',error_code:error.code||'desktop_connect_failed'});this.service.changed();throw error;}
+      }catch(error){const driver=this.clients.get(memberId);this.clients.delete(memberId);driver?.close?.();
+        const saved=this.row(memberId)?.native_session_id,reported=error.nativeChatId;
+        const confirmed=typeof reported==='string'&&reported.length>0&&reported.length<=160&&!reported.includes('\0')&&!reported.startsWith('local')&&(!saved||reported===saved)?reported:undefined;
+        const uncertainCreation=creating&&(error.uncertain||/uncertain|connection_lost/.test(error.code||'')||!saved&&!confirmed&&error.creationNotDispatched!==true);
+        this.saveSession(memberId,{native_session_id:confirmed,state:uncertainCreation?'creation_uncertain':'offline',error:readableError(error)});this.service.runtime.releaseWorker(`desktop:${memberId}`);this.observe(memberId,'runner_stopped');this.observe(memberId,'failed',{error_stage:'dialogue',error_code:error.code||'desktop_connect_failed'});this.service.changed();throw error;}
       finally{this.connecting.delete(memberId);}
     })();this.connecting.set(memberId,work);return work;
   }
@@ -174,10 +193,10 @@ class DesktopSessions{
       this.complete(message,result,this.row(member.id).native_session_id);
     }catch(error){
       const dispatched=!!this.db.prepare("SELECT 1 FROM desktop_message_runs WHERE message_id=? AND status IN ('sending','running','uncertain')").get(message.id);
-      const uncertain=error?.uncertain||/^desktop_(?:request_uncertain|connection_lost)$/.test(error.code||'')||dispatched&&!['cancelled','native_empty_reply','desktop_model_failed','desktop_room_deleted','desktop_identity_mismatch'].includes(error.code);
+      const uncertain=dispatched&&(error?.uncertain||/^desktop_(?:request_uncertain|connection_lost)$/.test(error.code||'')||!['cancelled','native_empty_reply','desktop_model_failed','desktop_room_deleted','desktop_identity_mismatch'].includes(error.code));
       const status=error.code==='cancelled'?'cancelled':uncertain?'uncertain':'failed';
       if(!this.chat.roomDeleted(message.room_id)&&this.chat.store.message(message.id).status!=='answered')this.chat.store.updateMessage(message.id,{status,error:readableError(error)});
-      this.updateRun(message.id,{status,error:readableError(error)});this.observe(member.id,'failed',{error_stage:'model',error_code:error.code||'desktop_turn_failed'});this.service.changed();
+      this.updateRun(message.id,{status,error:readableError(error)});this.observe(member.id,'failed',{error_stage:dispatched?'model':'dialogue',error_code:error.code||'desktop_turn_failed'});this.service.changed();
     }finally{this.chat.active.delete(member.id);}
   }
   async close(){this.closing=true;for(const active of this.chat.active.values())if(active.desktop)active.abort.abort();await Promise.allSettled([...this.jobs.values(),...this.connecting.values()]);for(const [memberId,driver]of this.clients){try{driver.close?.();}catch{}this.service.runtime.releaseWorker(`desktop:${memberId}`);this.observe(memberId,'runner_stopped');}this.clients.clear();}

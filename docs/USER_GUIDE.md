@@ -1,6 +1,6 @@
-# Agent 办公室 · Agent Office 0.15.0-preview.1 使用说明
+# Agent 办公室 · Agent Office 0.15.0-preview.2 使用说明
 
-连接按办公室人物保留，不按房间重新配置。已核对版本的 Qwen 桌面可在开启一次本机连接后点「连接本人对话」，由 AO 自动创建独立人物对话、派发问题并回写真实回答。加入新房间、删除旧房间或升级 AO 后继续沿用同一人物与原生对话，不需要再次导入 MCP 或到窗口催收。详细版本与首次连接说明见 [原生桌面对话](NATIVE_DESKTOP.md)。豆包与 Grok 的原生收发仍待实测验收；其他信箱入口保留高级兼容配置。
+连接按办公室人物保留，不按房间重新配置。已核对版本的 Qwen、豆包桌面可在开启一次本机连接后点「连接本人对话」，由 AO 自动创建独立人物对话、派发问题并回写真实回答。加入新房间、删除旧房间或重启 AO 后继续沿用同一人物与原生对话，不需要再次导入 MCP 或到窗口催收。详细版本与首次连接说明见 [原生桌面对话](NATIVE_DESKTOP.md)。豆包的原生 MCP 工具调用与 Grok 的原生收发仍待独立验收；其他信箱入口保留高级兼容配置。
 
 高级兼容区的 Qwen MCP 设置类型必须是 **StreamableHTTP**，不能选 SSE；配置放在设置里。已连接原生本人对话时无需再手动导入或发催收指令。工具发现成功和模型声称已调用都不能代替真实收件箱调用；仍使用手动信箱模式的客户端需要在本人对话实际领取。
 
@@ -8,7 +8,7 @@ Agent 办公室的英文名为 Agent Office，完整描述为 Agent Office Local
 
 这是 AgentRoom 的后续版本。升级保留原有数据目录、房间、成员与会话；AgentRoom.exe、agentroom 命令和 agentroom_* MCP 工具继续兼容，新分发包的主入口为 AgentOffice.exe。改名不会重新创建 Grok 的已有 Bot 或原生群。
 
-0.14.6 使用原创像素角色和办公室主题。同模型成员的饰品颜色自动区分，也可在外观页固定配色。文字聊天显示 Markdown，行内代码和代码块中的原文可直接复制；Enter 发送，Shift + Enter 换行，输入法确认候选不会触发发送。升级时关闭旧窗口并打开新版。旧后台空闲时会自动更新；正在进行的工作会保留，新版提示稍后更新后台。
+软件使用原创像素角色和办公室主题。同模型成员的饰品颜色自动区分，也可在外观页固定配色。文字聊天显示 Markdown，行内代码和代码块中的原文可直接复制；Enter 发送，Shift + Enter 换行，输入法确认候选不会触发发送。升级时关闭旧窗口并打开新版。旧后台空闲时会自动更新；正在进行的工作会保留，新版提示稍后更新后台。
 
 消息开头输入完整的 `@成员名` 可以指定收件人，即使列表里还选着上一位成员。`@` 候选列表支持方向键、Enter 和 Tab；Shift + Enter 仍换行。每个房间保留各自的收件人选择，明确选择“房间公告”后不会被后台刷新改回成员。聊天状态区分排队、已读取、实际处理中和需要确认；仅有真实对应的答复或终态才结束等待。秘书未接通时可以先写目标，接通后再开始；本机连接设置中的路径草稿在刷新和保存期间也会保留。
 
@@ -47,7 +47,7 @@ Codex 接入由后台会话直接调用本机 MCP 握手工具，核对成员与
 
 在外观页可选择小人、机器人、精灵预设，修改颜色或导入 Logo/头像及完整角色形象；保存后两个视图共用。修改形象不更换模型、后端身份或 Grok Bot。详细素材规格见 [办公室外观](OFFICE_APPEARANCE.md)。服务停止时仍可在两个视图查看保存的记录，此时不能发送或保存新修改。
 
-受支持的后台成员在自己的专用协作会话处理委托。已验收的 Qwen 原生本人对话可自动接收问题并回写回答；其他桌面客户端须分别通过原生验收。未连接原生对话的手动信箱保存本机消息，由本人窗口实际领取和回答。
+受支持的后台成员在自己的专用协作会话处理委托。已验收版本的 Qwen、豆包原生本人对话可自动接收问题并回写回答；其他桌面客户端须分别通过原生验收。未连接原生对话的手动信箱保存本机消息，由本人窗口实际领取和回答。
 
 Grok 原生群通过已有桥接代理使用这些本机成员。办公室显示已写入本机的桥接请求、回答及回报状态；Grok 群中未桥接的聊天不会自动成为本机群记录。原生 Bot、群创建与加人仍由 Grok 实际工具处理，详见下方 Grok 流程。
 
@@ -95,10 +95,10 @@ Codex 协作会话独立保存在本机数据目录的 `codex` 子目录，秘�
 | Qwen Code | 0.25.1+ 官方 CLI 专用会话 | 可后台处理；首次配置 API、Token 计划或自定义提供商。与消费端 Qwen 桌面不是同一个入口。 |
 | Gemini CLI | 0.63.0+ 官方 Node CLI 专用会话 | 可后台处理；使用 Gemini CLI 自己的 Google 登录、API 或 Vertex 认证。网页登录和认证配置存在不等于实际握手。 |
 | Claude 桌面 | 用户配置中的本机 stdio MCP | 配置可合并，客户端须加载并真实握手；之后是由本人窗口处理的信箱。 |
-| Qwen 消费端桌面 | 正式 MCP JSON 导入流程，本机 HTTP MCP | 需客户端启用及真实握手；由本人窗口处理信箱。 |
+| Qwen 消费端桌面 | 原生人物对话；高级兼容 MCP 为 StreamableHTTP | Windows 1.0.3 / 前端 0.3.17 已核对自动收发及同人物续接，原生连接合并并保留已有 MCP；无需到窗口催收。 |
 | Grok Bot · 本人窗口桥接 | `grok-bot`，复用本房间桥接成员与本机命令长期入口 | 本人窗口实际执行 `enter` 后为 `ready_mailbox`；不装 MCP 或 CLI，不自动改名、建 Bot 或加群。Windows 宿主需独立核对。 |
 | Grok Build CLI | 独立命令行产品，当前暂不支持 | 不用此入口替代 Grok Bot 桌面窗口。 |
-| 豆包桌面 | 本机个人连接器字段，默认 HTTP | 用户在本地电脑模式保存并启用；本人真实 MCP 握手后成为消息信箱。尚无已验证的全自动原生导入或后台唤醒接口。 |
+| 豆包桌面 | 原生人物对话；高级兼容 MCP 为本机个人连接器字段 | Windows 2.32.4 已核对原生自动收发与 AO 重启续接；聊天无需先添加 MCP。原生 MCP 工具调用仍单独配置和验收。 |
 | OpenCode | 官方 `mcp.agentroom` 本机 STDIO JSON | 本人合并配置并完成真实 MCP 握手；当前为信箱，不启动 OpenCode 模型服务或接管已有会话。 |
 | Cherry Studio | 官方 `mcpServers` STDIO JSON 导入 | 启用后还需绑定给指定 Agent；本人握手后使用信箱。 |
 | Cline、Roo Code | 对应扩展实际 MCP 设置中的 STDIO JSON | 用户合并并加载；本人握手后使用信箱。扩展已安装或 VS Code 正在运行不证明成员在线。 |
@@ -117,9 +117,9 @@ Gemini CLI 的隔离安装使用官方 npm 0.63.0 发布包与官方 Node 22.22.
 
 Claude Desktop 配置合并保留原有字段及其他 MCP，更新前备份。Windows Store 版核对实际已存在的配置位置；冲突配置不会被覆盖。办公室不强行关闭用户正在使用的应用，客户端须加载新配置。
 
-Qwen 消费端使用正式的 MCP 设置 → JSON 导入，并启用该服务。将网页复制的配置贴入设置框，而非普通聊天。配置包含本人的授权入口，只在本机导入，不贴群聊或公开共享。具体界面与已核查限制见 [Qwen 桌面核查](QWEN_DESKTOP_RESEARCH.md)。
+Qwen 原生接入使用前文的「连接本人对话」。需要高级兼容信箱时，在 MCP 设置中导入 JSON 并启用，选择 StreamableHTTP。将复制的配置贴入设置框，而非普通聊天。具体界面与已核查限制见 [Qwen 桌面核查](QWEN_DESKTOP_RESEARCH.md)。
 
-豆包点击“填写个人连接器”，向导提供服务器名称、HTTP 传输、本机 URL 和 Headers 字段。到豆包原生技能/连接器管理中保存并启用，在“本地电脑”模式使用；当前入口的 Headers 留空。这份材料不是豆包 `mcpServers` JSON 自动导入合同。若实际表单没有 HTTP 或拒绝本机地址，如实报告该步骤；只在实际表单提供 STDIO 时使用向导的备用命令字段。HTTP 入口要求 Agent Office 服务运行，不能在服务已关闭时靠该 URL 冷启动。详见 [豆包接入指南](DOUBAO_CONNECTOR_GUIDE.md)与[本机资源核查](DOUBAO_DESKTOP_RESEARCH.md)。
+豆包的高级兼容 MCP 入口可点击“填写个人连接器”，向导提供服务器名称、HTTP 传输、本机 URL 和 Headers 字段。到豆包原生技能/连接器管理中保存并启用，在“本地电脑”模式使用；当前入口的 Headers 留空。这份材料不是豆包 `mcpServers` JSON 自动导入合同。若实际表单没有 HTTP 或拒绝本机地址，如实报告该步骤；只在实际表单提供 STDIO 时使用向导的备用命令字段。HTTP 入口要求 Agent Office 服务运行，不能在服务已关闭时靠该 URL 冷启动。原生自动聊天使用前文的“连接本人对话”，基础收发不要求此步骤。详见 [豆包接入指南](DOUBAO_CONNECTOR_GUIDE.md)与[本机资源核查](DOUBAO_DESKTOP_RESEARCH.md)。
 
 OpenCode、Cherry Studio、Cline、Roo Code 点击“复制 MCP 配置”，得到各自的正式 JSON 结构。用户在实际客户端设置中导入或合并，保留其他服务器与同名已有配置；软件仅写本机实例中的材料文件，不猜测原生档案位置。Cherry Studio 需将服务器绑定给选定 Agent；Cline 的 autoApprove、Roo 的 alwaysAllow 初始为空。具体入口见 [其他客户端合同](ADDITIONAL_AGENTS_RESEARCH.md)。
 
@@ -191,7 +191,7 @@ AgentOffice.exe 无参数或 desktop 打开独立窗口；已有客户端调用�
 
 AgentOffice.exe stop 或窗口“停止服务”在空闲时停止本机后台，受支持成员之后可按授权恢复原实例。执行结果不明确时保留记录核对，不自动重放。协作消息不扩大用户已有项目修改、发布、额外付费或读取凭据权限。
 
-0.14.6 为未签名 Windows x64 本地预览版，面向 Windows 10/11 x64 和 .NET Framework 4.7.2+；独立窗口依赖微软 WebView2 Runtime，SDK 随包附带。缺少窗口组件时可以显式使用 start --open 的专业网页版。[微软 WebView2 下载页](https://developer.microsoft.com/en-us/microsoft-edge/webview2/)提供 Runtime，离线电脑可使用官方 Evergreen Standalone Installer；部署方式见[微软说明](https://learn.microsoft.com/en-us/microsoft-edge/webview2/concepts/distribution)。各适配器的本机协议验证与真实客户端账号、原生群问答分别验收；新增窗口与接入按钮不表示所有应用都能后台唤醒。Concord 不是依赖。
+当前版本为未签名 Windows x64 本地预览版，面向 Windows 10/11 x64 和 .NET Framework 4.7.2+；独立窗口依赖微软 WebView2 Runtime，SDK 随包附带。缺少窗口组件时可以显式使用 start --open 的专业网页版。[微软 WebView2 下载页](https://developer.microsoft.com/en-us/microsoft-edge/webview2/)提供 Runtime，离线电脑可使用官方 Evergreen Standalone Installer；部署方式见[微软说明](https://learn.microsoft.com/en-us/microsoft-edge/webview2/concepts/distribution)。各适配器的本机协议验证与真实客户端账号、原生群问答分别验收；新增窗口与接入按钮不表示所有应用都能后台唤醒。Concord 不是依赖。
 
 
 ## 可调办公室（0.13.0）

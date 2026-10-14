@@ -1,6 +1,19 @@
 # 交接说明：从云端会话转到本机 Claude Code
 
-更新：2026-10-14。分支 `claude/pixel-office-overhaul`。`claude/connect-overhaul` 已快进合并进这个分支，可以删除。
+更新：2026-10-15。分支 `claude/pixel-office-overhaul`。`claude/connect-overhaul` 已快进合并进这个分支，可以删除。
+
+## 最新续修（0.15.0-preview.2）
+
+- 用户从托盘完全退出后，使用原安装隐藏重开，已核对 19246 回环监听归属豆包进程、唯一原生 `doubao-chat/chat` 目标及 `@flow-web/desktop:stable` runtime。只读预检不实例化业务模块，不创建或发送对话，不修改已有 MCP。
+- 实际源码暴露模块识别误匹配：调用方解构的 `createSendMessage/combineBlocks` 被当作导出。解析改为核对 Webpack 导出表，已在实际 runtime 唯一识别消息模块。会话与服务仍为延迟模块；实际 native runtime 和 ai-views 扩展的编号/指纹不可混用。
+- 后续源码修复还覆盖：指纹验证前不得执行业务 require；缓存桥不得忽略变更的指纹；空块不能遮蔽同一条关联回答的有效正文；旧桥升级只允许无请求、创建结果明确且已拥有原生对话的实例恢复原 ID，并核对原账户。在途或证据不足时明确拒绝升级，不重建对话、不重发任务。
+- 用户确认当前电脑可供测试后，原生 SDK 连续两条消息真实完成。生产 `defaultDriver` 另通过四轮：连续两条、删除专用测试房间后创建新房间、AO 重启后续接；均回写对应 AO 房间，同一 nativeChatId 保持。当前 selectedChatId 与富文本草稿指纹相同，未切换当前聊天、改 MCP、启动 CLI 或触碰原用户 AO 数据。
+- 生产准备器固定 native namespace，执行同一次验证过的精确资源文本，拒绝未知已加载源码。会话 info 模块的两个已安装变体仅 minifier 变量名不同，固定双 SHA 允许列表保持冷/暖连接 canonical 配置一致；其他七项单 SHA。适配器 revision v4。
+- 创建意图在途丢连接立即持久为 creation_uncertain；原始 SDK 丢确认的 generic 错误也保守阻止重建。已确认 server nativeChatId 在后置检查前保存，初始化失败时只读提取本人物拥有的 ID，恢复复用原 ID。RPC 超时后的空快照不能证明原请求终止。发送 ledger 建立前的连接失败仅记 dialogue/failed，不制造不可恢复的消息 uncertain 或模型失败。
+- 豆包原生自动聊天已开放。实际 native connector 与 Agent 连接器目录均为空，MCP 注册/模型工具调用尚未验收；没有伪造 verifyConnection。Grok 原生收发仍未完成，调试启动受既有策略拦截。真实 Windows 窗口控制工具仍无法绑定豆包，界面视觉与附件草稿尚未验收。
+- 最终完整回归 764 项通过。本机文件夹 `release/AgentOffice-0.15.0-preview.2-windows-x64` 已生成，无 ZIP；打包程序另通过两条豆包自动收发，同一原生人物对话，真实问题与回答均回写 AO。更新本机已安装程序前做 SQLite 一致性备份，原实例、端口、房间与人物 ID 保持。
+- 用户确认 Qwen 完全退出并暂时留电脑后，按原安装开启本机连接，preview.2 已恢复原人物对话 `f110bd7c-86fb-47b3-90d3-a45d00f84fab`；前端 SHA 相同，当前聊天与四个其他 MCP 配置保持，未发送新模型问题。普通客户端启动不一定开启本机连接；MCP 身份与会话仍保留，无需重新导入。真实电脑操作已结束。
+- 本机测试入口为随文件夹保存的 `OPEN_TEST.cmd`，使用原 `.agentroom` 数据打开已安装新版。接入页扫描说明已与 Qwen、豆包原生自动聊天的验收一致；没有把进程存在写成对话已连通。
 
 ## 最新续修（0.15.0-preview.1）
 

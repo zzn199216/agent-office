@@ -79,6 +79,76 @@ test('native load and protocol contact do not count as an actual model reply',as
   assert.equal(evidence.protocol_verified,true);assert.equal(evidence.native_conversation_loaded,true);assert.equal(evidence.model_reply_verified,false);assert.equal(evidence.automatic_reply_verified,false);assert.equal(f.ledger.sends.length,0);
 });
 
+test('an uncertain native creation with no server ID stays blocked after a service restart',async t=>{
+  const f=setup(t);let preparations=0;
+  f.service.desktop.options.driverFactory=row=>{
+    preparations++;const driver=new FakeDesktopDriver(row,f.ledger);
+    driver.initialize=async()=>{throw Object.assign(Error('Native creation acknowledgement was lost'),{code:'desktop_contract_mismatch'});};
+    return driver;
+  };
+  await assert.rejects(f.service.desktop.connect({member_id:f.member.id,room_id:f.room.id}),{code:'desktop_contract_mismatch'});
+  assert.equal(f.service.desktop.row(f.member.id).state,'creation_uncertain');assert.equal(f.service.desktop.row(f.member.id).native_session_id,null);
+  await f.reopen();f.service.desktop.options.driverFactory=()=>{preparations++;throw Error('A second creation is forbidden');};
+  await assert.rejects(f.service.desktop.connect({member_id:f.member.id,room_id:f.room.id}),{code:'desktop_request_uncertain'});
+  assert.equal(preparations,1);assert.equal(f.ledger.sends.length,0);
+});
+
+test('a confirmed native ID survives failure to load the newly created conversation',async t=>{
+  const f=setup(t),confirmed='server-native-confirmed',originalFactory=f.service.desktop.options.driverFactory;
+  f.service.desktop.options.driverFactory=row=>{
+    const driver=new FakeDesktopDriver(row,f.ledger);
+    driver.initialize=async()=>{throw Object.assign(Error('Native load failed after creation'),{code:'desktop_contract_mismatch',uncertain:true,nativeChatId:confirmed});};
+    return driver;
+  };
+  await assert.rejects(f.service.desktop.connect({member_id:f.member.id,room_id:f.room.id}));
+  assert.equal(f.service.desktop.row(f.member.id).native_session_id,confirmed);
+  await f.reopen();f.service.desktop.options.driverFactory=originalFactory;await f.service.desktop.connect({member_id:f.member.id,room_id:f.room.id});
+  assert.equal(f.ledger.initializations.at(-1).nativeChatId,confirmed);
+  assert.equal(f.service.desktop.row(f.member.id).native_session_id,confirmed);assert.equal(f.ledger.sends.length,0);
+});
+
+test('transport loss during creation preserves uncertainty before the pending call rejects',async t=>{
+  const f=setup(t),transport={closed:false};let rejectCreation;
+  f.service.desktop.options.driverFactory=row=>{
+    const driver=new FakeDesktopDriver(row,f.ledger);driver.transport=transport;
+    driver.initialize=()=>new Promise((resolve,reject)=>{rejectCreation=reject;});return driver;
+  };
+  const connecting=f.service.desktop.connect({member_id:f.member.id,room_id:f.room.id});
+  await until(()=>f.service.desktop.row(f.member.id)?.state==='creating'&&!!rejectCreation);
+  transport.closed=true;f.service.desktop.transportDisconnected(f.member.id,transport);
+  assert.equal(f.service.desktop.row(f.member.id).state,'creation_uncertain');assert.equal(f.service.desktop.row(f.member.id).native_session_id,null);
+  rejectCreation(Object.assign(Error('Lost native acknowledgement'),{code:'desktop_connection_lost'}));await assert.rejects(connecting);
+  await f.reopen();await assert.rejects(f.service.desktop.connect({member_id:f.member.id,room_id:f.room.id}),{code:'desktop_request_uncertain'});
+  assert.equal(f.ledger.sends.length,0);
+});
+
+test('connection uncertainty does not strand an unsent message or record a model failure',async t=>{
+  const f=setup(t),events=[],record=f.service.runtime.recordConnectionEvidence.bind(f.service.runtime);
+  f.service.runtime.recordConnectionEvidence=(id,input)=>{events.push(input);return record(id,input);};
+  f.service.desktop.options.driverFactory=row=>{
+    const driver=new FakeDesktopDriver(row,f.ledger);
+    driver.initialize=async()=>{throw Object.assign(Error('Unknown native creation result'),{code:'desktop_contract_mismatch',uncertain:true});};return driver;
+  };
+  const message=f.rawPost('never submitted','connection-only-failure');await f.service.desktop.execute(message);
+  assert.equal(f.service.desktop.row(f.member.id).state,'creation_uncertain');assert.equal(f.service.chat.store.message(message.id).status,'failed');
+  assert.equal(f.service.desktop.db.prepare('SELECT COUNT(*) AS n FROM desktop_message_runs WHERE message_id=?').get(message.id).n,0);
+  assert.equal(f.ledger.sends.length,0);assert.ok(events.some(e=>e.event==='failed'&&e.error_stage==='dialogue'));
+  assert.equal(events.some(e=>e.event==='failed'&&e.error_stage==='model'),false);
+});
+
+test('later connector verification failure retains the confirmed person conversation',async t=>{
+  const f=setup(t),originalFactory=f.service.desktop.options.driverFactory;
+  f.service.desktop.options.driverFactory=row=>{
+    const driver=new FakeDesktopDriver(row,f.ledger);
+    driver.verifyConnection=async()=>{throw Object.assign(Error('Connector verification failed'),{code:'desktop_identity_mismatch'});};return driver;
+  };
+  await assert.rejects(f.service.desktop.connect({member_id:f.member.id,room_id:f.room.id}),{code:'desktop_identity_mismatch'});
+  const saved=f.service.desktop.row(f.member.id).native_session_id;assert.ok(saved);
+  await f.reopen();f.service.desktop.options.driverFactory=originalFactory;await f.service.desktop.connect({member_id:f.member.id,room_id:f.room.id});
+  assert.equal(f.ledger.initializations.at(-1).nativeChatId,saved);assert.equal(f.service.desktop.row(f.member.id).native_session_id,saved);
+  assert.equal(f.ledger.sends.length,0);
+});
+
 test('a native quota failure remains a failed request and reports the provider limit without an automatic resend',async t=>{
   const f=setup(t,{driver:{result:state=>({...state,status:'error',error:{code:'quota_limit'}})}});await f.service.desktop.connect({member_id:f.member.id,room_id:f.room.id});
   const message=f.post('limited request','quota-limit');await until(()=>f.service.chat.store.message(message.id).status==='failed');
@@ -137,8 +207,9 @@ test('desktop connection rejects CLI members instead of substituting their ident
   const f=setup(t),cli=f.service.chat.addMember({name:'Qwen Code fixture',adapter:'qwen-code'});f.service.chat.join(f.room.id,cli.id);await assert.rejects(f.service.desktop.connect({member_id:cli.id,room_id:f.room.id,provider:'qwen-desktop'}),{code:'desktop_identity_mismatch'});assert.equal(f.ledger.drivers.length,0);assert.equal(f.service.codex.calls.length,0);
 });
 
-test('a failed detached contract clears availability rather than claiming automatic wake',async t=>{
-  const f=setup(t,{driver:{detached:false}});await assert.rejects(f.service.desktop.connect({member_id:f.member.id,room_id:f.room.id}),{code:'desktop_contract_mismatch'});assert.equal(f.service.desktop.canWake(f.member.id),false);assert.equal(f.service.desktop.state(f.member.id).state,'offline');assert.equal(f.ledger.drivers[0].closed,true);assert.equal(f.service.runtime.connectionState(f.member.id).automatic_reply_verified,false);assert.equal(f.service.runtime.connectionState(f.member.id).runner_online,false,'a failed and closed native driver cannot retain online runner evidence');
+test('a failed detached contract withdraws availability and blocks unverifiable creation',async t=>{
+  const f=setup(t,{driver:{detached:false}});await assert.rejects(f.service.desktop.connect({member_id:f.member.id,room_id:f.room.id}),{code:'desktop_contract_mismatch'});assert.equal(f.service.desktop.canWake(f.member.id),false);assert.equal(f.service.desktop.state(f.member.id).state,'creation_uncertain');assert.equal(f.ledger.drivers[0].closed,true);assert.equal(f.service.runtime.connectionState(f.member.id).automatic_reply_verified,false);assert.equal(f.service.runtime.connectionState(f.member.id).runner_online,false,'a failed and closed native driver cannot retain online runner evidence');
+  await assert.rejects(f.service.desktop.connect({member_id:f.member.id,room_id:f.room.id}),{code:'desktop_request_uncertain'});assert.equal(f.ledger.drivers.length,1);
 });
 
 test('closing the desktop connection withdraws wake and loaded conversation evidence',async t=>{
