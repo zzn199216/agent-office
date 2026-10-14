@@ -7,6 +7,7 @@ const { createServer } = require('../src/http.cjs');
 const { createQwenMcpConfig } = require('../src/mcp-http.cjs');
 const { VERSION, id, now } = require('../src/util.cjs');
 const { fixture, FakeCodex, FakeVault } = require('./helpers.cjs');
+const { COMMON_OPERATION_INSTRUCTIONS } = require('../src/operation-policy.cjs');
 
 async function setup(t) {
   const files = fixture(), codex = new FakeCodex();
@@ -54,6 +55,7 @@ test('Streamable HTTP discovery stays unverified until an actual permitted membe
   assert.equal(initial.response.status, 200);
   assert.equal(initial.data.result.protocolVersion, '2025-06-18');
   assert.deepEqual(initial.data.result.serverInfo, { name: 'agentroom-local', version: VERSION });
+  assert.ok(initial.data.result.instructions.includes(COMMON_OPERATION_INSTRUCTIONS));
   const session = initial.response.headers.get('mcp-session-id');
   await h.send(card, { jsonrpc: '2.0', method: 'notifications/initialized' }, session, { headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream', 'Mcp-Session-Id': session, 'MCP-Protocol-Version': '2025-06-18' } });
   const listed = await h.send(card, { jsonrpc: '2.0', id: 2, method: 'tools/list' }, session, { headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream', 'Mcp-Session-Id': session, 'MCP-Protocol-Version': '2025-06-18' } });

@@ -14,6 +14,7 @@ let professionalView = true, launchSession = null, launchBusy = false, launchFet
 let launchCandidates = null, launchScanning = false, launchScannedAt = null, lastLaunchCandidates = '', lastLaunchHandshakes = '';
 const launchSelection = new Set();
 const onboardingJobs = new Map(), onboardingStarting = new Set();
+const approvalResponding=new Set();
 let onboardingTimer = null, onboardingFetching = false, onboardingSignature = '';
 const desktop = window.AgentRoomDesktop || null;
 let desktopState = null, desktopBusy = false, desktopReady = false, desktopProbe = null;
@@ -24,7 +25,7 @@ let nativeSetupPending = null, nativeSetupFailure = null;
 let deleteRoomId = null, deletingRoom = false, deletePreview = null;
 let managedRoomId=null,managingRoom=false;
 let secretaryOpenRoom = null, secretaryPickingRoom = null, secretaryBusy = false, secretaryStartBusy = false, secretaryError = '', secretaryConnectRoom = null, secretaryConnectJob = null, secretaryGoalVersion = 0;
-let secretaryFinishing=false;
+let secretaryFinishing=false, secretaryNavigation=null;
 const admittedMembers=members=>(members||[]).filter(member=>!!member.verified_at&&!['connection_failed','failed','disabled','revoked','unavailable'].includes(member.status));
 // Everyone a person would recognise as a colleague: connected members and
 // ones still connecting or failed. Hidden Grok group proxies stay out of view.
@@ -271,7 +272,7 @@ function roomUsesGrok() { return (history?.participants || []).some(member => me
 // the user is looking, not only in the chat room's approval panel.
 function onboardingApprovalMarkup(job) {
   const pending = (state?.approvals || []).filter(approval => job.member_id && approval.request_id === `connect:${job.member_id}`);
-  return pending.map(approval => `<div class="onboarding-approval" data-approval="${escape(approval.id)}"><strong>${escape(job.name || '这位成员')}需要你确认一步才能继续</strong><pre>${escape(approval.command || approval.reason || approval.type || '')}</pre><div><button type="button" class="primary" data-onboarding-approve="${escape(approval.id)}" data-decision="accept">允许</button><button type="button" class="secondary" data-onboarding-approve="${escape(approval.id)}" data-decision="decline">拒绝</button></div></div>`).join('');
+  return pending.map(approval => `<div class="onboarding-approval" data-approval="${escape(approval.id)}"><strong>${escape(job.name || '这位成员')}需要你确认一步才能继续</strong>${approvalContentMarkup(approval,'data-onboarding-approve')}</div>`).join('');
 }
 function tickOnboardingElapsed() { for (const span of document.querySelectorAll('.onboarding-elapsed[data-since]')) { const seconds = Math.max(0, Math.round((Date.now() - Date.parse(span.dataset.since)) / 1000)); span.textContent = `已用 ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2,'0')}${seconds > 90 ? ' · 比平时久，可能在等登录或确认' : ''}`; } }
 setInterval(tickOnboardingElapsed, 1000);
@@ -289,8 +290,8 @@ function onboardingJobMarkup(job) {
 function renderOnboarding() {
   const jobs = currentOnboardingJobs();
   $('onboarding-progress').classList.toggle('hidden',!jobs.length);
-  const signature = JSON.stringify([jobs,webConnected,(state?.approvals || []).map(approval => approval.id)]); if (signature === onboardingSignature) return; onboardingSignature = signature;
-  $('onboarding-jobs').innerHTML = jobs.map(onboardingJobMarkup).join(''); tickOnboardingElapsed();
+  const signature = JSON.stringify([jobs,webConnected,state?.approvals || []]); if (signature === onboardingSignature) return; onboardingSignature = signature;
+  setApprovalMarkup($('onboarding-jobs'),jobs.map(onboardingJobMarkup).join(''),state?.approvals||[]);tickOnboardingElapsed();
 }
 async function refreshOnboarding() {
   clearTimeout(onboardingTimer); if (!webConnected || onboardingFetching) return; onboardingFetching = true;
@@ -309,24 +310,43 @@ async function checkOnboarding(jobId) {
 }
 function onboardingProgressTarget() { return $('secretary-connect-dialog').open ? $('secretary-connect-progress') : $('onboarding-progress'); }
 function returnSecretaryAfterOnboarding() {
-  const job = onboardingJobs.get(secretaryConnectJob);
-  if(secretaryFinishing || !job || !onboardingReady(job) || secretaryConnectRoom !== roomId || (job.room_id && job.room_id !== roomId)) return;
+  const flow=secretaryNavigation;
+  if(secretaryFinishing || !secretaryNavigationCurrent(flow))return;
+  if(flow.source==='selection'){if(flow.accepted)finishSecretaryNavigation(flow,flow.accepted);return;}
+  const job=onboardingJobs.get(flow.jobId);
+  if(!job || !onboardingReady(job) || !job.member_id || (job.room_id && job.room_id!==flow.roomId))return;
   const selected=currentSecretary(),assign=!selected.member_id||selected.status!=='ready';
+  if(!sameSecretaryAssignment(flow.accepted||flow.assignment,selected)){secretaryNavigation=null;secretaryError='秘书设置已在其他窗口变更，已显示最新角色。请重新确认。';renderSecretary();return;}
   if(assign && !job.can_wake){$('secretary-connect-status').textContent='这位成员使用本人窗口信箱；请先接通可后台回答的 AI 作为秘书。';return;}
-  const targetRoom=roomId;secretaryFinishing=true;
-  action(async()=>{if(assign)await api('/api/secretary',{room_id:targetRoom,member_id:job.member_id});await refresh();if(roomId!==targetRoom)return;secretaryConnectJob=null;if($('secretary-connect-dialog').open)$('secretary-connect-dialog').close();secretaryPickingRoom=null;closeSecretaryTutorial();setProfessionalView(true);selectRoomView(true);if(assign){$('recipient').value=job.member_id;updateRecipientNote();}toast(assign?'秘书已真实接通，可以在办公室交代目标。':'成员已真实接通，已进入办公室。');}).finally(()=>{secretaryFinishing=false;});
+  if(assign && flow.assignmentAttempted && !flow.accepted)return;
+  flow.memberId=job.member_id;flow.requireAutomatic=assign;secretaryFinishing=true;
+  return action(async()=>{
+    try{
+      if(assign && !flow.accepted){flow.assignmentAttempted=true;const accepted=secretaryResponse(await api('/api/secretary',{room_id:flow.roomId,member_id:job.member_id}),flow.roomId);if(!secretaryNavigationCurrent(flow))return;flow.accepted=accepted;}
+      await refreshSecretaryState();if(!secretaryNavigationCurrent(flow))return;
+      if(!finishSecretaryNavigation(flow,flow.accepted||flow.assignment)){
+        secretaryError=sameSecretaryAssignment(flow.accepted||flow.assignment,currentSecretary())?'秘书尚未就绪，请继续完成接入。':'秘书设置已在其他窗口变更，已显示最新角色。请重新确认。';renderSecretary();
+      }
+    }catch(error){if(secretaryNavigationCurrent(flow)){secretaryError=error.message;renderSecretary();}throw error;}
+  }).finally(()=>{secretaryFinishing=false;});
 }
 async function startOnboarding(provider) {
   if($('secretary-connect-dialog').open&&currentOnboardingJobs().some(onboardingRunning))return;
   const candidate = (launchCandidates || []).find(item => launchProvider(item) === provider); if (!candidate || !onboardingSelectable(candidate) || onboardingStarting.has(provider)) return;
   const project = state?.projects?.find(item => item.id === projectId); if (!project) { showProject(); return; }
   const secretaryConnecting = $('secretary-connect-dialog').open && secretaryConnectRoom === roomId;
-  const current = onboardingForProvider(provider); if (current?.status === 'needs_action' || onboardingReady(current)) { if(secretaryConnecting) secretaryConnectJob = current.id; onboardingProgressTarget().scrollIntoView({behavior:'smooth',block:'start'}); await checkOnboarding(current.id); return; }
+  const flow=secretaryConnecting || !professionalView && !legacyId ? beginSecretaryNavigation(secretaryConnecting?'picker':'launch') : null;
+  const selectedRoom=roomId,selectedProject=projectId,selectedLegacy=legacyId;
+  const current = onboardingForProvider(provider); if (current?.status === 'needs_action' || onboardingReady(current)) { if(flow)flow.jobId=current.id;if(secretaryConnecting) secretaryConnectJob = current.id; onboardingProgressTarget().scrollIntoView({behavior:'smooth',block:'start'}); await checkOnboarding(current.id); return; }
   onboardingStarting.add(provider); launchError = ''; renderLaunch();
   try {
     const job = onboardingView(await api('/api/onboarding/start',{provider,...roomId && !legacyId ? {room_id:roomId} : {project_id:project.id},mode:onboardingMode(candidate),install_client:true,...!candidate.installed && onboardingCanInstall(candidate) ? {install_runtime:true} : {},...$('launch-goal').value.trim() ? {goal:$('launch-goal').value.trim()} : {}}));
-    if (!job?.id) throw new Error('尚未返回接入记录。请检查进度，避免重复发起。'); onboardingJobs.set(job.id,job); if (job.room_id && !roomId) { roomId = job.room_id; legacyId = null; rememberSelection(); }
-    if(secretaryConnecting) secretaryConnectJob = job.id;
+    if (!job?.id) throw new Error('尚未返回接入记录。请检查进度，避免重复发起。'); onboardingJobs.set(job.id,job);
+    if(flow && secretaryNavigation!==flow)return;
+    const unchanged=roomId===selectedRoom && projectId===selectedProject && legacyId===selectedLegacy;
+    if (job.room_id && !selectedRoom && (unchanged || flow && secretaryNavigation===flow && projectId===selectedProject && !legacyId && (roomId===job.room_id || flow.autoRoomId && roomId===flow.autoRoomId))) { roomId = job.room_id; legacyId = null; rememberSelection();if(flow && secretaryNavigation===flow){flow.roomId=roomId;flow.assignment={...currentSecretary()};} }
+    if(flow && secretaryNavigationCurrent(flow))flow.jobId=job.id;
+    if(secretaryConnecting && unchanged && secretaryNavigation===flow) secretaryConnectJob = job.id;
     toast(`正在接入 ${candidate.name || provider}。`); renderLaunch(); onboardingProgressTarget().scrollIntoView({behavior:'smooth',block:'nearest'}); returnSecretaryAfterOnboarding(); action(refresh); action(refreshOnboarding);
   } catch (error) { launchError = /^(Failed to fetch|Load failed|NetworkError)/i.test(error.message || '') ? '接入请求的结果尚未确认。先检查进度，避免重复创建成员。' : error.message; }
   finally { onboardingStarting.delete(provider); renderLaunch(); }
@@ -439,7 +459,7 @@ async function refresh() {
     state = await api('/api/state'); state.chat ||= {rooms:[],members:[]}; state.chat.rooms ||= []; state.chat.members ||= []; state.approvals ||= []; state.discussions ||= [];
     if (!state.projects.some(project => project.id === projectId)) projectId = state.projects[0]?.id || null;
     if (legacyId && !state.discussions.some(discussion => discussion.id === legacyId && discussion.project_id === projectId)) legacyId = null;
-    if (!state.chat.rooms.some(room => room.id === roomId && room.project_id === projectId)) roomId = state.chat.rooms.find(room => room.project_id === projectId&&!room.archived)?.id || state.chat.rooms.find(room=>room.project_id===projectId)?.id || null;
+    if (!state.chat.rooms.some(room => room.id === roomId && room.project_id === projectId)) {roomId = state.chat.rooms.find(room => room.project_id === projectId&&!room.archived)?.id || state.chat.rooms.find(room=>room.project_id===projectId)?.id || null;if(secretaryNavigation?.roomId===null && secretaryNavigation.projectId===projectId && !legacyId)secretaryNavigation.autoRoomId=roomId;}
     runtime = state.runtime || await api(`/api/runtime${roomId ? `?room_id=${encodeURIComponent(roomId)}` : ''}`); setWebConnected(!desktop?.offline);
     rememberSelection(); renderSidebar(); renderSettings();
     const project = state.projects.find(project => project.id === projectId); $('project-heading').textContent = project?.name || '你的协作空间';
@@ -451,7 +471,7 @@ async function refresh() {
     if ($('member-dialog').open) renderExistingMembers();
     if ($('member-setup-dialog').open && selectedSetupMember) renderSetup();
     if ($('bridge-dialog').open) action(refreshBridge);
-    renderRuntime(); renderLaunch(); renderInspector(); renderService(); action(refreshLaunch); action(refreshOnboarding); if ($('resume-dialog').open) renderResume(); if (!desktop?.offline && events?.readyState === EventSource.CLOSED) connectEvents();
+    renderRuntime(); renderLaunch(); renderInspector(); renderService(); returnSecretaryAfterOnboarding(); action(refreshLaunch); action(refreshOnboarding); if ($('resume-dialog').open) renderResume(); if (!desktop?.offline && events?.readyState === EventSource.CLOSED) connectEvents();
   } catch (error) { setWebConnected(false); $('footer-status').textContent = '处理程序未连接 · 房间记录仍保存在磁盘'; throw error; }
   finally { refreshing = false; for(const resolve of refreshWaiters.splice(0))resolve(); if (refreshAgain) { refreshAgain = false; scheduleRefresh(); } }
 }
@@ -536,9 +556,10 @@ function renderRoom(project) {
   $('empty-room').classList.toggle('hidden', messages.length > 0); $('empty-heading').textContent = participants.length ? '把一个问题带到房间里' : '邀请第一个成员';
   $('empty-description').textContent = participants.length ? '选择一位成员，或在消息里 @它。\n成员的提问与回复会留在同一条时间线上。' : '添加成员，完成握手后，就可以在这里把问题交给它。\n每个成员拥有自己的身份和工作会话。';
   $('empty-add-member').classList.toggle('hidden', participants.length > 0); $('suggestions').classList.toggle('hidden', !participants.length);
-  const typing = renderTyping(messages), signature = JSON.stringify([room.id,messages,participants.map(member=>[member.id,member.name,member.appearance]),state.chat?.activeMessages || [],typing]);
-  if (signature !== lastTimeline) { const stream = $('chat-stream'), cached = textScroll.get(room.id), nearEnd = officeView ? cached?.atEnd !== false : stream.scrollHeight - stream.scrollTop - stream.clientHeight < 110, changedRoom = !lastTimeline.startsWith(`["${room.id}"`); $('messages').innerHTML = messages.map(message => renderMessage(message, messages)).join('') + typing; lastTimeline = signature; if(!officeView){if(nearEnd||changedRoom)stream.scrollTop=messages.length?stream.scrollHeight:0;rememberTextScroll();}else if(changedRoom)textScroll.set(room.id,{top:0,atEnd:true}); }
-  renderApprovals(history.approvals || state.approvals.filter(approval => messages.some(message => message.request_id === approval.request_id)));
+  const approvals=roomApprovals(messages),reviews=roomApprovalReviews(messages),typing = renderTyping(messages), signature = JSON.stringify([room.id,messages,participants.map(member=>[member.id,member.name,member.appearance]),state.chat?.activeMessages || [],typing,approvals,reviews]);
+  $('empty-room').classList.toggle('hidden',messages.length>0 || approvals.length>0 || reviews.length>0);
+  if (signature !== lastTimeline) { const stream = $('chat-stream'), cached = textScroll.get(room.id), nearEnd = officeView ? cached?.atEnd !== false : stream.scrollHeight - stream.scrollTop - stream.clientHeight < 110, changedRoom = !lastTimeline.startsWith(`["${room.id}"`); setRoomTimeline(messages.map(message => renderMessage(message, messages)).join('') + typing + approvalTimelineMarkup(approvals,messages,reviews),approvals); lastTimeline = signature; if(!officeView){if(nearEnd||changedRoom)stream.scrollTop=messages.length||approvals.length||reviews.length?stream.scrollHeight:0;rememberTextScroll();}else if(changedRoom)textScroll.set(room.id,{top:0,atEnd:true}); }
+  renderApprovals([]);updateOfficeApprovalAlert();
   renderService(); renderInspector(); renderSidebar(); applyRoomView(); updateOfficeScene();
 }
 function renderMessage(message, messages) {
@@ -549,10 +570,11 @@ function renderMessage(message, messages) {
 }
 function renderTyping(messages) {
   const states = {queued:'已排队，等待接手',pending:'等待接手',delivered:'已送达，等待接手',consumed:'已读取，等待回复',creating:'正在打开工作会话',running:'正在思考',processing:'正在思考',waiting_input:'在等你确认'};
-  const active = new Set(state.chat?.activeMessages || []), approvals = history.approvals || [], replies = new Map(), owed = new Map();
+  const active = new Set(state.chat?.activeMessages || []), approvals = roomApprovals(messages), replies = new Map(), owed = new Map();
   for (const message of messages) if (message.reply_to && ['reply','acknowledgment'].includes(message.kind)) { const senders = replies.get(message.reply_to) || new Set(); senders.add(message.sender_id); replies.set(message.reply_to,senders); }
   for (const message of messages) {
     if (!message.to_member_id || !states[message.status] || replies.get(message.id)?.has(message.to_member_id)) continue;
+    if(message.status==='waiting_input' && approvals.some(approval=>(!approval.member_id || approval.member_id===message.to_member_id) && (approval.request_id===message.id || message.request_id && approval.request_id===message.request_id)))continue;
     // A read message nobody answered for half an hour is not "typing"; its own footer still shows the status.
     if (message.status === 'consumed' && Date.now() - Date.parse(message.updated || message.created || 0) > 30 * 60e3) continue;
     const priority = message.status === 'waiting_input' ? 3 : ['processing','running','creating'].includes(message.status) ? 2 : 1;
@@ -612,10 +634,86 @@ function renderLegacy(project) {
   lastTimeline = ''; renderApprovals(state.approvals.filter(approval => history.requests.some(request => request.id === approval.request_id)));
   applyRoomView();
 }
+function approvalSessionAllowed(approval) { return approval.session_allowed===true && !['input','form','url'].includes(approval.type); }
+function approvalQuestionMarkup(question) {
+  const input=`<input data-question="${escape(question.id)}" placeholder="填写回答">`,options=Array.isArray(question.options)?question.options.filter(option=>typeof option?.label==='string' && option.label.trim()):[];
+  if(!options.length)return `<label>${escape(question.question)}${input}</label>`;
+  return `<div class="approval-question" data-approval-question="${escape(question.id)}"><strong>${escape(question.question)}</strong><div class="actions" role="group" aria-label="${escape(question.header||question.question)}">${options.map(option=>`<button type="button" class="secondary" data-question-choice="${escape(question.id)}" data-choice-value="${escape(option.label)}" aria-pressed="false"><strong>${escape(option.label)}</strong>${option.description?`<br><small>${escape(option.description)}</small>`:''}</button>`).join('')}</div><label>回答（也可自定义）${input}</label></div>`;
+}
+function syncApprovalQuestionChoices(input) {
+  const group=input?.closest('[data-approval-question]');if(!group || input.dataset.question!==group.dataset.approvalQuestion)return;
+  for(const button of group.querySelectorAll('[data-question-choice]')){
+    const selected=button.dataset.questionChoice===input.dataset.question && button.dataset.choiceValue===input.value;
+    button.setAttribute('aria-pressed',String(selected));button.classList.toggle('primary',selected);button.classList.toggle('secondary',!selected);
+  }
+}
+function selectApprovalQuestionChoice(button) {
+  if(!button || button.disabled || typeof button.dataset.choiceValue!=='string')return;
+  const group=button.closest('[data-approval-question]');if(!group || button.dataset.questionChoice!==group.dataset.approvalQuestion)return;
+  const input=[...group.querySelectorAll('[data-question]')].find(field=>field.dataset.question===button.dataset.questionChoice);if(!input)return;
+  input.value=button.dataset.choiceValue;syncApprovalQuestionChoices(input);
+}
+function approvalContentMarkup(approval,attribute='data-approve') {
+  const id=escape(approval.id);
+  return `${approval.reason ? `<p>${escape(approval.reason)}</p>` : ''}${approval.command ? `<details class="approval-operation"><summary>查看具体操作</summary><pre>${escape(approval.command)}</pre></details>` : ''}${approval.type === 'url' && approval.url ? `<a class="secondary" href="${escape(approval.url)}" target="_blank" rel="noreferrer">在对应服务完成确认 ↗</a>` : ''}${approval.type === 'input' ? (approval.questions || []).map(approvalQuestionMarkup).join('') : ''}${approval.type === 'form' ? Object.entries(approval.schema?.properties || {}).map(([key,property]) => `<label>${escape(property.title || property.description || key)}${property.type === 'boolean' ? `<input type="checkbox" data-form-field="${escape(key)}" data-field-type="boolean">` : `<input data-form-field="${escape(key)}" data-field-type="${escape(property.type || 'string')}" ${/password|secret|token|key/i.test(key) ? 'type="password"' : ''} placeholder="${property.enum ? escape(property.enum.join(' / ')) : '填写内容'}">`}</label>`).join('') : ''}<div class="actions">${approval.type === 'input' ? `<button class="primary" data-input-submit="${id}">提交回答</button>` : approval.type === 'form' ? `<button class="primary" data-form-submit="${id}">提交表单</button><button class="secondary" ${attribute}="${id}" data-decision="decline">取消</button>` : `<button class="primary" ${attribute}="${id}" data-decision="accept">${approval.type === 'url' ? '已完成，继续' : '允许这次操作'}</button>${approvalSessionAllowed(approval)?`<button class="secondary" ${attribute}="${id}" data-decision="acceptForSession">本会话允许此操作</button>`:''}<button class="secondary" ${attribute}="${id}" data-decision="decline">不允许</button>`}</div>`;
+}
+function roomApprovals(messages) {
+  const pending=new Map();
+  for(const approval of Array.isArray(state?.approvals)?state.approvals:history?.approvals||[]){
+    if(!approval.id || approval.room_id && approval.room_id!==roomId)continue;
+    if(approval.room_id!==roomId && !messages.some(message=>message.id===approval.request_id || message.request_id===approval.request_id))continue;
+    pending.set(approval.id,approval);
+  }
+  return [...pending.values()].sort((a,b)=>String(a.created||'').localeCompare(String(b.created||'')));
+}
+function renderApprovalMessage(approval,messages) {
+  const task=messages.find(message=>message.id===approval.request_id || message.request_id===approval.request_id),member=memberById(approval.member_id || task?.to_member_id || (task?.sender_id!=='user'?task?.sender_id:null));
+  const name=member?.name || '这位成员',summary=task && (task.coordination?.title || plainMarkdown(task.text)).slice(0,180);
+  return `<article class="chat-message approval-message" data-approval="${escape(approval.id)}"><div class="message-header">${avatar(name,member?.adapter,member?.appearance,member?.id)}<button type="button" class="message-sender" ${member?`data-open-member="${escape(member.id)}"`:'disabled'}>${escape(name)}</button><span class="message-target">需要你确认</span><time>${time(approval.created)}</time></div><div class="message-body approval-card">${task?`<div class="quoted-message"><strong>当前任务</strong><span>${escape(summary)}</span><button type="button" class="text-button" data-approval-task="${escape(task.id)}">查看委托消息 ↗</button></div>`:''}<h3>${['input','form'].includes(approval.type)?'请补充这一步的信息':'请确认这一步操作'}</h3>${approvalContentMarkup(approval)}</div></article>`;
+}
+function roomApprovalReviews(messages) {
+  const reviews=new Map();
+  for(const review of Array.isArray(state?.approval_reviews)?state.approval_reviews:history?.approval_reviews||[]){
+    if(!review.id || !['denied','timedOut','aborted'].includes(review.status) || review.room_id && review.room_id!==roomId)continue;
+    if(review.room_id!==roomId && !messages.some(message=>message.id===review.request_id || message.request_id===review.request_id))continue;
+    reviews.set(review.id,review);
+  }
+  return [...reviews.values()];
+}
+function renderApprovalReviewMessage(review,messages) {
+  const task=messages.find(message=>message.id===review.request_id || message.request_id===review.request_id),member=memberById(review.member_id || task?.to_member_id),name=member?.name||'这位成员';
+  return `<article class="chat-message approval-review-message" data-approval-review="${escape(review.id)}"><div class="message-header">${avatar(name,member?.adapter,member?.appearance,member?.id)}<button type="button" class="message-sender" ${member?`data-open-member="${escape(member.id)}"`:'disabled'}>${escape(name)}</button><span class="message-target">${review.status==='denied'?'操作检查未通过':'操作检查未完成'}</span><time>${time(review.created)}</time></div><div class="message-body">${task?`<div class="quoted-message"><strong>当前任务</strong><span>${escape((task.coordination?.title||plainMarkdown(task.text)).slice(0,180))}</span><button type="button" class="text-button" data-approval-task="${escape(task.id)}">查看委托消息 ↗</button></div>`:''}<p>${escape(review.reason||'请补充操作目的与要求，让成员核对下一步。')}</p>${review.command?`<details class="approval-operation"><summary>查看具体操作</summary><pre>${escape(review.command)}</pre></details>`:''}${member?`<button type="button" class="secondary" data-review-member="${escape(member.id)}" ${task?`data-review-task="${escape(task.id)}"`:''}>补充要求</button>`:''}</div></article>`;
+}
+function approvalTimelineMarkup(approvals,messages,reviews=[]) {
+  const cards=[...[...new Map(approvals.map(approval=>[approval.id,approval])).values()].map(value=>({value,review:false})),...[...new Map(reviews.map(review=>[review.id,review])).values()].map(value=>({value,review:true}))];
+  return cards.sort((a,b)=>String(a.value.created||'').localeCompare(String(b.value.created||''))).map(({value,review})=>review?renderApprovalReviewMessage(value,messages):renderApprovalMessage(value,messages)).join('');
+}
+function setRoomTimeline(markup,approvals) {setApprovalMarkup($('messages'),markup,approvals);}
+function setApprovalMarkup(host,markup,approvals) {
+  const active=document.activeElement,retained=new Map([...host.querySelectorAll('[data-approval]')].map(card=>[card.dataset.approval,card]));
+  host.innerHTML=markup;
+  for(const card of host.querySelectorAll('[data-approval]')){
+    const signature=JSON.stringify(approvals.find(approval=>approval.id===card.dataset.approval)),previous=retained.get(card.dataset.approval);
+    // A new chat message must not erase an answer or form the user is typing.
+    if(previous?.approvalSignature===signature){card.replaceWith(previous);if(previous.contains(active))active.focus({preventScroll:true});}else card.approvalSignature=signature;
+  }
+}
 function renderApprovals(approvals) {
   const signature = JSON.stringify([roomId,legacyId,approvals]); if (signature === lastApprovalSignature) return; lastApprovalSignature = signature;
-  $('approval-panel').innerHTML = approvals.map(approval => `<div class="approval-card" data-approval="${escape(approval.id)}"><h3>${['input','form'].includes(approval.type) ? '成员需要补充信息' : '成员需要你的确认'}</h3>${approval.reason ? `<p>${escape(approval.reason)}</p>` : ''}${approval.command ? `<pre>${escape(approval.command)}</pre>` : ''}${approval.type === 'url' && approval.url ? `<a class="secondary" href="${escape(approval.url)}" target="_blank" rel="noreferrer">在对应服务完成确认 ↗</a>` : ''}${approval.type === 'input' ? (approval.questions || []).map(question => `<label>${escape(question.question)}<input data-question="${escape(question.id)}" placeholder="填写回答"></label>`).join('') : ''}${approval.type === 'form' ? Object.entries(approval.schema?.properties || {}).map(([key,property]) => `<label>${escape(property.title || property.description || key)}${property.type === 'boolean' ? `<input type="checkbox" data-form-field="${escape(key)}" data-field-type="boolean">` : `<input data-form-field="${escape(key)}" data-field-type="${escape(property.type || 'string')}" ${/password|secret|token|key/i.test(key) ? 'type="password"' : ''} placeholder="${property.enum ? escape(property.enum.join(' / ')) : '填写内容'}">`}</label>`).join('') : ''}<div class="actions">${approval.type === 'input' ? `<button class="primary" data-input-submit="${escape(approval.id)}">提交回答</button>` : approval.type === 'form' ? `<button class="primary" data-form-submit="${escape(approval.id)}">提交表单</button><button class="secondary" data-approve="${escape(approval.id)}" data-decision="decline">取消</button>` : `<button class="primary" data-approve="${escape(approval.id)}" data-decision="accept">${approval.type === 'url' ? '已完成，继续' : '允许这次操作'}</button><button class="secondary" data-approve="${escape(approval.id)}" data-decision="decline">不允许</button>`}</div></div>`).join('');
+  $('approval-panel').innerHTML = approvals.map(approval => `<div class="approval-card" data-approval="${escape(approval.id)}"><h3>${['input','form'].includes(approval.type) ? '成员需要补充信息' : '成员需要你的确认'}</h3>${approvalContentMarkup(approval)}</div>`).join('');
   updateOfficeApprovalAlert();
+}
+async function respondToApproval(button) {
+  if(!button || button.disabled)return;
+  const id=button.dataset.approve || button.dataset.onboardingApprove || button.dataset.inputSubmit || button.dataset.formSubmit;if(!id || approvalResponding.has(id))return;
+  approvalResponding.add(id);button.disabled=true;
+  try{
+    let payload;
+    if(button.dataset.inputSubmit){const answers={};button.closest('[data-approval]').querySelectorAll('[data-question]').forEach(input=>answers[input.dataset.question]=input.value);payload={answers};}
+    else if(button.dataset.formSubmit){const content={};button.closest('[data-approval]').querySelectorAll('[data-form-field]').forEach(input=>content[input.dataset.formField]=input.dataset.fieldType==='boolean'?input.checked:input.dataset.fieldType==='array'?input.value.split(',').map(item=>item.trim()).filter(Boolean):input.value);payload={content};}
+    else {const decision=button.dataset.decision,approvals=Array.isArray(state?.approvals)?state.approvals:history?.approvals||[];if(decision==='acceptForSession' && !approvals.some(approval=>approval.id===id && approvalSessionAllowed(approval)))throw Error('当前操作未提供本会话授权，请选择允许这次操作或拒绝。');payload={decision};}
+    await api(`/api/approvals/${encodeURIComponent(id)}`,payload);await refresh();
+  }finally{approvalResponding.delete(id);button.disabled=false;}
 }
 function showProject() { $('project-dialog').showModal(); }
 function showRoom(prefill = '') { if (!projectId) { toast('先添加一个项目，让成员有共同的工作范围。'); showProject(); return; } $('room-project-label').textContent = `项目：${state.projects.find(project => project.id === projectId)?.name || ''}`; $('room-name').value = prefill; $('room-dialog').showModal(); $('room-name').focus(); }
@@ -868,7 +966,7 @@ function toggleOfficeComposer(open=!officeComposerOpen) {
   }
 }
 function updateOfficeApprovalAlert() {
-  const count=$('approval-panel').querySelectorAll('[data-approval]').length;
+  const count=$('approval-panel').querySelectorAll('[data-approval]').length+$('messages').querySelectorAll('[data-approval],[data-approval-review]').length;
   $('office-approval-alert').classList.toggle('hidden',!document.body.classList.contains('office-view') || !count);
   $('office-approval-alert').textContent=`${count} 项需要确认 ↗`;
 }
@@ -901,9 +999,11 @@ function secretaryStatusText(selected = currentSecretary()) {
 }
 function openSecretaryTutorial() {
   if (!roomId || legacyId) { showRoom(); return; }
+  secretaryNavigation=null;
   setProfessionalView(true); secretaryOpenRoom = roomId; secretaryError = ''; renderSecretary(); updateOfficeScene();
 }
 function closeSecretaryTutorial() {
+  secretaryNavigation=null;
   secretaryOpenRoom = null; secretaryDismissed.add(roomId);
   localStorage.setItem('agentoffice-secretary-dismissed',JSON.stringify([...secretaryDismissed])); renderSecretary(); updateOfficeScene();
 }
@@ -952,10 +1052,30 @@ function renderSecretary() {
   if (otherCandidates) otherCandidates.open = othersOpen;
   if ($('secretary-connect-candidates').innerHTML !== candidateCopy.innerHTML) $('secretary-connect-candidates').innerHTML = candidateCopy.innerHTML;
   const attempt=onboardingJobs.get(secretaryConnectJob)||currentOnboardingJobs().find(job=>onboardingRunning(job))||currentOnboardingJobs()[0];
-  $('secretary-connect-progress').innerHTML=attempt?onboardingJobMarkup(attempt):'';
+  setApprovalMarkup($('secretary-connect-progress'),attempt?onboardingJobMarkup(attempt):'',state?.approvals||[]);
   $('secretary-connect-candidates').querySelectorAll('button').forEach(button => { if(secretaryConnectRoom !== roomId||onboardingRunning(attempt)) button.disabled = true; });
   $('secretary-connect-progress').querySelectorAll('button').forEach(button => { if(secretaryConnectRoom !== roomId || !webConnected) button.disabled = true; });
   $('secretary-connect-error').textContent = launchError; $('secretary-connect-error').classList.toggle('hidden',!launchError);
+}
+function beginSecretaryNavigation(source) {
+  return secretaryNavigation={source,roomId,projectId,jobId:null,memberId:null,assignment:{...currentSecretary()},accepted:null,assignmentAttempted:false};
+}
+function secretaryNavigationCurrent(flow) {
+  return !!flow && secretaryNavigation===flow && flow.roomId===roomId && flow.projectId===projectId && !legacyId;
+}
+function finishSecretaryNavigation(flow,expected) {
+  const selected=currentSecretary();
+  const members=admittedMembers(history?.participants);
+  if(!secretaryNavigationCurrent(flow) || !sameSecretaryAssignment(expected,selected) || selected.status!=='ready' || history?.room?.id!==flow.roomId || !members.some(member=>member.id===selected.member_id) || flow.memberId && !members.some(member=>member.id===flow.memberId))return false;
+  const job=flow.jobId && onboardingJobs.get(flow.jobId);
+  if(flow.jobId && (!job || !onboardingReady(job) || job.member_id!==flow.memberId || job.room_id && job.room_id!==flow.roomId || flow.requireAutomatic && !job.can_wake))return false;
+  // Consume only this user-initiated flow. Loading an already-ready room never navigates.
+  secretaryNavigation=null;if(flow.jobId===secretaryConnectJob)secretaryConnectJob=null;
+  if(flow.source==='picker' && secretaryConnectRoom===flow.roomId && $('secretary-connect-dialog').open)$('secretary-connect-dialog').close();
+  if(selectedSetupMember===(flow.memberId||selected.member_id) && $('member-setup-dialog').open)$('member-setup-dialog').close();
+  secretaryPickingRoom=null;closeSecretaryTutorial();setProfessionalView(true);selectRoomView(true);
+  $('recipient').value=selected.member_id;updateRecipientNote();
+  toast(flow.memberId && flow.memberId!==selected.member_id?'成员已真实接通，已进入办公室。':'秘书已真实接通，可以在办公室交代目标。');return true;
 }
 function secretaryResponse(value, selectedRoom) {
   const selected = value?.secretary || value; if (!selected || selected.room_id !== selectedRoom) throw new Error('尚未确认秘书角色，请刷新查看。');
@@ -974,17 +1094,18 @@ async function refreshSecretaryState() {
 }
 async function chooseSecretary(memberId) {
   if (secretaryBusy || secretaryStartBusy || !roomId || legacyId) return;
-  const selectedRoom = roomId; secretaryBusy = true; secretaryError = ''; renderSecretary();
+  const selectedRoom = roomId,flow=beginSecretaryNavigation('selection');flow.memberId=memberId;secretaryBusy = true; secretaryError = ''; renderSecretary();
   try {
-    const accepted = secretaryResponse(await api('/api/secretary',{room_id:selectedRoom,member_id:memberId}),selectedRoom); await refreshSecretaryState();
-    if(roomId === selectedRoom && sameSecretaryAssignment(accepted,currentSecretary())){ secretaryOpenRoom = roomId; secretaryPickingRoom = null; toast('秘书角色已保存。准备好目标后，点击“让秘书开始”。'); }
-    else if(roomId === selectedRoom) secretaryError = '秘书设置已在其他窗口变更，已显示最新角色。请重新确认。';
+    const accepted = secretaryResponse(await api('/api/secretary',{room_id:selectedRoom,member_id:memberId}),selectedRoom);if(!secretaryNavigationCurrent(flow))return;flow.accepted=accepted;await refreshSecretaryState();
+    if(!secretaryNavigationCurrent(flow))return;
+    if(sameSecretaryAssignment(accepted,currentSecretary())){secretaryPickingRoom=null;if(!finishSecretaryNavigation(flow,accepted)){secretaryOpenRoom=roomId;toast('秘书角色已保存，请继续完成接入。');}}
+    else {secretaryNavigation=null;secretaryError = '秘书设置已在其他窗口变更，已显示最新角色。请重新确认。';}
   }
-  catch(error){ if(roomId === selectedRoom) secretaryError = error.message; throw error; }
+  catch(error){ if(secretaryNavigationCurrent(flow)){secretaryNavigation=null;secretaryError = error.message;}throw error; }
   finally {secretaryBusy = false; renderSecretary(); updateOfficeScene();}
 }
 async function clearSecretary() {
-  if(secretaryBusy || secretaryStartBusy || !roomId) return; const selectedRoom = roomId; secretaryBusy = true; renderSecretary();
+  if(secretaryBusy || secretaryStartBusy || !roomId) return; secretaryNavigation=null;const selectedRoom = roomId; secretaryBusy = true; renderSecretary();
   try {
     const selected = secretaryResponse(await api('/api/secretary',{room_id:selectedRoom,reset:true}),selectedRoom); await refreshSecretaryState();
     if(roomId === selectedRoom && sameSecretaryAssignment(selected,currentSecretary())){ secretaryOpenRoom = roomId; secretaryError = ''; toast(selected.request_id ? '秘书角色已清除，原委托仍在消息中。' : '秘书角色已清除，可以重新选择。'); }
@@ -1018,7 +1139,7 @@ function discussWithSecretary() {
   closeSecretaryTutorial(); $('recipient').value = selected.member_id; updateRecipientNote(); if(officeView)toggleOfficeComposer(true); else $('prompt').focus();
 }
 function openSecretaryConnect() {
-  if (!roomId || !webConnected) return; secretaryConnectRoom = roomId; secretaryConnectJob = null; secretaryError = ''; renderSecretary(); $('secretary-connect-dialog').showModal();
+  if (!roomId || !webConnected) return; secretaryNavigation=null;secretaryConnectRoom = roomId; secretaryConnectJob = null; secretaryError = ''; renderSecretary(); $('secretary-connect-dialog').showModal();
   void scanLaunch({quiet:true});
 }
 function updateOfficeScene() {
@@ -1318,9 +1439,10 @@ $('secretary-message-history').onclick = ()=>{const id=currentSecretary().reques
 $('secretary-scan-agents').onclick = ()=>action(scanLaunch);
 $('secretary-connect-candidates').onclick = event => {if(secretaryConnectRoom===roomId)$('launch-candidates').onclick(event);};
 $('secretary-connect-progress').onclick = event => {if(secretaryConnectRoom===roomId)$('onboarding-jobs').onclick(event);};
-$('secretary-connect-back').onclick = ()=>{$('secretary-connect-dialog').close();secretaryConnectJob=null;openSecretaryTutorial();};
-$('secretary-connect-manual').onclick = ()=>{$('secretary-connect-dialog').close();secretaryConnectJob=null;action(showMembers);};
-$('office-approval-alert').onclick=()=>{selectRoomView(false);requestAnimationFrame(()=>{$('approval-panel').scrollIntoView({block:'start',behavior:'smooth'});$('approval-panel').querySelector('input,button,a')?.focus({preventScroll:true});});};
+$('secretary-connect-back').onclick = ()=>{secretaryNavigation=null;$('secretary-connect-dialog').close();secretaryConnectJob=null;openSecretaryTutorial();};
+$('secretary-connect-manual').onclick = ()=>{secretaryNavigation=null;$('secretary-connect-dialog').close();secretaryConnectJob=null;action(showMembers);};
+$('secretary-connect-dialog').addEventListener('close',()=>{if(secretaryNavigation?.source==='picker')secretaryNavigation=null;});
+$('office-approval-alert').onclick=()=>{selectRoomView(false);requestAnimationFrame(()=>{const card=[...$('messages').querySelectorAll('[data-approval],[data-approval-review]')].at(-1)||$('approval-panel');card.scrollIntoView({block:'center',behavior:'smooth'});card.querySelector('input,button,a')?.focus({preventScroll:true});});};
 window.visualViewport?.addEventListener('resize',updateOfficeKeyboardInset);window.visualViewport?.addEventListener('scroll',updateOfficeKeyboardInset);
 $('composer').addEventListener('focusin',updateOfficeKeyboardInset);$('composer').addEventListener('focusout',()=>requestAnimationFrame(updateOfficeKeyboardInset));
 $('chat-stream').addEventListener('scroll',rememberTextScroll,{passive:true});
@@ -1349,7 +1471,7 @@ $('connection-doctor-select').onclick=()=>{$('connection-doctor-old-member').val
 $('connection-doctor-resume').onclick=()=>{const member=doctorMember();if(member)showResume(member.id);};
 $('connection-doctor-setup').onclick=()=>{const member=doctorMember();if(member)action(()=>showMemberSetup(member.id));};
 $('launch-open-professional').onclick = () => setProfessionalView(true);
-$('launch-project-select').onchange = () => { projectId = $('launch-project-select').value; roomId = null; legacyId = null; launchSession = null; launchError = ''; setReply(null); action(refresh); };
+$('launch-project-select').onchange = () => { secretaryNavigation=null;projectId = $('launch-project-select').value; roomId = null; legacyId = null; launchSession = null; launchError = ''; setReply(null); action(refresh); };
 $('launch-scan').onclick = () => action(scanLaunch);
 $('launch-candidates').onclick = event => { const button = event.target.closest('[data-onboarding-provider],[data-onboarding-requirements]'); if (!button || button.disabled) return; if (button.dataset.onboardingProvider) action(() => startOnboarding(button.dataset.onboardingProvider)); else { const candidate = (launchCandidates || []).find(item => launchProvider(item) === button.dataset.onboardingRequirements); if (candidate) showOnboardingRequirements(candidate); } };
 $('onboarding-refresh').onclick = () => action(refreshOnboarding);
@@ -1395,15 +1517,15 @@ document.querySelectorAll('.close-dialog').forEach(button => button.onclick = ()
 $('connector-fields-dialog').addEventListener('close',()=>{connectorFields=null;for(const name of ['name','transport','url','headers'])$('connector-'+name).value='';$('connector-instructions').textContent='';$('connector-docs').removeAttribute('href');});
 $('connector-fields-dialog').onclick=event=>{const button=event.target.closest('[data-connector-copy]');if(!button||!connectorFields)return;action(async()=>{const name=button.dataset.connectorCopy,value=connectorFields[name];if(value===undefined)return;if(name==='headers'&&!Object.keys(value).length){toast('这个连接器不需要标头。');return;}await navigator.clipboard.writeText(typeof value==='string'?value:JSON.stringify(value,null,2));toast('已复制。只填写到这个 AI 本人的连接器设置。');});};
 $('connector-copy-all').onclick=()=>action(async()=>{if(!connectorFields)return;const fields=connectorFields;await navigator.clipboard.writeText(`名称：${fields.name}\n连接方式：${fields.transport}\nURL：${fields.url}\n标头：${Object.keys(fields.headers).length?JSON.stringify(fields.headers,null,2):'无需填写'}`);toast('字段已复制。按名称、连接方式、URL 分别填写，不作为 JSON 导入。');});
-$('projects').onclick = event => { const button = event.target.closest('[data-project]'); if (button) { projectId = button.dataset.project; roomId = null; legacyId = null; document.body.classList.remove('mobile-sidebar-open');syncSidebarToggle();setReply(null); action(refresh); } };
-const onRoomListClick = event => { const manage=event.target.closest('[data-room-actions]');if(manage){showRoomActions(manage.dataset.roomActions);return;}const button = event.target.closest('[data-room]'); if (button) { roomId = button.dataset.room; legacyId = null;document.body.classList.remove('mobile-sidebar-open');syncSidebarToggle();setReply(null); setProfessionalView(true); action(refresh); } };
+$('projects').onclick = event => { const button = event.target.closest('[data-project]'); if (button) { secretaryNavigation=null;projectId = button.dataset.project; roomId = null; legacyId = null; document.body.classList.remove('mobile-sidebar-open');syncSidebarToggle();setReply(null); action(refresh); } };
+const onRoomListClick = event => { const manage=event.target.closest('[data-room-actions]');if(manage){showRoomActions(manage.dataset.roomActions);return;}const button = event.target.closest('[data-room]'); if (button) { secretaryNavigation=null;roomId = button.dataset.room; legacyId = null;document.body.classList.remove('mobile-sidebar-open');syncSidebarToggle();setReply(null); setProfessionalView(true); action(refresh); } };
 $('rooms').onclick=onRoomListClick;$('archived-rooms-list').onclick=onRoomListClick;
 $('room-actions-archive').onclick=()=>action(toggleRoomArchive);
 $('room-actions-delete').onclick=()=>{const id=managedRoomId;$('room-actions-dialog').close();managedRoomId=null;showDeleteRoom(id);};
 $('room-actions-start').onclick=()=>action(()=>changeService('start_service'));
 $('delete-room-confirm').onclick=()=>action(confirmDeleteRoom);
 $('delete-room-blockers').onclick=event=>action(async()=>{const button=event.target.closest('[data-delete-blocker]'),target=state?.chat?.rooms?.find(room=>room.id===deleteRoomId);if(!button||!target)return;const kind=button.dataset.blockerKind,id=button.dataset.deleteBlocker;$('delete-room-dialog').close();roomId=target.id;projectId=target.project_id;legacyId=null;setReply(null);await refresh();if(kind==='message'){selectRoomView(false);requestAnimationFrame(()=>$('message-'+id)?.scrollIntoView({block:'center'}));}else openInspector(kind==='binding'?'connections':'team',kind==='binding'?id:undefined);});
-$('discussions').onclick = event => { const button = event.target.closest('[data-discussion]'); if (button) { legacyId = button.dataset.discussion; setReply(null); action(refresh); } };
+$('discussions').onclick = event => { const button = event.target.closest('[data-discussion]'); if (button) { secretaryNavigation=null;legacyId = button.dataset.discussion; setReply(null); action(refresh); } };
 $('room-members').onclick = event => { const button = event.target.closest('[data-member]'); if (button) openInspector('connections',button.dataset.member); };
 $('inspector-members').onclick = event => { const button = event.target.closest('[data-inspector-member]'); if (button) openInspector('connections',button.dataset.inspectorMember); };
 $('inspector-add-member').onclick = () => setProfessionalView(false);
@@ -1479,10 +1601,13 @@ $('prompt').onkeydown = event => {
   if (event.key === 'Enter' && !event.shiftKey && $('mention-choices').classList.contains('hidden')) { event.preventDefault(); $('composer').requestSubmit(); }
 };
 $('mention-choices').onclick = event => { const button = event.target.closest('[data-mention]'); if (!button) return; const member = memberById(button.dataset.mention), input = $('prompt'), before = input.value.slice(0,input.selectionStart), after = input.value.slice(input.selectionEnd), value = before.replace(/@([^\s@]*)$/u,() => `@${member.name} `); input.value = value + after; input.focus(); input.setSelectionRange(value.length,value.length); $('recipient').value = member.id; updateRecipientNote(); $('mention-choices').classList.add('hidden'); };
-$('messages').onclick = event => { const button = event.target.closest('button'); if (!button) return; if(button.dataset.openMember)openInspector('connections',button.dataset.openMember);if(button.hasAttribute('data-open-team')){openInspector('team');action(()=>refreshTeam());}if (button.dataset.reconcileMessage) openTeamDialog('message_reconcile',button.dataset.reconcileMessage); if (button.dataset.reply) setReply(history.messages.find(message => message.id === button.dataset.reply)); if (button.dataset.cancelMessage) action(async () => { await api(`/api/chat/messages/${encodeURIComponent(button.dataset.cancelMessage)}/cancel`,{}); await refresh(); }); };
+$('messages').onclick = event => { const button = event.target.closest('button'); if (!button) return; if(button.dataset.approve || button.dataset.inputSubmit || button.dataset.formSubmit){action(()=>respondToApproval(button));return;}if(button.dataset.approvalTask){$('message-'+button.dataset.approvalTask)?.scrollIntoView({block:'center',behavior:'smooth'});return;}if(button.dataset.reviewMember){if(![...$('recipient').options].some(option=>option.value===button.dataset.reviewMember)){toast('这位成员当前未接通，请先查看成员连接。');openInspector('connections',button.dataset.reviewMember);return;}$('recipient').value=button.dataset.reviewMember;updateRecipientNote();const task=history.messages.find(message=>message.id===button.dataset.reviewTask);if(task)setReply(task);$('prompt').focus();return;}if(button.dataset.openMember)openInspector('connections',button.dataset.openMember);if(button.hasAttribute('data-open-team')){openInspector('team');action(()=>refreshTeam());}if (button.dataset.reconcileMessage) openTeamDialog('message_reconcile',button.dataset.reconcileMessage); if (button.dataset.reply) setReply(history.messages.find(message => message.id === button.dataset.reply)); if (button.dataset.cancelMessage) action(async () => { await api(`/api/chat/messages/${encodeURIComponent(button.dataset.cancelMessage)}/cancel`,{}); await refresh(); }); };
 document.addEventListener('click', event => { if (event.target.closest('#cleanup-stale-members')) action(async () => { const result = await api('/api/chat/members/cleanup',{}); await refresh(); toast(`已把 ${result.removed.length} 个没接通的成员移出房间，聊天记录保留。`); }); });
-document.addEventListener('click', event => { const button = event.target.closest('[data-onboarding-approve]'); if (!button) return; action(async () => { button.disabled = true; await api(`/api/approvals/${encodeURIComponent(button.dataset.onboardingApprove)}`,{decision:button.dataset.decision}); await refresh(); }); });
-$('approval-panel').onclick = event => action(async () => { const button = event.target.closest('button'); if (!button) return; if (button.dataset.approve) await api(`/api/approvals/${encodeURIComponent(button.dataset.approve)}`,{decision:button.dataset.decision}); if (button.dataset.inputSubmit) { const answers = {}; button.closest('[data-approval]').querySelectorAll('[data-question]').forEach(input => answers[input.dataset.question] = input.value); await api(`/api/approvals/${encodeURIComponent(button.dataset.inputSubmit)}`,{answers}); } if (button.dataset.formSubmit) { const content = {}; button.closest('[data-approval]').querySelectorAll('[data-form-field]').forEach(input => content[input.dataset.formField] = input.dataset.fieldType === 'boolean' ? input.checked : input.dataset.fieldType === 'array' ? input.value.split(',').map(item => item.trim()).filter(Boolean) : input.value); await api(`/api/approvals/${encodeURIComponent(button.dataset.formSubmit)}`,{content}); } await refresh(); });
+document.addEventListener('click', event => { const button = event.target.closest('[data-onboarding-approve]'); if (button)action(()=>respondToApproval(button)); });
+document.addEventListener('click',event=>{const button=event.target.closest('[data-question-choice]');if(button)selectApprovalQuestionChoice(button);});
+document.addEventListener('input',event=>{const input=event.target.closest('[data-question]');if(input)syncApprovalQuestionChoices(input);});
+document.addEventListener('click', event => {const button=event.target.closest('.onboarding-approval [data-input-submit],.onboarding-approval [data-form-submit]');if(button)action(()=>respondToApproval(button));});
+$('approval-panel').onclick = event => action(()=>respondToApproval(event.target.closest('button')));
 function bridgeKey() { return `${bridgeMemberId}:${bridgeRoomId}`; }
 function showBridgeError(message = '') { $('bridge-error').textContent = message; $('bridge-error').classList.toggle('hidden', !message); }
 async function showBridge(id) {

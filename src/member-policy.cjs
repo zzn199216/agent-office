@@ -1,6 +1,7 @@
 'use strict';
 const { RoomError, VERSION } = require('./util.cjs');
-const MEMBER_CONNECTION_INSTRUCTIONS = 'This MCP authenticates one member in one persistent Agent Office instance. Its credential is reused in all rooms the user has seated that member in; the entry card room_id is a default, not a permanent room restriction. After room changes call agentroom_chat_rooms for current seats. Call agentroom_chat_inbox without room_id to read addressed messages across all current seats. Do not ask for another entry card or MCP configuration merely because a room changed. Claim connection, room identity or an empty inbox only from an actual successful tool result, never from conversation memory.';
+const { COMMON_OPERATION_INSTRUCTIONS } = require('./operation-policy.cjs');
+const MEMBER_CONNECTION_INSTRUCTIONS = 'This MCP authenticates one member in one persistent Agent Office instance. Its credential is reused in all rooms the user has seated that member in; the entry card room_id is a default, not a permanent room restriction. After room changes call agentroom_chat_rooms for current seats. Call agentroom_chat_inbox without room_id to read addressed messages across all current seats. Do not ask for another entry card or MCP configuration merely because a room changed. Claim connection, room identity or an empty inbox only from an actual successful tool result, never from conversation memory. ' + COMMON_OPERATION_INSTRUCTIONS;
 
 const MEMBER_TOOLS = new Set([
   'agentroom_room_state', 'agentroom_room_ensure', 'agentroom_member_wake', 'agentroom_heartbeat',

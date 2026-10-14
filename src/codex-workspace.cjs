@@ -22,7 +22,41 @@ function toml(value){
 // Copy model routing, not the user's MCP servers, hooks, notifications, plugins,
 // profiles or paths that could send workspace state back into the personal home.
 const modelKeys=new Set(['model','model_provider','model_providers','model_reasoning_effort','model_reasoning_summary','model_verbosity','service_tier','model_context_window','model_auto_compact_token_limit','model_catalog_json','openai_base_url','chatgpt_base_url','forced_login_method','forced_chatgpt_workspace_id']);
-function workspaceConfig(config={}){const values=Object.entries(config).filter(([k,v])=>modelKeys.has(k)&&v!==null&&v!==undefined);values.push(['cli_auth_credentials_store','file'],['notify',[]]);return values.map(([k,v])=>k+' = '+toml(v)).join('\n')+'\n';}
+function windowsSandboxMode(config={}){
+  const windows=config&&Object.hasOwn(config,'windows')?config.windows:null;
+  const mode=windows&&typeof windows==='object'&&!Array.isArray(windows)&&Object.hasOwn(windows,'sandbox')?windows.sandbox:null;
+  return ['elevated','unelevated'].includes(mode)?mode:null;
+}
+function workspaceConfig(config={}){const values=Object.entries(config).filter(([k,v])=>modelKeys.has(k)&&v!==null&&v!==undefined),mode=windowsSandboxMode(config);if(mode)values.push(['windows',{sandbox:mode}]);values.push(['cli_auth_credentials_store','file'],['notify',[]]);return values.map(([k,v])=>k+' = '+toml(v)).join('\n')+'\n';}
+// Preserve local Windows tables, dotted/quoted keys and unfamiliar encodings.
+// A conservative false positive only leaves the independent config unchanged.
+function hasWindowsConfig(source){return /\bwindows\b/i.test(source)||/\\[uU][a-fA-F0-9]{4}/.test(source);}
+function workspaceOwner(state,legacyHome){return state?.schema==='agentoffice.codex-workspace'&&state.version===1&&typeof state.prepared==='boolean'&&typeof state.legacy_home==='string'&&path.isAbsolute(state.legacy_home)&&same(state.legacy_home,legacyHome);}
+async function preserveWindowsSandbox(home,marker,state,markerBytes,readConfig,assertHome){
+  assertHome();
+  const configFile=path.join(home,'config.toml');
+  if(!fs.existsSync(configFile))return; // Do not recreate an intentionally absent config.
+  regular(configFile,home);
+  if(state.windows_sandbox_checked===true)return;
+  const original=fs.readFileSync(configFile,'utf8');
+  const mode=hasWindowsConfig(original)?null:windowsSandboxMode(await readConfig());
+  assertHome();
+  regular(marker,home);
+  if(fs.readFileSync(marker,'utf8')!==markerBytes)throw new RoomError('后台协作目录在检查期间发生变化，未迁移配置。',409,'codex_workspace_owner');
+  regular(configFile,home);
+  if(fs.readFileSync(configFile,'utf8')!==original)throw new RoomError('后台配置在检查期间发生变化，未覆盖已有设置。',409,'codex_workspace_config');
+  if(mode){
+    // Append through an existing file descriptor, without truncating or creating
+    // a replacement file. The callback cannot redirect our final write.
+    const descriptor=fs.openSync(configFile,fs.constants.O_RDWR|fs.constants.O_APPEND);
+    try{
+      regular(configFile,home);const opened=fs.fstatSync(descriptor),current=fs.statSync(configFile);
+      if(!opened.isFile()||opened.dev!==current.dev||opened.ino!==current.ino||fs.readFileSync(descriptor,'utf8')!==original)throw new RoomError('后台配置已改变，未覆盖已有设置。',409,'codex_workspace_config');
+      fs.writeSync(descriptor,(original.endsWith('\n')?'':'\n')+'\n[windows]\nsandbox = '+toml(mode)+'\n');
+    }finally{fs.closeSync(descriptor);}
+  }
+  atomicWrite(marker,JSON.stringify({...state,windows_sandbox_checked:true}));
+}
 class CodexWorkspace{
   constructor(dir,options={}){
     this.home=path.resolve(dir,'codex');let origin;
@@ -34,22 +68,29 @@ class CodexWorkspace{
     if(same(this.home,this.legacyHome))throw new RoomError('后台协作目录不能使用个人 Codex 保存目录。',409,'codex_workspace_shared');
   }
   async prepare(readConfig){
-    if(preparations.has(this.home))return preparations.get(this.home);
+    const preparationKey=process.platform==='win32'?this.home.toLowerCase():this.home;
+    if(preparations.has(preparationKey))return preparations.get(preparationKey);
     const pending=(async()=>{
       const marker=path.join(this.home,'agentoffice-workspace.json');
       if(fs.existsSync(this.home)&&fs.lstatSync(this.home).isSymbolicLink())throw new RoomError('后台协作保存目录不能是链接。',409,'codex_workspace_path');
       fs.mkdirSync(this.home,{recursive:true,mode:0o700});
-      if(fs.existsSync(marker)){regular(marker,this.home);const state=JSON.parse(fs.readFileSync(marker,'utf8'));if(state.schema!=='agentoffice.codex-workspace'||state.version!==1)throw new RoomError('后台协作目录身份不匹配。',409,'codex_workspace_owner');if(state.prepared)return this.home;}
+      const originalHome=fs.lstatSync(this.home),assertHome=()=>{const current=fs.lstatSync(this.home);if(!current.isDirectory()||current.isSymbolicLink()||current.dev!==originalHome.dev||current.ino!==originalHome.ino)throw new RoomError('后台协作目录在检查期间发生变化，未迁移配置。',409,'codex_workspace_path');};
+      if(fs.existsSync(marker)){regular(marker,this.home);const markerBytes=fs.readFileSync(marker,'utf8'),state=JSON.parse(markerBytes);if(!workspaceOwner(state,this.legacyHome))throw new RoomError('后台协作目录身份不匹配。',409,'codex_workspace_owner');if(state.prepared){await preserveWindowsSandbox(this.home,marker,state,markerBytes,readConfig,assertHome);return this.home;}}
       else{if(fs.readdirSync(this.home).length)throw new RoomError('后台协作目录已有未登记文件，请核对保存位置。',409,'codex_workspace_owner');atomicWrite(marker,JSON.stringify({schema:'agentoffice.codex-workspace',version:1,prepared:false,legacy_home:this.legacyHome}));}
+      const markerBytes=fs.readFileSync(marker,'utf8');
       const config=await readConfig();
-      if(!fs.existsSync(path.join(this.home,'config.toml')))atomicWrite(path.join(this.home,'config.toml'),workspaceConfig(config));
+      assertHome();regular(marker,this.home);
+      if(fs.readFileSync(marker,'utf8')!==markerBytes)throw new RoomError('后台协作目录在检查期间发生变化，未生成配置。',409,'codex_workspace_owner');
+      const configFile=path.join(this.home,'config.toml');
+      if(fs.existsSync(configFile))regular(configFile,this.home);
+      else try{fs.writeFileSync(configFile,workspaceConfig(config),{flag:'wx',mode:0o600});}catch(error){if(error.code!=='EEXIST')throw error;regular(configFile,this.home);}
       // An opaque, one-time seed of file-backed CLI auth. Never sync it back or
       // overwrite an independent login/refresh, and never return its contents.
       const original=path.join(this.legacyHome,'auth.json'),target=path.join(this.home,'auth.json');let seeded=false;
       if(!fs.existsSync(target)&&fs.existsSync(original)){regular(original,this.legacyHome);const bytes=fs.readFileSync(original);try{fs.writeFileSync(target,bytes,{flag:'wx',mode:0o600});seeded=true;}catch(error){if(error.code!=='EEXIST')throw error;}}
-      atomicWrite(marker,JSON.stringify({schema:'agentoffice.codex-workspace',version:1,prepared:true,legacy_home:this.legacyHome,credential_seeded:seeded,created:new Date().toISOString()}));return this.home;
-    })();preparations.set(this.home,pending);
-    try{return await pending;}finally{preparations.delete(this.home);}
+      atomicWrite(marker,JSON.stringify({schema:'agentoffice.codex-workspace',version:1,prepared:true,legacy_home:this.legacyHome,credential_seeded:seeded,windows_sandbox_checked:true,created:new Date().toISOString()}));return this.home;
+    })();preparations.set(preparationKey,pending);
+    try{return await pending;}finally{preparations.delete(preparationKey);}
   }
   environment(){return {...process.env,CODEX_HOME:this.home};}
   receipt(threadId){if(!uuid(threadId))throw new RoomError('会话标识无效。');return path.join(this.home,'imports',threadId+'.json');}
@@ -75,7 +116,7 @@ class CodexWorkspace{
     if(fs.existsSync(destination)){regular(destination,this.home);if(sha(fs.readFileSync(destination))!==digest)throw new RoomError('迁移副本与原记录不一致，未覆盖已有上下文。',409,'codex_migration_changed');}
     else atomicWrite(destination,bytes);
     // Register the full copied rollout under the isolated home; no turn starts.
-    await client.call('thread/resume',{threadId,path:destination,cwd:project.path,sandbox:project.access,approvalPolicy:'on-request',excludeTurns:true});
+    await client.call('thread/resume',{threadId,path:destination,cwd:project.path,sandbox:project.access,approvalPolicy:'on-request',approvalsReviewer:'auto_review',excludeTurns:true});
     const copied=await client.read(threadId);
     if(copied?.id!==threadId||normalizePath(copied.cwd)!==project.canonical||JSON.stringify(copied.turns)!==JSON.stringify(original.turns)||sha(fs.readFileSync(source))!==digest)throw new RoomError('迁移后的完整历史尚未核对一致，原会话保留，未提交业务任务。',409,'codex_migration_changed');
     await client.call('thread/name/set',{threadId,name:original.name});

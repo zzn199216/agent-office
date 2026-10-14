@@ -4,10 +4,15 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { ClaudeClient, detectClaude, MIN_VERSION, ROOM_TOOLS, versionSupported } = require('../src/claude.cjs');
+const { COMMON_OPERATION_INSTRUCTIONS } = require('../src/operation-policy.cjs');
 const { fixture } = require('./helpers.cjs');
 const { id, normalizePath } = require('../src/util.cjs');
 const SESSION = '4ca2b4d5-8a9f-4f54-a9aa-ec5ad0b44d43';
 const OTHER_SESSION = '34e8a2f4-2535-495b-b60a-6fdf334bb01a';
+const AUTHORIZED_ROOM_TOOLS = Object.freeze([
+  'agentroom_join','agentroom_chat_rooms','agentroom_chat_history','agentroom_chat_post','agentroom_chat_wait','agentroom_chat_inbox','agentroom_chat_reply','agentroom_chat_image','agentroom_chat_ack','agentroom_room_state','agentroom_room_ensure','agentroom_member_wake','agentroom_heartbeat',
+  'agentroom_team_state','agentroom_member_card','agentroom_task_update','agentroom_meeting_report','agentroom_brief_ack','agentroom_task_create','agentroom_goal_complete','agentroom_meeting_start','agentroom_meeting_discuss','agentroom_meeting_close',
+]);
 const FAKE = String.raw`
 'use strict';
 const fs=require('node:fs'); const args=process.argv.slice(2), env=process.env;
@@ -123,7 +128,8 @@ test('Claude uses actual stream session identity, isolated MCP and exact read-on
   assert.deepEqual(v.states, [{ state: 'creating', thread: undefined }, { state: 'bound', thread: SESSION }]);
   const get = name => call.args[call.args.indexOf(name) + 1];
   assert.equal(get('--tools'), 'Read,Glob,Grep'); assert.equal(get('--permission-mode'), 'dontAsk'); assert.equal(get('--permission-prompts'), 'none');
-  assert.equal(get('--allowedTools'), ROOM_TOOLS.map(name => `mcp__agentroom__${name}`).join(','));
+  assert.deepEqual(get('--allowedTools').split(',').sort(),AUTHORIZED_ROOM_TOOLS.map(name=>`mcp__agentroom__${name}`).sort());assert.deepEqual([...ROOM_TOOLS].sort(),[...AUTHORIZED_ROOM_TOOLS].sort());
+  assert.ok(get('--append-system-prompt').includes(COMMON_OPERATION_INSTRUCTIONS));
   assert.ok(call.args.includes('--restricted')); assert.ok(call.args.includes('--strict-mcp-config')); assert.ok(call.args.includes('--disable-slash-commands'));
   assert.ok(!call.args.includes('--bare')); assert.ok(!call.args.includes('--dangerously-skip-permissions')); assert.ok(!call.args.includes('--session-id')); assert.ok(!call.args.includes('--continue'));
   assert.equal(normalizePath(call.cwd), v.project.canonical); assert.equal(call.resumeInterrupted, '0');
@@ -134,9 +140,12 @@ test('Claude uses actual stream session identity, isolated MCP and exact read-on
 });
 test('Claude resumes only the captured session in the same project and never claims print exit is disconnection', async t => {
   const v = clientFixture(t); let disconnected = false; v.client.on('disconnected', () => { disconnected = true; });
-  await v.run(); await v.run();
+  const firstRoom=v.discussion.id;await v.run();v.discussion.id=id();await v.run();
   const calls = v.calls(); assert.equal(calls.length, 2);
   assert.equal(calls[1].args[calls[1].args.indexOf('--resume') + 1], SESSION); assert.equal(calls[0].cwd, calls[1].cwd); assert.equal(disconnected, false);
+  assert.equal(calls[0].config.mcpServers.agentroom.env.AGENTROOM_ROOM_ID,firstRoom);assert.equal(calls[1].config.mcpServers.agentroom.env.AGENTROOM_ROOM_ID,v.discussion.id);
+  for(const call of calls){const get=flag=>call.args[call.args.indexOf(flag)+1];assert.equal(call.config.mcpServers.agentroom.env.AGENTROOM_MEMBER_ID,'fixture-member');assert.ok(get('--append-system-prompt').includes(COMMON_OPERATION_INSTRUCTIONS));assert.equal(get('--permission-mode'),'dontAsk');assert.equal(get('--permission-prompts'),'none');assert.equal(get('--tools'),'Read,Glob,Grep');assert.deepEqual(get('--allowedTools').split(',').sort(),AUTHORIZED_ROOM_TOOLS.map(name=>`mcp__agentroom__${name}`).sort());}
+  assert.equal(v.states.filter(entry=>entry.state==='creating').length,1);
   const other = fixture();
   await assert.rejects(v.run({ project: { ...v.project, path: other.project, canonical: normalizePath(other.project) } }), error => error.code === 'project_mismatch');
   assert.equal(v.calls().length, 2);

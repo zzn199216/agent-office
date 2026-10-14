@@ -4,9 +4,35 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { QwenClient, detectQwen, MIN_VERSION, ROOM_TOOLS, READ_TOOLS, BLOCKED_TOOLS, versionSupported } = require('../src/qwen.cjs');
+const { COMMON_OPERATION_INSTRUCTIONS } = require('../src/operation-policy.cjs');
 const { fixture } = require('./helpers.cjs');
 const { id, normalizePath } = require('../src/util.cjs');
 const SESSION = '4ca2b4d5-8a9f-4f54-a9aa-ec5ad0b44d43';
+const EXPECTED_ROOM_TOOLS = [
+  'agentroom_join', 'agentroom_chat_rooms', 'agentroom_chat_history',
+  'agentroom_chat_post', 'agentroom_chat_wait', 'agentroom_chat_inbox',
+  'agentroom_chat_reply', 'agentroom_chat_ack', 'agentroom_room_state',
+  'agentroom_room_ensure', 'agentroom_member_wake', 'agentroom_heartbeat',
+  'agentroom_team_state', 'agentroom_member_card', 'agentroom_task_update',
+  'agentroom_meeting_report', 'agentroom_brief_ack', 'agentroom_task_create',
+  'agentroom_goal_complete', 'agentroom_meeting_start', 'agentroom_meeting_discuss',
+  'agentroom_meeting_close'
+];
+function assertBoundedInvocation(call) {
+  const get = name => call.args[call.args.indexOf(name) + 1];
+  assert.equal(get('--approval-mode'), 'default');
+  assert.equal(get('--allowed-mcp-server-names'), 'agentroom');
+  assert.deepEqual(get('--allowed-tools').split(','), EXPECTED_ROOM_TOOLS.map(name => `mcp__agentroom__${name}`));
+  assert.deepEqual(call.config.mcpServers.agentroom.includeTools, EXPECTED_ROOM_TOOLS);
+  assert.deepEqual(Object.keys(call.config.mcpServers), ['agentroom']);
+  assert.equal(call.safeMode, 'true'); assert.equal(call.retry, '0');
+  assert.ok(call.args.includes('--safe-mode'));
+  for (const forbidden of ['--yolo', '--continue', '--approval-policy', '--permission-mode']) assert.ok(!call.args.includes(forbidden));
+  const excluded = new Set(get('--exclude-tools').split(','));
+  for (const tool of ['exec', 'edit', 'write_file', 'run_shell_command', 'agent', 'skill', 'web_fetch', 'web_search', 'cron_create', 'send_message']) assert.ok(excluded.has(tool), tool);
+  assert.equal(typeof COMMON_OPERATION_INSTRUCTIONS, 'string'); assert.ok(COMMON_OPERATION_INSTRUCTIONS.trim());
+  assert.ok(get('--append-system-prompt').includes(COMMON_OPERATION_INSTRUCTIONS));
+}
 const FAKE = String.raw`
 'use strict';
 const fs=require('node:fs'); const args=process.argv.slice(2), env=process.env;
@@ -54,6 +80,7 @@ test('Qwen metadata does not call model or falsely claim verified authentication
 });
 test('Qwen preserves configured provider auth while excluding ambient hooks and dangerous tools', async t => {
   const v = clientFixture(t), answer = await v.run(), call = v.calls()[0];
+  assertBoundedInvocation(call);
   assert.equal(answer.threadId, SESSION); assert.equal(answer.answer, '中文实际回答 [密钥已隐藏] Bearer [密钥已隐藏] [密钥已隐藏]');
   assert.deepEqual(v.states, [{ state: 'creating', thread: undefined }, { state: 'bound', thread: SESSION }]);
   const get = name => call.args[call.args.indexOf(name) + 1];
@@ -69,10 +96,17 @@ test('Qwen preserves configured provider auth while excluding ambient hooks and 
   assert.equal(normalizePath(call.cwd), v.project.canonical); assert.match(call.input, /中文问题/); assert.ok(!call.args.some(arg => arg.includes('中文问题')));
   assert.doesNotMatch(v.progress.join('\n'), /progress-secret|stderr|subagent answer/); assert.equal(fs.existsSync(get('--mcp-config')), false);
 });
-test('Qwen resumes only its returned native session and registered project', async t => {
+test('Qwen keeps the same person session and bounded policy when its assigned room changes', async t => {
   const v = clientFixture(t); let disconnected = false; v.client.on('disconnected', () => { disconnected = true; });
-  await v.run(); await v.run(); const calls = v.calls(); assert.equal(calls.length, 2);
+  const firstRoom = v.discussion.id;
+  await v.run(); v.discussion.id = id(); await v.run(); const calls = v.calls(); assert.equal(calls.length, 2);
   assert.equal(calls[1].args[calls[1].args.indexOf('--resume') + 1], SESSION); assert.equal(calls[0].cwd, calls[1].cwd); assert.equal(disconnected, false);
+  assert.ok(!calls[0].args.includes('--resume')); assert.equal(v.discussion.thread_id, SESSION);
+  assert.equal(v.states.filter(state => state.state === 'creating').length, 1);
+  for (const call of calls) { assertBoundedInvocation(call); assert.equal(call.config.mcpServers.agentroom.env.AGENTROOM_MEMBER_ID, 'fixture-member'); }
+  assert.equal(calls[0].config.mcpServers.agentroom.env.AGENTROOM_ROOM_ID, firstRoom);
+  assert.equal(calls[1].config.mcpServers.agentroom.env.AGENTROOM_ROOM_ID, v.discussion.id);
+  assert.match(calls[1].input, /中文问题/);
   const other = fixture(); await assert.rejects(v.run({ project: { ...v.project, path: other.project, canonical: normalizePath(other.project) } }), error => error.code === 'project_mismatch');
   assert.equal(v.calls().length, 2);
 });
@@ -94,7 +128,8 @@ test('Qwen missing result preserves bound identity and reports uncertain outcome
 });
 test('Qwen timeout before init retains creation uncertainty and kills only its owned child', async t => {
   const v = clientFixture(t, { env: { FAKE_QWEN_MODE: 'hang-before-init' } });
-  await assert.rejects(v.run({ timeout: 150 }), error => error.code === 'creation_uncertain'); assert.equal(v.discussion.binding_state, 'creation_uncertain'); assert.equal(v.calls().length, 1); assert.equal(v.client.child, null);
+  // Allow the fixture to start under the full Windows suite before its bounded timeout.
+  await assert.rejects(v.run({ timeout: 2000 }), error => error.code === 'creation_uncertain'); assert.equal(v.discussion.binding_state, 'creation_uncertain'); assert.equal(v.calls().length, 1); assert.equal(v.client.child, null);
 });
 test('Qwen cancellation after native binding never reruns the question', async t => {
   const v = clientFixture(t, { env: { FAKE_QWEN_MODE: 'hang' } }), controller = new AbortController();
@@ -114,6 +149,7 @@ test('Qwen permission denial is explicit and provider diagnostics stay private',
   const v = clientFixture(t, { env: { FAKE_QWEN_MODE: 'denied' } }); let approval = false;
   await assert.rejects(v.run({ onApproval: () => { approval = true; } }), error => error.code === 'qwen_permission_denied' && !/token|never-forward/.test(error.message));
   assert.equal(approval, false); assert.equal(v.calls().length, 1);
+  assertBoundedInvocation(v.calls()[0]);
 });
 test('unsupported Qwen version and absent independent authentication stop before model launch', async t => {
   const old = clientFixture(t, { env: { FAKE_QWEN_VERSION: '0.25.0' } }); await assert.rejects(old.run(), error => error.code === 'qwen_upgrade_required'); assert.equal(old.calls().length, 0);

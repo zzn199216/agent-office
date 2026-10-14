@@ -14,9 +14,9 @@ async function main(){
       pending+=part;let newline;
       while((newline=pending.indexOf('\n'))>=0){const line=pending.slice(0,newline);pending=pending.slice(newline+1);let value;try{value=JSON.parse(line);}catch{continue;}
         if(value.error){done(new Error(value.error.message));return;}
-        if(value.id===1){send({jsonrpc:'2.0',method:'notifications/initialized'});send({jsonrpc:'2.0',id:2,method:'tools/list',params:{}});}
+        if(value.id===1){if(!value.result.instructions?.includes(require('../src/operation-policy.cjs').COMMON_OPERATION_INSTRUCTIONS)){done(new Error('Shared operation guidance missing from packaged MCP'));return;}send({jsonrpc:'2.0',method:'notifications/initialized'});send({jsonrpc:'2.0',id:2,method:'tools/list',params:{}});}
         if(value.id===2){const names=value.result.tools.map(tool=>tool.name);if(!['agentroom_connect','agentroom_connect_state','agentroom_connect_retry'].every(name=>names.includes(name))){done(new Error('New setup tools missing'));return;}
-          done(null,{packaged_mcp:true,new_connect_tools:true,daemon_started:fs.existsSync(path.join(dir,'control.json')),model_calls:0,version:require('../package.json').version});}
+          done(null,{packaged_mcp:true,new_connect_tools:true,shared_operation_instructions:true,daemon_started:fs.existsSync(path.join(dir,'control.json')),model_calls:0,version:require('../package.json').version});}
       }
     });
     send({jsonrpc:'2.0',id:1,method:'initialize',params:{protocolVersion:'2025-06-18',capabilities:{},clientInfo:{name:'isolated-package-metadata',version:'1'}}});

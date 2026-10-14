@@ -2,7 +2,18 @@
 
 更新：2026-10-15。分支 `claude/pixel-office-overhaul`。`claude/connect-overhaul` 已快进合并进这个分支，可以删除。
 
-## 最新续修（0.15.0-preview.2）
+## 最新续修（0.15.0-preview.3）
+
+- 用户要求通用权限规则：已授权日常读取与 AO 协作自动继续；风险/未知操作在对应 agent 最新消息位置提出具体选择。新增 operation-policy，共享到 Codex、三种 CLI、原生桌面派发及 STDIO/HTTP MCP 握手说明。Codex 使用 exact 0.162 schema 支持的 approvalsReviewer:auto_review，保留 on-request 和项目 sandbox；三 CLI 原只读工具/MCP 许可集合保持，不增加 bypass/yolo。原生权限拒绝（包括 success 带 permissionDenials）统一显示成员风险提示；没有 pause/approve/resume 接口的客户端不伪造许可。MCP 握手说明不等于存量客户端已重新加载模型指令。
+- 人工审批卡移到消息末尾，带人物、原委托和原因；具体操作默认折叠，表单刷新保留输入和焦点。原生提问显示真实选项与说明，点选只填答案，保留自定义输入，提交才返回客户端。仅 native advertised acceptForSession 显示会话选项。serverRequest/resolved 按 client/thread/RPC id 清理；同任务多个待办未全部处理前保持 waiting_input。已执行终态不会被晚到确认恢复为 running。
+- Codex 人工等待暂停模型执行倒计时；停止无确认时有界结束为 outcome_uncertain，不重发。turn/start 确认迟到时与原生结束事件竞争，旧确认不会阻塞取消或重新启动任务。旧 turn/缺失 thread 的请求不会关联当前委托；回调失败安全停止。
+- 秘书成功导航按用户发起的 flow、job、room 与 assignment 校验后仅执行一次：关闭接入/教程进入办公室。失败、旧任务完成、切房、并发角色变更或刷新重放均不劫持当前页面。接入首页成功也走同一收尾。
+- 独立 Codex home 仅补已有 Windows elevated/unelevated 选择，不复制个人 sandbox_mode、approval_policy、MCP、hooks 等；旧已准备目录一次迁移保留原配置、凭据、会话与身份。独立无模型 RPC 验证 reviewer/mode 可被真实 binary 接受，但 readiness 为 updateRequired，不宣称沙箱系统配置或 UNC 问题已修复。
+- Gemini 权限识别改为精确原生错误类型/代码或明确拒绝诊断，普通 ENOENT/解析失败中的 policy.md、permissions.json 不再制造权限拒绝卡。真实拒绝即使随后返回 success 也继续保留提示；不泄漏原始参数与诊断。
+- 隔离 headless 浏览器 7 项通过：秘书成功进入办公室、最新人物确认卡、真实选择后移除、建议选项改写后仅提交一次、拒绝后补充要求不执行、390px 布局和跨房间隔离；只使用 fake native 事件，无真实模型、用户窗口或客户端权限操作。证据在 output/playwright/operation-flow。
+- 最终完整回归 824 项通过，JavaScript 与 diff 检查通过。本机 release/AgentOffice-0.15.0-preview.3-windows-x64 已生成，无 ZIP；OPEN_TEST.cmd 直接打开同目录软件，原数据继续保留。隔离打包程序通过自安装、内嵌 UI 与 110 项公共素材、房间管理；打包 MCP 握手返回共享规则、未启动服务或模型。测试不操作个人客户端；正在使用的 preview.2 后台保持原 PID/实例，用户关闭旧 AO 窗口后从新入口打开，后台空闲时由软件正常更新。本轮未宣称第三方客户端真实权限弹窗或 Grok 收发已完成验收。
+
+## 前次续修（0.15.0-preview.2）
 
 - 用户从托盘完全退出后，使用原安装隐藏重开，已核对 19246 回环监听归属豆包进程、唯一原生 `doubao-chat/chat` 目标及 `@flow-web/desktop:stable` runtime。只读预检不实例化业务模块，不创建或发送对话，不修改已有 MCP。
 - 实际源码暴露模块识别误匹配：调用方解构的 `createSendMessage/combineBlocks` 被当作导出。解析改为核对 Webpack 导出表，已在实际 runtime 唯一识别消息模块。会话与服务仍为延迟模块；实际 native runtime 和 ai-views 扩展的编号/指纹不可混用。

@@ -4,10 +4,48 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { GeminiClient, detectGemini, MIN_VERSION, ROOM_TOOLS, READ_TOOLS, versionSupported, collaborationPayload, runtimePolicy } = require('../src/gemini.cjs');
+const { COMMON_OPERATION_INSTRUCTIONS } = require('../src/operation-policy.cjs');
 const { fixture } = require('./helpers.cjs');
 const { id, normalizePath } = require('../src/util.cjs');
 const SESSION = 'ef7bcb9c-1871-4e50-8398-dd31b0c21234';
 const OTHER_SESSION = '16dd2be3-5a1a-4490-bd38-d3ac81ae2222';
+const EXPECTED_READ_TOOLS = ['read_file', 'glob', 'list_directory'];
+const EXPECTED_ROOM_TOOLS = [
+  'agentroom_join', 'agentroom_chat_rooms', 'agentroom_chat_history',
+  'agentroom_chat_post', 'agentroom_chat_wait', 'agentroom_chat_inbox',
+  'agentroom_chat_reply', 'agentroom_chat_ack', 'agentroom_room_state',
+  'agentroom_room_ensure', 'agentroom_member_wake', 'agentroom_heartbeat',
+  'agentroom_team_state', 'agentroom_member_card', 'agentroom_task_update',
+  'agentroom_meeting_report', 'agentroom_brief_ack', 'agentroom_task_create',
+  'agentroom_goal_complete', 'agentroom_meeting_start', 'agentroom_meeting_discuss',
+  'agentroom_meeting_close'
+];
+function assertBoundedInvocation(call) {
+  const get = name => call.args[call.args.indexOf(name) + 1];
+  assert.equal(get('--approval-mode'), 'default'); assert.equal(get('--allowed-mcp-server-names'), 'agentroom');
+  assert.equal(get('--extensions'), 'none');
+  for (const forbidden of ['--yolo', '--allowed-tools', '--admin-policy', '--continue', '--prompt']) assert.ok(!call.args.includes(forbidden));
+  assert.deepEqual(call.config.tools.core, EXPECTED_READ_TOOLS); assert.deepEqual(call.config.tools.allowed, []);
+  assert.deepEqual(Object.keys(call.config.mcpServers), ['agentroom']); assert.deepEqual(call.config.mcp.allowed, ['agentroom']);
+  assert.deepEqual(call.config.mcpServers.agentroom.includeTools, EXPECTED_ROOM_TOOLS);
+  assert.equal(call.config.security.disableYoloMode, true); assert.equal(call.config.security.disableAlwaysAllow, true);
+  assert.equal(call.config.security.enablePermanentToolApproval, false); assert.equal(call.config.security.autoAddToPolicyByDefault, false);
+  const rules = call.policy.split('[[rule]]\n').filter(Boolean);
+  const value = (rule, name) => JSON.parse(rule.match(new RegExp(`^${name} = (.+)$`, 'm'))[1]);
+  assert.equal(rules.length, 4);
+  assert.equal(value(rules[0], 'toolName'), '*'); assert.equal(value(rules[0], 'decision'), 'deny'); assert.equal(value(rules[0], 'priority'), 900);
+  assert.deepEqual(value(rules[1], 'toolName'), EXPECTED_READ_TOOLS); assert.equal(value(rules[1], 'decision'), 'allow'); assert.equal(value(rules[1], 'priority'), 950);
+  assert.equal(value(rules[2], 'mcpName'), 'agentroom'); assert.deepEqual(value(rules[2], 'toolName'), EXPECTED_ROOM_TOOLS); assert.equal(value(rules[2], 'decision'), 'allow'); assert.equal(value(rules[2], 'priority'), 950);
+  assert.deepEqual(value(rules[3], 'toolName'), EXPECTED_READ_TOOLS); assert.equal(value(rules[3], 'decision'), 'deny'); assert.equal(value(rules[3], 'priority'), 999);
+  const privatePath = new RegExp(rules[3].match(/^argsPattern = '([^']+)'$/m)[1]);
+  for (const name of ['.env', 'SECRETS/token', '.Qwen/settings.json', '.gemini/settings.json']) assert.ok(privatePath.test(JSON.stringify({file_path:name})), name);
+  assert.ok(!privatePath.test(JSON.stringify({file_path:'src/main.cjs'})));
+  const separator = 'AgentRoom collaboration request (JSON):\n', offset = call.input.indexOf(separator);
+  assert.ok(offset > 0); assert.equal(typeof COMMON_OPERATION_INSTRUCTIONS, 'string'); assert.ok(COMMON_OPERATION_INSTRUCTIONS.trim());
+  assert.ok(call.input.slice(0, offset).includes(COMMON_OPERATION_INSTRUCTIONS));
+  assert.doesNotMatch(call.input, /@/);
+  return JSON.parse(call.input.slice(offset + separator.length));
+}
 const FAKE = String.raw`
 'use strict';
 const fs = require('node:fs'), args = process.argv.slice(2), env = process.env;
@@ -33,6 +71,7 @@ process.stdin.on('end', () => {
   }
   if(mode === 'tool-safe') { emit({type:'message',role:'assistant',content:'I will inspect first. ',delta:true}); emit({type:'tool_use',tool_name:'agentroom_agentroom_join',tool_id:'room-join',parameters:{}}); emit({type:'tool_result',tool_id:'room-join',status:'success',output:'fixture'}); }
   if(mode === 'denied') { emit({type:'tool_result',tool_id:'read',status:'error',error:{type:'PERMISSION_DENIED',message:'policy denied private-path secret=never-forward'}}); }
+  if(env.FAKE_GEMINI_TOOL_ERROR) emit({type:'tool_result',tool_id:'read',status:'error',error:JSON.parse(env.FAKE_GEMINI_TOOL_ERROR)});
   if(mode === 'quota') { emit({type:'error',severity:'error',message:'RESOURCE_EXHAUSTED: quota API key AIzaNeverExposeCredential123456'}); process.exit(1); }
   if(mode === 'login') { emit({type:'error',severity:'error',message:'UNAUTHENTICATED Bearer secret-login-token'}); process.exit(1); }
   if(mode === 'fatal') { emit({type:'error',severity:'error',message:'provider private-prompt secret=never-forward'}); process.exit(1); }
@@ -74,6 +113,7 @@ test('Gemini consumes its real init/message/result shape without inventing a tur
 });
 test('Gemini request JSON neutralizes slash and every literal @ before CLI preprocessing', async t => {
   const v = clientFixture(t); await v.run(); const call = v.calls()[0];
+  assertBoundedInvocation(call);
   assert.doesNotMatch(call.input, /@/); assert.match(call.input, /\\u0040C:\/private\/\.env/); assert.ok(!call.input.startsWith('/'));
   const payload = JSON.parse(call.input.split('AgentRoom collaboration request (JSON):\n')[1]);
   assert.equal(payload.prompt, v.request.prompt); assert.equal(payload.peer, v.request.sender); assert.equal(payload.project, v.project.name);
@@ -82,6 +122,7 @@ test('Gemini request JSON neutralizes slash and every literal @ before CLI prepr
 });
 test('Gemini launches with exact MCP filter, bounded core tools, no yolo and disabled ambient execution', async t => {
   const v = clientFixture(t,{env:{GEMINI_SYSTEM_MD:'private-system-file',DEBUG:'true'}}); await v.run(); const call=v.calls()[0];
+  assertBoundedInvocation(call);
   const get = name => call.args[call.args.indexOf(name)+1];
   assert.equal(get('--output-format'),'stream-json'); assert.equal(get('--approval-mode'),'default'); assert.equal(get('--allowed-mcp-server-names'),'agentroom'); assert.equal(get('--extensions'),'none');
   for(const forbidden of ['--yolo','--allowed-tools','--admin-policy','--resume','--session-id','--continue','--prompt']) assert.ok(!call.args.includes(forbidden));
@@ -92,9 +133,16 @@ test('Gemini launches with exact MCP filter, bounded core tools, no yolo and dis
   assert.equal(call.normalAuthPreserved,true); assert.equal(call.systemMd,undefined); assert.equal(call.debug,undefined); assert.equal(normalizePath(call.cwd),v.project.canonical);
   assert.equal(fs.existsSync(call.settingsPath),false); assert.equal(fs.existsSync(get('--policy')),false); assert.deepEqual(fs.readdirSync(path.join(v.f.data,'gemini-runtime')),[]);
 });
-test('Gemini native UUID resume remains pinned to project and never uses latest', async t => {
-  const v=clientFixture(t); await v.run(); await v.run(); const calls=v.calls(); assert.equal(calls.length,2);
+test('Gemini keeps the same person session and bounded policy when its assigned room changes', async t => {
+  const v=clientFixture(t), firstRoom=v.discussion.id; await v.run(); v.discussion.id=id(); await v.run(); const calls=v.calls(); assert.equal(calls.length,2);
   assert.equal(calls[1].args[calls[1].args.indexOf('--resume')+1],SESSION); assert.equal(calls[0].cwd,calls[1].cwd);
+  assert.ok(!calls[0].args.includes('--resume')); assert.equal(v.discussion.thread_id,SESSION); assert.equal(v.states.filter(state=>state.state==='creating').length,1);
+  for(const [index,call] of calls.entries()) {
+    const payload=assertBoundedInvocation(call), expectedRoom=index===0?firstRoom:v.discussion.id;
+    assert.equal(call.config.mcpServers.agentroom.env.AGENTROOM_MEMBER_ID,'fixture-member'); assert.equal(call.config.mcpServers.agentroom.env.AGENTROOM_ROOM_ID,expectedRoom);
+    assert.equal(payload.room,expectedRoom); assert.equal(payload.request_id,v.request.id); assert.equal(payload.prompt,v.request.prompt);
+  }
+  assert.equal(calls[0].policy,calls[1].policy);
   const other=fixture(); await assert.rejects(v.run({project:{...v.project,path:other.project,canonical:normalizePath(other.project)}}),error=>error.code==='project_mismatch'); assert.equal(v.calls().length,2);
 });
 test('Gemini refuses wrong resumed ID and rejects inconsistent subsequent event IDs', async t => {
@@ -137,8 +185,34 @@ test('Gemini resume failure never replaces its native session or retries a reque
   await assert.rejects(v.run(),error=>error.code==='gemini_resume_required'&&error.needsAction===true); assert.equal(v.calls().length,1); assert.equal(v.discussion.thread_id,SESSION); assert.deepEqual(v.states,[]);
 });
 test('Gemini permission denial and nonzero final exit cannot masquerade as success', async t => {
-  const denied=clientFixture(t,{env:{FAKE_GEMINI_MODE:'denied'}}); await assert.rejects(denied.run(),error=>error.code==='gemini_permission_denied'&&!/secret|private/.test(error.message));
+  const denied=clientFixture(t,{env:{FAKE_GEMINI_MODE:'denied'}}); let approval=false;
+  await assert.rejects(denied.run({onApproval:()=>{approval=true;}}),error=>error.code==='gemini_permission_denied'&&!/secret|private/.test(error.message));
+  assert.equal(approval,false); assert.equal(denied.calls().length,1); assertBoundedInvocation(denied.calls()[0]);
   const failed=clientFixture(t,{env:{FAKE_GEMINI_MODE:'exit-error'}}); await assert.rejects(failed.run(),error=>error.code==='turn_failed');
+});
+test('Gemini ordinary tool errors mentioning permission or policy files never invent a denial notice',async t=>{
+  for(const error of[
+    {type:'ENOENT',message:'no such file or directory: policy.md'},
+    {code:'ENOENT',message:'no such file or directory: permission denied.md'},
+    {type:'PARSE_ERROR',message:'invalid JSON in permissions.json'},
+    'ENOENT: missing denied-requests.md'
+  ]){
+    const v=clientFixture(t,{env:{FAKE_GEMINI_TOOL_ERROR:JSON.stringify(error)}}),result=await v.run();
+    assert.deepEqual(result.permissionDenials,[]);assert.ok(!v.progress.some(text=>text.includes('拒绝超出协作权限')));assert.equal(v.calls().length,1);assertBoundedInvocation(v.calls()[0]);
+  }
+});
+test('Gemini exact native denial codes and explicit denial diagnostics remain visible after a successful final answer',async t=>{
+  for(const error of[
+    {type:'PERMISSION_DENIED',message:'native refusal'},
+    {code:'EACCES',message:'native filesystem refusal'},
+    {type:'POLICY_DENIED',message:'native policy refusal'},
+    {message:'Tool execution denied by policy.'},
+    'Error: Permission denied: scoped file',
+    'Operation was not allowed by the policy.'
+  ]){
+    const v=clientFixture(t,{env:{FAKE_GEMINI_TOOL_ERROR:JSON.stringify(error)}}),result=await v.run();
+    assert.deepEqual(result.permissionDenials,[{tool_name:'denied'}]);assert.ok(v.progress.some(text=>text.includes('拒绝超出协作权限')));assert.equal(v.calls().length,1);assertBoundedInvocation(v.calls()[0]);
+  }
 });
 test('Gemini warning events are not fatal and raw provider diagnostics stay private', async t => {
   const v=clientFixture(t,{env:{FAKE_GEMINI_MODE:'warning'}}); assert.equal((await v.run()).threadId,SESSION); assert.doesNotMatch(v.progress.join('\n'),/Loop detected|never-forward-stderr/);

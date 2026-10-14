@@ -32,6 +32,7 @@ async function main(){
   const version=run(executable,['--version']).trim();if(version!==expectedVersion)throw new Error('Packaged executable version check failed: '+version);
   fs.copyFileSync(executable,path.join(dist,'AgentOffice.exe'));
   const release=path.join(root,'release',`AgentOffice-${expectedVersion}-windows-x64`);fs.mkdirSync(release,{recursive:true});fs.copyFileSync(executable,path.join(release,'AgentOffice.exe'));fs.copyFileSync(path.join(root,'LICENSE'),path.join(release,'LICENSE'));
+  fs.writeFileSync(path.join(release,'OPEN_TEST.cmd'),'@echo off\r\nstart "" "%~dp0AgentOffice.exe"\r\n');
   const desktop=await require('./build-desktop.cjs').buildDesktop({version:expectedVersion}),desktopPublic={schema:'agentroom.desktop-bundle',version:desktop.version,sdk_version:desktop.sdk_version,sdk_sha256:desktop.sdk_sha256,files:desktop.files};
   fs.writeFileSync(path.join(desktop.directory,'desktop-manifest.json'),JSON.stringify(desktopPublic,null,2));
   for(const item of [...desktop.files.map(file=>file.path),'desktop-manifest.json']){const target=path.join(release,'desktop',...item.split('/'));fs.mkdirSync(path.dirname(target),{recursive:true});fs.copyFileSync(path.join(desktop.directory,...item.split('/')),target);}
@@ -41,6 +42,7 @@ async function main(){
   fs.copyFileSync(path.join(root,'docs','AGENT_INSTALLATION.md'),path.join(release,'AGENT_INSTALLATION.md'));
   fs.copyFileSync(path.join(root,'docs','QWEN_DESKTOP_RESEARCH.md'),path.join(release,'QWEN_DESKTOP_RESEARCH.md'));
   fs.copyFileSync(path.join(root,'docs','NATIVE_DESKTOP.md'),path.join(release,'NATIVE_DESKTOP.md'));
+  fs.copyFileSync(path.join(root,'docs','OPERATION_POLICY.md'),path.join(release,'OPERATION_POLICY.md'));
   fs.copyFileSync(path.join(root,'docs','DOUBAO_DESKTOP_RESEARCH.md'),path.join(release,'DOUBAO_DESKTOP_RESEARCH.md'));
   fs.copyFileSync(path.join(root,'docs','OFFICE_APPEARANCE.md'),path.join(release,'OFFICE_APPEARANCE.md'));
   fs.copyFileSync(path.join(root,'docs','OFFICE_RESEARCH.md'),path.join(release,'OFFICE_RESEARCH.md'));
@@ -54,6 +56,8 @@ async function main(){
   fs.writeFileSync(path.join(release,'README.md'),`# Agent Office ${expectedVersion} · Agent 办公室
 
 保留整个安装包，双击 AgentOffice.exe 打开独立桌面窗口。文字聊天和办公室画面可切换；角色、头像、颜色可在右侧外观页替换。成员、资料与连接详情在右侧抽屉。窗口内可启停本机服务，关闭窗口保留服务，停止服务仍可查看历史。无需 Node/Python、管理员权限或自己的服务器；模型使用各工具原有服务和计费方式。桌面窗口需要微软 WebView2 Runtime，缺失时会显示官方安装入口。
+
+接入秘书成功后进入办公室。已授权的日常读取和办公室协作自动处理，需要本人决定的操作在对应成员最新对话中选择；无需回到聊天顶部。详见 OPERATION_POLICY.md。
 
 空办公室从 AI 秘书教程开始：先接入并选择一位成员，交代目标，在协作面板填写各窗口信息卡，由秘书按能力派工、验收交付并主持会议。会议保存纪要、关联任务和共同简报，参会窗口确认已读；例会按变化触发且可关闭。新增成员仍由用户点选。选择秘书不派任务，点击开始才实际发送；已接通的原生对话自动处理，手动信箱成员需本人窗口领取。当前 Qwen 与豆包原生自动收发已通过真实验收；豆包原生 MCP 工具调用及 Grok 原生收发仍待单独验收，详见 NATIVE_DESKTOP.md。桌面窗口记住尺寸，办公室背景自动铺成矩形，工位保持自然比例，随着窗口和成员数调整网格。多出的工位向右、向下延伸，滚动查看，无需手动缩放。详见 SECRETARY_GUIDE.md 和 TEAM_COLLABORATION.md。
 
@@ -79,7 +83,7 @@ Grok 可先连接一个 Bot，直接在当前对话桥接外部成员；群聊�
   // ZIP uses a fresh stage and this explicit public-file manifest. Runtime DBs,
   // entry cards, provider configuration, .local and validation outputs never
   // enter it, even if an older release directory contains additional files.
-  const names=['AgentOffice.exe','README.md','USER_GUIDE.md','GROK_GROUP_BRIDGE.md','BRIDGE_SETUP.md','DURABLE_ROOM.md','ZERO_TOUCH_RESEARCH.md','QWEN_DESKTOP_RESEARCH.md','DOUBAO_DESKTOP_RESEARCH.md','NATIVE_DESKTOP.md','GEMINI_CLI_RESEARCH.md','DOUBAO_CONNECTOR_GUIDE.md','ADDITIONAL_AGENTS_RESEARCH.md','GROK_CONNECTION_TROUBLESHOOTING.md','OFFICE_APPEARANCE.md','OFFICE_RESEARCH.md','OFFICE_MASCOT_SOURCES.md','SECRETARY_GUIDE.md','TEAM_COLLABORATION.md','SKILL.md','GROK_SKILL.md','LICENSE','NODE_LICENSE.txt'],stage=fs.mkdtempSync(path.join(dist,'zip-stage-'));
+  const names=['AgentOffice.exe','OPEN_TEST.cmd','README.md','USER_GUIDE.md','OPERATION_POLICY.md','GROK_GROUP_BRIDGE.md','BRIDGE_SETUP.md','DURABLE_ROOM.md','ZERO_TOUCH_RESEARCH.md','QWEN_DESKTOP_RESEARCH.md','DOUBAO_DESKTOP_RESEARCH.md','NATIVE_DESKTOP.md','GEMINI_CLI_RESEARCH.md','DOUBAO_CONNECTOR_GUIDE.md','ADDITIONAL_AGENTS_RESEARCH.md','GROK_CONNECTION_TROUBLESHOOTING.md','OFFICE_APPEARANCE.md','OFFICE_RESEARCH.md','OFFICE_MASCOT_SOURCES.md','SECRETARY_GUIDE.md','TEAM_COLLABORATION.md','SKILL.md','GROK_SKILL.md','LICENSE','NODE_LICENSE.txt'],stage=fs.mkdtempSync(path.join(dist,'zip-stage-'));
   try{
     for(const name of names)fs.copyFileSync(path.join(release,name),path.join(stage,name));
     copyReferences(referenceSource,path.join(stage,'references'));

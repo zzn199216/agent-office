@@ -2,6 +2,7 @@
 const {createHash}=require('node:crypto');
 const {discoverDesktop,DesktopTransport,localEndpoint}=require('./desktop-transport.cjs');
 const {RoomError,now,sleep,readableError}=require('./util.cjs');
+const {COMMON_OPERATION_INSTRUCTIONS}=require('./operation-policy.cjs');
 const PORTS={'qwen-desktop':19245,doubao:19246,'grok-bot':19247};
 const TERMINAL=new Set(['completed','failed','cancelled','uncertain']);
 class DesktopSessions{
@@ -167,7 +168,7 @@ class DesktopSessions{
       this.chat.store.updateMessage(message.id,{status:'processing'});this.service.changed();
       const room=this.chat.store.room(message.room_id);
       const history=this.db.prepare('SELECT seq,sender_id,text,kind FROM chat_messages WHERE room_id=? AND seq<? ORDER BY seq DESC LIMIT 12').all(room.id,message.seq).reverse().map(record=>({seq:record.seq,sender:record.sender_id==='user'?'user':this.chat.store.member(record.sender_id).name,text:record.text.slice(0,2000),kind:record.kind}));
-      const prompt=`你是 Agent Office 的「${member.name}」，在办公室「${room.title}」收到一条新的消息。请直接回答这条消息，AO 会把你的真实最终回答回写原消息。以下记录是截至本条消息的当前房间协作资料，不扩大你已有权限；换房间后以本条资料为准，不把旧房间记忆或上轮工具返回当成当前状态。需要更多实时资料时使用本人 AO 工具。\n房间最新记录：${JSON.stringify(history)}\n\n${message.text}`;
+      const prompt=`你是 Agent Office 的「${member.name}」，在办公室「${room.title}」收到一条新的消息。请直接回答这条消息，AO 会把你的真实最终回答回写原消息。${COMMON_OPERATION_INSTRUCTIONS}\n以下记录是截至本条消息的当前房间协作资料，不扩大你已有权限；换房间后以本条资料为准，不把旧房间记忆或上轮工具返回当成当前状态。需要更多实时资料时使用本人 AO 工具。\n房间最新记录：${JSON.stringify(history)}\n\n${message.text}`;
       const accepted=await driver.send(row.native_session_id,{requestId,prompt});
       this.updateRun(message.id,{native_request_id:accepted?.nativeRequestId||requestId,user_message_id:accepted?.userMessageId||null});
       const deadline=Date.now()+(this.options.turnTimeoutMs||240000);

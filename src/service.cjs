@@ -12,7 +12,7 @@ class RoomService extends EventEmitter {
   constructor(dir, options = {}) {
     super(); this.store = new Store(dir); this.vault = options.vault || new Vault(dir);
     this.codex = options.codex || new CodexClient({ executable: this.store.setting('codex_path') || undefined,dataDir:dir });
-    this.fetch = options.fetch || globalThis.fetch; this.active = null; this.approvals = new Map(); this.revision = 0; this.closing = false; this.pumping = false;
+    this.fetch = options.fetch || globalThis.fetch; this.active = null; this.approvals = new Map(); this.approvalReviews = new Map(); this.revision = 0; this.closing = false; this.pumping = false;
     this.store.recovery(); this.flushExports();
     const {ChatManager}=require('./chat.cjs');this.chat=new ChatManager(this,options.chat||{});
     const {AppearanceManager}=require('./appearance.cjs');this.appearance=new AppearanceManager(this);
@@ -33,7 +33,7 @@ class RoomService extends EventEmitter {
   changed() { this.revision++; this.emit('change', this.revision); }
   flushExports() { try { this.store.exportPending(); this.exportError = null; } catch { this.exportError = '部分 Markdown 记录暂未写入，后台会继续补写。'; } }
   snapshot() {
-    return { version: require('./util.cjs').VERSION, instance_id:this.runtime.instanceId,runtime:this.runtime.offlineSnapshot(),chat:this.chat.snapshot(),office:this.office.snapshot(),secretaries:this.secretary.snapshot(),activeSetup:{onboarding:this.onboarding.jobs.size,runtime_installs:this.runtimeInstaller.jobs.size,launch:this.launch.jobs.size}, projects: this.store.projects(), discussions: this.store.discussions(), activeRequest: this.active?.requestId || null, approvals: [...this.approvals.values()].map(a => a.public), grok: this.vault.status(), codex: this.codexHealth || { connected: false, executable: this.codex.executable || null }, revision: this.revision, exportError: this.exportError, dataDirectory: this.store.dir };
+    return { version: require('./util.cjs').VERSION, instance_id:this.runtime.instanceId,runtime:this.runtime.offlineSnapshot(),chat:this.chat.snapshot(),office:this.office.snapshot(),secretaries:this.secretary.snapshot(),activeSetup:{onboarding:this.onboarding.jobs.size,runtime_installs:this.runtimeInstaller.jobs.size,launch:this.launch.jobs.size}, projects: this.store.projects(), discussions: this.store.discussions(), activeRequest: this.active?.requestId || null, approvals: [...this.approvals.values()].map(a => a.public), approval_reviews:[...this.approvalReviews.values()], grok: this.vault.status(), codex: this.codexHealth || { connected: false, executable: this.codex.executable || null }, revision: this.revision, exportError: this.exportError, dataDirectory: this.store.dir };
   }
   history(discussionId) { return { discussion: this.store.discussion(discussionId), requests: this.store.history(discussionId).map(r => ({ ...publicRequest(r), delivery: this.store.deliveryFor(r.id) })) }; }
   async health() {
@@ -96,7 +96,9 @@ class RoomService extends EventEmitter {
               onBinding: (state, threadId) => { this.store.bind(d.id, state, threadId); this.changed(); },
               onTurn: turnId => { this.store.update(r.id, { turn_id: turnId }); this.changed(); },
               onProgress: text => { if (Date.now() - lastProgress > 180) { lastProgress = Date.now(); this.store.update(r.id, { progress: redact(text) }); this.changed(); } },
-              onApproval: (message, access) => this.onApproval(r.id, message, access)
+              onApproval: (message, access) => this.onApproval(r.id, message, access),
+              onApprovalResolved:message=>this.resolveApproval(message,{client:this.codex}),
+              onReview:message=>this.onApprovalReview(r.id,message)
             });
             this.store.update(r.id, { status: 'completed', answer: redact(result.answer), progress: '', error: null, turn_id: result.turnId });
             if (r.notify_grok) { try { await this.deliver(r.id); } catch { /* Answer remains completed; delivery has its own state. */ } }
@@ -113,21 +115,61 @@ class RoomService extends EventEmitter {
   }
   onApproval(requestId, message, access, context={}) {
     const client=context.client||this.codex,update=context.update||((fields)=>this.store.update(requestId,fields));
-    if (message.method === 'item/fileChange/requestApproval' && access === 'read-only') { client.respond(message.id, { decision: 'decline' }); return; }
     const p = message.params || {};
+    if (message.method === 'item/fileChange/requestApproval' && access === 'read-only') { client.respond(message.id, { decision: 'decline' }); this.onPermissionDenials(requestId,[{tool_name:'文件修改'}],{...context,reason:'当前项目仅允许读取，文件修改未获授权；此操作没有执行。'});return; }
     if (message.method === 'mcpServer/elicitation/request' && p.mode === 'openai/userVerification') {
       client.respond(message.id, { action: 'cancel' });
       update({ progress: '这个工具需要原应用的设备身份确认，AgentRoom 不会代替你验证。' }); this.changed(); return;
     }
-    if (message.method === 'item/permissions/requestApproval' && access === 'read-only' && ((p.permissions?.fileSystem?.write || []).length || (p.permissions?.fileSystem?.entries || []).some(x=>x.access==='write'))) { client.respond(message.id,{permissions:{},scope:'turn'}); return; }
+    if (message.method === 'item/permissions/requestApproval' && access === 'read-only' && ((p.permissions?.fileSystem?.write || []).length || (p.permissions?.fileSystem?.entries || []).some(x=>x.access==='write'))) { client.respond(message.id,{permissions:{},scope:'turn'});this.onPermissionDenials(requestId,[{tool_name:'扩展文件写入权限'}],{...context,reason:'当前项目仅允许读取，这次扩展写入权限没有被授予。'});return; }
     const allowed = ['item/commandExecution/requestApproval','item/fileChange/requestApproval','item/tool/requestUserInput','mcpServer/elicitation/request','item/permissions/requestApproval'];
     if (!allowed.includes(message.method)) { client.rejectRequest(message.id); return; }
     let type = message.method === 'item/tool/requestUserInput' ? 'input' : 'approval';
     if(message.method==='mcpServer/elicitation/request')type=p.mode==='url'?'url':'form';
     if(message.method==='item/permissions/requestApproval')type='permissions';
+    // A native resolver may deliver the same pending request more than once.
+    // Keep a single UI choice, scoped to the exact client and conversation.
+    if([...this.approvals.values()].some(a=>a.client===client&&String(a.rpcId)===String(message.id)&&a.original.threadId===p.threadId))return;
+    const scope=this.approvalScope(requestId,context);
+    const sessionAllowed=['item/commandExecution/requestApproval','item/fileChange/requestApproval'].includes(message.method)&&Array.isArray(p.availableDecisions)&&p.availableDecisions.includes('acceptForSession');
     const approvalId = id();
-    this.approvals.set(approvalId, { client,update,rpcId: message.id, method: message.method, original:p, public: { id: approvalId, request_id: requestId, type, command: redact(p.command || (type==='permissions'?JSON.stringify(p.permissions,null,2):'')), reason: redact(p.reason || p.message || ''), url:type==='url' && /^https:\/\//i.test(p.url || '')?p.url:null, schema:type==='form'?p.requestedSchema:null, questions: (p.questions || []).map(q => ({ id: q.id, header: q.header, question: q.question, options: q.options })) } });
+    this.approvals.set(approvalId, { client,update,rpcId: message.id, method: message.method, original:p, public: { id: approvalId, request_id: requestId, ...scope,created:now(),type,session_allowed:sessionAllowed, command: redact(p.command || (type==='permissions'?JSON.stringify(p.permissions,null,2):'')), reason: redact(p.reason || p.message || ''), url:type==='url' && /^https:\/\//i.test(p.url || '')?p.url:null, schema:type==='form'?p.requestedSchema:null, questions: (p.questions || []).map(q => ({ id: q.id, header: q.header, question: q.question, options: q.options })) } });
     update({ status: 'waiting_input' }); this.changed();
+  }
+  approvalScope(requestId,context={}) {
+    const message=this.store.db.prepare('SELECT room_id,to_member_id FROM chat_messages WHERE id=?').get(requestId);
+    return {room_id:context.room_id||message?.room_id||null,member_id:context.member_id||message?.to_member_id||(typeof requestId==='string'&&requestId.startsWith('connect:')?requestId.slice(8):null)};
+  }
+  onPermissionDenials(requestId,denials,context={}) {
+    if(!Array.isArray(denials)||!denials.length)return;
+    const names=[...new Set(denials.map(value=>redact(String(value?.tool_name||'受限操作')).slice(0,200)))].slice(0,20);
+    const key=requestId+':native-permissions';
+    this.approvalReviews.set(key,{id:key,request_id:requestId,...this.approvalScope(requestId,context),created:now(),status:'denied',risk_level:null,reason:redact(context.reason||'客户端拒绝了超出当前权限的操作。可补充要求或选择安全方案；该操作没有被 AO 自动重试。').slice(0,4000),command:names.join(' / '),source:'native_permissions'});
+    while(this.approvalReviews.size>100)this.approvalReviews.delete(this.approvalReviews.keys().next().value);
+    this.changed();
+  }
+  onApprovalReview(requestId,message,context={}) {
+    const p=message.params||{},review=p.review||{};
+    if(!p.reviewId||!p.threadId||!['approved','denied','timedOut','aborted'].includes(review.status))return;
+    const key=requestId+':'+p.reviewId;
+    if(review.status==='approved'){if(this.approvalReviews.delete(key))this.changed();return;}
+    const action=p.action||{},command=action.type==='command'?action.command:action.type==='execve'?[action.program,...Array.isArray(action.argv)?action.argv:[]].join(' '):action.type==='applyPatch'?(Array.isArray(action.files)?action.files:[]).join('\n'):action.type==='networkAccess'?action.target:action.type==='mcpToolCall'?[action.server,action.toolName].join(' / '):'';
+    const stamp=Number.isFinite(p.completedAtMs)&&Math.abs(p.completedAtMs)<=8640000000000000?p.completedAtMs:Date.now();
+    this.approvalReviews.set(key,{id:key,request_id:requestId,...this.approvalScope(requestId,context),created:new Date(stamp).toISOString(),status:review.status,risk_level:review.riskLevel||null,reason:redact(review.rationale||'操作检查未完成，请核对具体原因。').slice(0,4000),command:redact(command||'').slice(0,4000),source:'native_auto_review'});
+    while(this.approvalReviews.size>100)this.approvalReviews.delete(this.approvalReviews.keys().next().value);
+    this.changed();
+  }
+  resolveApproval(message,context={}) {
+    const p=message.params||{},client=context.client||this.codex;
+    if(!p.threadId||p.requestId===undefined)return;
+    let changed=false;
+    for(const [key,a]of this.approvals){if(a.client!==client||a.original.threadId!==p.threadId||String(a.rpcId)!==String(p.requestId))continue;
+      this.approvals.delete(key);changed=true;
+      if([...this.approvals.values()].some(other=>other.public.request_id===a.public.request_id))continue;
+      const chat=this.store.db.prepare('SELECT status FROM chat_messages WHERE id=?').get(a.public.request_id),legacy=this.store.db.prepare('SELECT status FROM requests WHERE id=?').get(a.public.request_id);
+      if((chat?.status||legacy?.status)==='waiting_input')a.update?.({status:'running'});
+    }
+    if(changed)this.changed();
   }
   respondApproval(approvalId, input) {
     const a = this.approvals.get(approvalId); if (!a) throw new RoomError('这个确认已经结束，请刷新。', 409);
@@ -159,11 +201,11 @@ class RoomService extends EventEmitter {
       }
       result = { answers };
     } else {
-      if (!['accept','decline','cancel'].includes(input.decision)) throw new RoomError('确认选项无效。');
+      if (!['accept','decline','cancel'].includes(input.decision)&&!(input.decision==='acceptForSession'&&a.public.session_allowed===true)) throw new RoomError('确认选项无效。');
       result = { decision: input.decision };
     }
     (a.client||this.codex).respond(a.rpcId, result); this.approvals.delete(approvalId);
-    if(a.update)a.update({ status:'running' });else this.store.update(a.public.request_id,{status:'running'}); this.changed(); return { ok: true };
+    if(![...this.approvals.values()].some(other=>other.public.request_id===a.public.request_id)){if(a.update)a.update({ status:'running' });else this.store.update(a.public.request_id,{status:'running'});} this.changed(); return { ok: true };
   }
   cancel(requestId) {
     const r = this.store.request(requestId);
