@@ -84,7 +84,9 @@ class ChatManager {
     const entry=this.service.entry.primary(member.id,roomId);
     if(member.adapter==='grok-bridge')return {kind:'command',provider,title:'交给 Grok Bot',copy:entry.prompt,copy_label:'复制给 Grok 的说明',steps:['在你选定的 Grok Bot 对话里粘贴这段说明。','Grok 会用它在这台电脑上的本机工具进入房间。']};
     const card=JSON.parse(fs.readFileSync(entry.file,'utf8')),own=ownCommand();
-    const installation_prompt=require('./agent-install.cjs').agentInstallPrompt({member,provider,entryFile:entry.file,localUrl:this.service._localUrl});
+    const {createMcpTemplates,writeMcpTemplates}=require('./mcp-template.cjs');
+    const template_files=writeMcpTemplates(this.service.store.dir,member.id,createMcpTemplates({command:own.command,args:own.args,entryFile:entry.file,localUrl:this.service._localUrl,card}));
+    const installation_prompt=require('./agent-install.cjs').agentInstallPrompt({member,provider,templateFiles:template_files});
     if(['qwen-desktop','doubao'].includes(provider)){
       if(!this.service._localUrl)return {kind:'error',provider,error:'本机服务还没启动。启动服务后再生成连接配置。'};
       const {createQwenMcpConfig}=require('./mcp-http.cjs'),config=createQwenMcpConfig(this.service._localUrl,card);

@@ -1,24 +1,35 @@
-# 把 AO 安装交给有本机配置能力的 Agent
+# AO 的最小 MCP 配置
 
-AO 0.14.14 的成员接入页提供「复制 AI 安装说明」。用户选定一个成员后，将说明交给有本机配置能力的安装 Agent，由它检查目标客户端、安装方式和真实配置位置，复用 AO 已生成的长期入口，备份并合并配置，保留其他连接。
+不依赖任何其他 MCP。AO 自动生成两份完整 JSON，安装器选择目标客户端支持的一份，保留已有配置并合并。
 
-这条路径参考用户已经成功使用的 WorldRole 安装委托方式，而非要求用户逐字段手填。现有 Codex、Claude Code 和 Claude 桌面的专用安装适配器继续使用；没有自动适配器的客户端，可以由安装 Agent 使用它实际拥有的配置工具或获授权的界面操作能力完成。若能力缺失，准确报告剩余步骤。不能猜测配置文件位置，也不能把 HTTP 自测当成目标对话已加载 MCP。
+STDIO（本机程序）：
 
-安装说明不会包含凭据明文；它引用当前人物已有的本机入口文件。安装 Agent 按目标客户端真实支持的方式选择 STDIO 或本机 Streamable HTTP，不重新发行连接，也不要求用户提供房间 ID。更换房间和升级沿用同一人物连接。
+```json
+{
+  "mcpServers": {
+    "agentroom": {
+      "command": "<AO 稳定程序的绝对路径>",
+      "args": ["mcp", "--entry", "<人物长期入口文件>"]
+    }
+  }
+}
+```
 
-## 必须分开的四项验收
+Streamable HTTP（本机服务地址）：
 
-1. 配置实际写入并在目标客户端启用。
-2. 当前目标对话的工具库能看到并调用 AO 工具。
-3. 发给人物的消息通过真实 reply 写回 AO。
-4. 第二条消息无需用户进入目标窗口催收，也能由同一人物处理并回写。
+```json
+{
+  "mcpServers": {
+    "agentroom": {
+      "type": "streamable-http",
+      "url": "<AO 生成的人物连接地址>"
+    }
+  }
+}
+```
 
-前面三项通过不表示第四项通过。Codex 的已实现会话适配和 Grok 本身的原生桥接能力与 MCP 安装不同。当前 Qwen Chat 与豆包消费端路径尚未实现由 AO 自动创建、唤醒并继续目标人物对话；需本人发起的信箱模式仍是受限能力，不能标为自动接管。这份安装说明改善安装委托，未增加上述原生控制适配器。
+上述占位值由 AO 填好；用户不填路径、令牌或房间 ID。实际文件保存在 AO 数据目录的 client-config/templates，分别为人物ID-stdio.json 和人物ID-http.json，均只有 mcpServers 根对象，可以直接解析。
 
-收件工具是 agentroom_chat_inbox，读取 AO 协作消息，绝不是电子邮箱。当前对话找不到工具时应报告连接器未加载，不能改用邮箱工具并把邮箱错误当成 AO 错误。
+配置写法由客户端决定。STDIO 采用 [MCP 官方示例](https://modelcontextprotocol.io/docs/develop/connect-local-servers)；HTTP JSON 示例采用 [QwenWork 官方写法](https://docs.qwenwork.ai/desktop/connectors)。[VS Code 原生格式](https://code.visualstudio.com/docs/agents/reference/mcp-configuration) 使用 servers 与 type: http 等差异，由客户端适配器转换，不让用户处理。
 
-## 当前故障证据
-
-2026-10-14 原生 Qwen 一轮真实收件/回写成功，下一轮卡在实际 inbox 请求发出之前，单段 JSON 返回调整未解决连续接管。豆包做过直接 HTTP 握手自测，但其报告明确说尚未安装到原生客户端；当前对话搜索不到 AO 工具并误调用了邮件功能。两者都不能由一份“接口全部通过”的报告认定完整自动接管成功。
-
-用户以前通过这份 [WorldRole 安装说明](https://raw.githubusercontent.com/zzn199216/worldrole-mcp/main/INSTALL_FREE_SOURCES.md) 委托 Agent 安装成功。该说明要求本机文件、进程和客户端配置能力，并明确单独 STDIO 自测不证明客户端已加载。具体旧安装使用的豆包配置入口仍未核实，不据此宣称存在通用的豆包原生安装 API。
+安装说明只要求：读取模板 → 备份并合并 → 启用并在目标对话实际调用 agentroom_chat_rooms、agentroom_chat_inbox 验证。接口自测不代表当前对话已加载；安装成功也不代表自动收信。豆包/Qwen 消费端的自动接管仍未完成。
