@@ -87,6 +87,15 @@ function createServer(service,{token,port=47831,onShutdown}={}) {
       }
       const invitation=pathname.match(/^\/api\/chat\/invitations\/([a-f0-9-]{36})$/i);if(req.method==='GET'&&invitation)return json(res,service.chat.store.invite(invitation[1]));
       if(req.method==='GET' && pathname==='/api/chat/inbox'){const q=new URL(req.url,`http://${req.headers.host}`).searchParams,items=service.chat.inbox(q.get('member_id'),q.get('room_id')||undefined);return json(res,q.get('format')==='array'?items:{items});}
+      const imageRoute=pathname.match(/^\/api\/chat\/images\/([a-f0-9-]{36})$/i);
+      if(req.method==='GET'&&imageRoute){
+        const q=new URL(req.url,`http://${req.headers.host}`).searchParams,row=service.chat.store.images.metadata(imageRoute[1]);service.chat.store.room(row.room_id);
+        if(q.has('room_id')&&q.get('room_id')!==row.room_id)throw new RoomError('图片不属于当前房间。',403,'resume_scope_mismatch');
+        if(q.has('member_id'))service.chat.store.requireParticipant(row.room_id,q.get('member_id'));
+        const {bytes}=service.chat.store.images.read(imageRoute[1]);
+        if(q.get('format')==='base64')return json(res,{id:row.id,name:row.name,mime:row.mime,data:bytes.toString('base64')});
+        res.writeHead(200,{'Content-Type':row.mime,'Content-Length':bytes.length,'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});return res.end(bytes);
+      }
       const chat=pathname.match(/^\/api\/chat\/(rooms|members|messages)\/([a-f0-9-]{36})(?:\/(join|leave|connect|setup|wait|reply|cancel|ack|heartbeat|grok-configure|reconcile))?$/i);
       if(req.method==='DELETE'&&pathname.startsWith('/api/chat/rooms/')){
         const route=new URL(req.url,'http://127.0.0.1'),input=await body(req);
@@ -112,7 +121,7 @@ function createServer(service,{token,port=47831,onShutdown}={}) {
       }
       if(req.method==='GET' && pathname.startsWith('/api/threads/'))return json(res,await service.codex.list(service.store.project(pathname.slice('/api/threads/'.length))));
       if(req.method!=='POST')throw new RoomError('没有这个接口。',404);
-      const input=await body(req,pathname==='/api/office'?1000000:pathname==='/api/appearance'?360000:150000);
+      const input=await body(req,pathname==='/api/chat/messages'?12*1024*1024:pathname==='/api/office'?1000000:pathname==='/api/appearance'?360000:150000);
       if(service.closing&&pathname!=='/api/shutdown')throw new RoomError('服务正在停止，新的操作尚未开始。',503,'service_stopping');
       const roomArchive=pathname.match(/^\/api\/chat\/rooms\/([a-f0-9-]{36})\/(archive|restore)$/i);
       if(roomArchive){const route=new URL(req.url,'http://127.0.0.1');if(route.search||!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).length)throw new RoomError('房间归档请求范围无效。',400,'room_archive_input_invalid');return json(res,require('./room-lifecycle.cjs').archiveRoom(service,roomArchive[1],roomArchive[2]==='archive'));}

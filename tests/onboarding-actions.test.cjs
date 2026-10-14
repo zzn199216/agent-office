@@ -30,3 +30,10 @@ test('Codex first login uses the isolated home without changing the parent envir
   const f=fixture(t),executable=path.join(f.root,'codex.exe'),home=path.join(f.root,'private-codex'),parent=process.env.CODEX_HOME;fs.writeFileSync(executable,'metadata only');f.job.provider='codex';f.service.store.setting=()=>({executable,executable_args:[]});let ready=0;f.service.codex={ready:async()=>{ready++;},workspace:{environment:()=>({...process.env,CODEX_HOME:home})}};
   await f.actions.perform({run_id:f.job.id,operation:'login_client'});assert.equal(ready,1);assert.equal(f.launched[0].options.env.CODEX_HOME,home);assert.equal(process.env.CODEX_HOME,parent);assert.match(Buffer.from(f.launched[0].args.at(-1),'base64').toString('utf16le'),/login/);
 });
+test('Claude gateway configuration opens the saved file without auth login or credential rewrites',async t=>{
+  const f=fixture(t),directory=path.join(f.root,'.claude'),file=path.join(directory,'settings.json');fs.mkdirSync(directory);const original=JSON.stringify({env:{ANTHROPIC_BASE_URL:'https://fixture.invalid',ANTHROPIC_AUTH_TOKEN:'private-fixture-key'}});fs.writeFileSync(file,original);
+  f.job.provider='claude-code';f.actions.options.env={CLAUDE_CONFIG_DIR:directory};
+  const result=await f.actions.perform({run_id:f.job.id,operation:'login_client'});
+  assert.equal(result.action.kind,'open_api_config');assert.equal(result.action.file,file);assert.equal(f.launched[0].command,'notepad.exe');assert.deepEqual(f.launched[0].args,[file]);assert.equal(f.launched[0].options.shell,false);assert.equal(fs.readFileSync(file,'utf8'),original);assert.doesNotMatch(JSON.stringify(result),/private-fixture-key/);
+  await f.actions.perform({run_id:f.job.id,operation:'login_client'});assert.equal(fs.readFileSync(file,'utf8'),original);
+});

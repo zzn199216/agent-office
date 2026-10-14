@@ -5,9 +5,11 @@ const fs = require('node:fs'), path = require('node:path'), os = require('node:o
 const { spawnSync } = require('node:child_process');
 const { serve, apiCall } = require('../src/main.cjs');
 const { detectClaude } = require('../src/claude.cjs');
+const {userSettingsFile}=require('../src/claude.cjs'),crypto=require('node:crypto');
 const { id, sleep } = require('../src/util.cjs');
 async function main() {
   const executable = detectClaude();
+  const configFile=userSettingsFile(),configHash=crypto.createHash('sha256').update(fs.readFileSync(configFile)).digest('hex');
   if (!executable) throw new Error('Claude native CLI is missing.');
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agentoffice-claude-gateway-'));
   const projectPath = path.join(root, 'project'), dataDir = path.join(root, 'data');
@@ -33,16 +35,19 @@ async function main() {
     const before = await api(`/api/chat/rooms/${room.id}`);
     const native = before.participants.find(item => item.id === member.id)?.native_thread_id;
     if (!native) throw new Error('Native session binding is missing.');
-    const request = await api('/api/chat/messages', { room_id: room.id, sender_id: 'user', to_member_id: member.id, text: 'Reply with exactly ARKLUMI_AGENTOFFICE_OK. Do not call tools or read files.', idempotency_key: id() });
+    const imagePath=path.resolve('output/validation/claude-vision-fixture.png'),vision=fs.existsSync(imagePath);
+    const expected=vision?JSON.parse(fs.readFileSync(path.resolve('output/validation/claude-vision-fixture.json'),'utf8')).label:'ARKLUMI_AGENTOFFICE_OK';
+    const request = await api('/api/chat/messages', { room_id: room.id, sender_id: 'user', to_member_id: member.id, text: vision?'Reply only with the large text in the attached image. Do not call tools or read files.':'Reply with exactly ARKLUMI_AGENTOFFICE_OK. Do not call tools or read files.',attachments:vision?[{name:'vision.png',data_url:'data:image/png;base64,'+fs.readFileSync(imagePath).toString('base64')}]:undefined, idempotency_key: id() });
     let result;
     do { result = await api(`/api/chat/messages/${request.id}/wait?seconds=10`); } while (!result.responses.length && !['failed', 'uncertain', 'cancelled'].includes(result.message.status) && Date.now() < deadline);
-    const reply = result.responses.find(message => message.sender_id === member.id && message.text === 'ARKLUMI_AGENTOFFICE_OK');
+    const reply = result.responses.find(message => message.sender_id === member.id && message.text.trim()===expected);
     if (!reply) throw new Error('Real Claude reply was not recorded in the isolated room.');
     const after = await api(`/api/chat/rooms/${room.id}`);
-    const evidence = { tested_at: new Date().toISOString(), packaged_runtime: !!packaged, restricted_mode: true, real_model_called: true, real_mcp_join_verified: true, resumed_session_verified: after.participants.find(item => item.id === member.id)?.native_thread_id === native, room_reply_verified: true, result: reply.text, existing_rooms_changed: false, user_configuration_changed: false, isolated_directory: root };
+    assertUnchanged();const evidence = { tested_at: new Date().toISOString(), packaged_runtime: !!packaged, restricted_mode: true, real_model_called: true, real_mcp_join_verified: true, resumed_session_verified: after.participants.find(item => item.id === member.id)?.native_thread_id === native, room_reply_verified: true, image_input_verified:vision,result: reply.text, existing_rooms_changed: false, user_configuration_changed: false, isolated_directory: root };
     const output = path.resolve(__dirname, `../output/validation/claude-gateway-${packaged ? 'packaged' : 'runtime'}.json`);
     fs.mkdirSync(path.dirname(output), { recursive: true }); fs.writeFileSync(output, JSON.stringify(evidence, null, 2) + '\n');
     console.log(JSON.stringify(evidence));
-  } finally { await host.stop(); }
+  } finally { await host.stop();assertUnchanged(); }
+  function assertUnchanged(){if(crypto.createHash('sha256').update(fs.readFileSync(configFile)).digest('hex')!==configHash)throw new Error('User configuration changed during validation.');}
 }
 if (require.main === module) main().catch(() => { console.error('Claude gateway validation failed; no provider output or credentials printed.'); process.exitCode = 1; });

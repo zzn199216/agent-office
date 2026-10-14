@@ -19,7 +19,7 @@ async function migrateLegacy(target,{from,stop}={}){
   if(fs.existsSync(path.join(source.dir,'room.sqlite-wal'))&&fs.statSync(path.join(source.dir,'room.sqlite-wal')).size)throw new RoomError('旧数据库仍有未合并日志，未完成迁移。',409,'migration_wal_pending');
   // Copy only owned persistent records and encrypted credentials. Keep the old
   // directory untouched; caches, process locks and executables are not migrated.
-  for(const name of ['grok-vault.json','members','chatrooms','entries']){const p=path.join(source.dir,name);if(fs.existsSync(p))fs.cpSync(p,path.join(target,name),{recursive:true,errorOnExist:true,force:false});}
+  for(const name of ['grok-vault.json','members','chatrooms','entries','chat-images']){const p=path.join(source.dir,name);if(fs.existsSync(p))fs.cpSync(p,path.join(target,name),{recursive:true,errorOnExist:true,force:false});}
   fs.renameSync(stage,path.join(target,'room.sqlite'));
   const {Store}=require('./store.cjs'),{RuntimeState}=require('./runtime-state.cjs');const store=new Store(target);let instanceId;try{instanceId=new RuntimeState(store).instanceId;}finally{store.close();}
   atomicWrite(path.join(source.dir,'migrated-to.json'),JSON.stringify({schema:'agentroom.migration',target:fs.realpathSync.native(target),instance_id:instanceId,at:now()},null,2));

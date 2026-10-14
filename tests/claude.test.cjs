@@ -27,6 +27,7 @@ const session=mode==='wrong-session'?'34e8a2f4-2535-495b-b60a-6fdf334bb01a':(at(
 console.log(JSON.stringify({type:'system',subtype:'init',session_id:session,cwd:mode==='wrong-cwd'?env.FAKE_CLAUDE_OTHER_PATH:process.cwd(),mcp_servers:[{name:'agentroom',status:mode==='mcp-failed'?'failed':'connected'}],mcp_server_errors:mode==='mcp-failed'?[{name:'agentroom',message:'private details'}]:[]}));
 if(mode==='no-result'){process.exit(0);}
 if(mode==='hang'){setInterval(()=>{},1000);return;}
+if(mode==='api-auth'){console.log(JSON.stringify({type:'system',subtype:'api_error',error:{status:401,message:'private upstream secret'}}));setInterval(()=>{},1000);return;}
 process.stderr.write('sk-ant-never-return-stderr Bearer private-stderr\n');
 console.log(JSON.stringify({type:'stream_event',session_id:session,event:{delta:{type:'text_delta',text:'检查中文 sk-ant-progress-secret'}}}));
 console.log(JSON.stringify({type:'assistant',session_id:session,parent_tool_use_id:'tool-child',message:{content:[{type:'text',text:'subagent answer is not final'}]}}));
@@ -61,6 +62,19 @@ function userSettings(v, settings) {
   fs.mkdirSync(directory, { recursive: true });
   fs.writeFileSync(path.join(directory, 'settings.json'), JSON.stringify(settings));
 }
+test('placeholder API credentials never start a Claude model and saving a key unlocks the same client',async t=>{
+  const v=clientFixture(t);userSettings(v,{env:{ANTHROPIC_BASE_URL:'https://fixture.invalid',ANTHROPIC_AUTH_TOKEN:'PASTE_YOUR_API_KEY_HERE'}});
+  await assert.rejects(v.run(),error=>error.code==='claude_login_required');assert.equal(v.calls().length,0);
+  userSettings(v,{env:{ANTHROPIC_BASE_URL:'https://fixture.invalid',ANTHROPIC_AUTH_TOKEN:'saved-fixture-key'}});const original=fs.readFileSync(path.join(v.environment.CLAUDE_CONFIG_DIR,'settings.json'),'utf8');await v.run();assert.equal(v.calls().length,1);assert.equal(fs.readFileSync(path.join(v.environment.CLAUDE_CONFIG_DIR,'settings.json'),'utf8'),original);
+});
+test('Claude API rejection stops the owned child promptly with actionable redacted status',async t=>{
+  const v=clientFixture(t,{env:{FAKE_CLAUDE_MODE:'api-auth'}}),start=Date.now();await assert.rejects(v.run({timeout:15000}),error=>error.code==='claude_api_auth_required'&&/401/.test(error.message)&&!error.message.includes('private upstream'));
+  assert.ok(Date.now()-start<10000);assert.equal(v.calls().length,1);assert.equal(v.client.child,null);
+});
+test('Claude vision input sends actual base64 image blocks over stdin and preserves session resume',async t=>{
+  const v=clientFixture(t),images=[{mime:'image/png',data:'fixture-image'}];await v.run();await v.run({request:{id:id(),sender:'fixture-peer',prompt:'看图',images}});
+  const call=v.calls()[1],input=JSON.parse(call.input);assert.equal(call.args[call.args.indexOf('--input-format')+1],'stream-json');assert.equal(input.type,'user');assert.deepEqual(input.message.content[1],{type:'image',source:{type:'base64',media_type:'image/png',data:'fixture-image'}});assert.equal(input.parent_tool_use_id,null);assert.equal(call.args[call.args.indexOf('--resume')+1],SESSION);assert.equal(call.args.some(arg=>arg.includes('fixture-image')),false);
+});
 
 test('restricted Claude forwards user gateway credentials and models without loading other settings', async t => {
   const key = 'gateway-fixture-private-key', v = clientFixture(t, { env: { FAKE_CLAUDE_EXPECT_KEY: key, ANTHROPIC_AUTH_TOKEN: 'stale-shell-key' } });

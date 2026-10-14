@@ -79,10 +79,10 @@ test('Gemini cannot become ready from a text claim without its actual invitation
   assert.equal(v.clients.get(member.id).calls.length,1);
 });
 
-test('expired native authentication clears availability and blocks queued work until explicit repair', async t => {
+for(const [adapter,code,name]of [['qwen-code','qwen_login_required','Qwen'],['claude-code','claude_api_auth_required','Claude']])test(name+': expired native authentication clears availability and blocks queued work until explicit repair', async t => {
   const wait=gate();let expired=true;
-  const v=setup(t,{native:()=>({answer:async()=>{await wait.promise;if(expired){const error=new Error('Qwen Code 模型认证已失效');error.code='qwen_login_required';throw error;}return '恢复后的回答';}})});
-  const member=v.service.chat.addMember({name:'Qwen Code',adapter:'qwen-code'});await v.service.chat.connect(member.id,v.room.id);
+  const v=setup(t,{native:()=>({answer:async()=>{await wait.promise;if(expired){const error=new Error('Qwen Code 模型认证已失效');error.code=code;throw error;}return '恢复后的回答';}})});
+  const member=v.service.chat.addMember({name,adapter});await v.service.chat.connect(member.id,v.room.id);
   await until(()=>v.service.chat.store.member(member.id).status==='ready'&&!v.service.chat.active.size);
   const thread=v.service.chat.store.binding(v.room.id,member.id).thread_id;
   const first=v.service.chat.post({room_id:v.room.id,to_member_id:member.id,text:'已开始的问题',idempotency_key:'auth-first'});

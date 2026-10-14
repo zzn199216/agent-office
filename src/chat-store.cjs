@@ -1,6 +1,7 @@
 'use strict';
 const crypto = require('node:crypto');
 const { RoomError, id, now, cleanText, redact } = require('./util.cjs');
+const {ChatImages,validateImages}=require('./chat-images.cjs');
 
 // These tables deliberately share only the existing project identity. Adapters,
 // recipients and native session identifiers are opaque values to the room store.
@@ -10,6 +11,7 @@ class ChatStore {
     this.db = store.db;
     this.savepoint = 0;
     this.readOnly = options.readOnly === true;
+    this.images=new ChatImages(store);if(!this.readOnly)this.images.initialize();
     if(options.readOnly){this.hasRoomTombstones=!!this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='chat_room_tombstones'").get();this.hasRoomArchives=!!this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='chat_room_archives'").get();return;}
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS chat_members (
@@ -229,6 +231,7 @@ class ChatStore {
   }
   publicMessage(row) {
     const { idempotency_key, body_hash, ...visible } = row;
+    const attachments=this.images.list(row.id);if(attachments.length)visible.attachments=attachments;
     // Only persisted scheduler provenance can label a message as coordination.
     // User text and caller-supplied message kinds are never trusted for this.
     if(row.sender_id==='user'&&this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='team_outbox'").get()) {
@@ -247,11 +250,11 @@ class ChatStore {
     const room = this.room(input.room_id);
     const sender = cleanText(input.sender_id || 'user', 200, '发送成员');
     const target = input.to_member_id == null ? null : cleanText(input.to_member_id, 200, '接收成员');
-    const text = redact(cleanText(input.text, 20000, '消息')).slice(0, 20000);
+    const images=validateImages(input.attachments),text = redact(cleanText(input.text|| (images.length?'请查看附图。':''), 20000, '消息')).slice(0, 20000);
     const key = cleanText(input.idempotency_key, 200, '消息标识');
     const kind = cleanText(input.kind || 'message', 60, '消息类型');
     const reply = input.reply_to == null ? null : cleanText(input.reply_to, 200, '回复标识');
-    const hash = crypto.createHash('sha256').update(JSON.stringify([target, text, reply, kind])).digest('hex');
+    const content=[target,text,reply,kind];if(images.length)content.push(images.map(image=>[image.name,image.mime,image.size,image.sha256]));const hash=crypto.createHash('sha256').update(JSON.stringify(content)).digest('hex');
     return this.transaction(() => {
       const previous = this.db.prepare('SELECT * FROM chat_messages WHERE room_id=? AND sender_id=? AND idempotency_key=?').get(room.id, sender, key);
       if (previous) {
@@ -263,6 +266,7 @@ class ChatStore {
       if (reply !== null && this.message(reply).room_id !== room.id) throw new RoomError('回复只能引用同一聊天室的消息。', 403, 'cross_room_reply');
       const row = { id: id(), room_id: room.id, sender_id: sender, to_member_id: target, text, reply_to: reply, kind, status: target === null ? 'posted' : 'queued', error: null, request_id: null, idempotency_key: key, body_hash: hash, created: now(), updated: now() };
       this.db.prepare('INSERT INTO chat_messages(id,room_id,sender_id,to_member_id,text,reply_to,kind,status,error,request_id,idempotency_key,body_hash,created,updated) VALUES(:id,:room_id,:sender_id,:to_member_id,:text,:reply_to,:kind,:status,:error,:request_id,:idempotency_key,:body_hash,:created,:updated)').run(row);
+      this.images.save(room.id,row.id,images);
       this.db.prepare('UPDATE chat_rooms SET updated=? WHERE id=?').run(row.updated, room.id);
       return this.message(row.id);
     });

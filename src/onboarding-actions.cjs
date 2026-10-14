@@ -3,6 +3,7 @@ const fs=require('node:fs'),path=require('node:path');
 const {spawn}=require('node:child_process');
 const {RoomError,shellCommand,livePid}=require('./util.cjs');
 const {qwenVendorScript,geminiVendorScript}=require('./discovery.cjs');
+const {configurationInfo}=require('./claude.cjs');
 class OnboardingActions{
   constructor(service,options={}){this.service=service;this.options=options;this.terminals=new Map();}
   cli(job){
@@ -22,6 +23,15 @@ class OnboardingActions{
     if(input.operation==='native_group_handoff'){this.service.launch.handoff(job.launch_session_id);const state=this.service.launch.state({session_id:job.launch_session_id});return {job,action:{kind:'native_group_handoff',instruction:state.grok_prompt}};}
     if(input.operation==='reload_client')return {job,action:{kind:'reload_client',instruction:'请在客户端重新加载 AgentRoom 工具，完成后点击检查进度。当前版本没有正式的外部重载接口；现有聊天继续保留。'}};
     if(input.operation!=='login_client')throw new RoomError('请使用这个动作对应的本机配置或本人握手按钮。',409,'onboarding_action_unavailable');
+    if(job.provider==='claude-code'){
+      const config=configurationInfo(this.options.env||process.env);
+      if(config.api_mode){
+        if(!fs.existsSync(config.file))throw new RoomError('Claude API 配置文件尚未建立，请在用户目录创建 settings.json 后重试。',409,'claude_config_missing');
+        const request={command:'notepad.exe',args:[config.file],options:{cwd:path.dirname(config.file),windowsHide:false,detached:true,shell:false,stdio:'ignore'}};
+        if(this.options.launcher)await this.options.launcher(request);else await new Promise((resolve,reject)=>{const child=spawn(request.command,request.args,request.options);child.once('error',()=>reject(new RoomError('无法打开 API 配置编辑器，请从本机配置文件入口打开 settings.json。',503,'claude_config_open_failed')));child.once('spawn',()=>{child.unref();resolve();});});
+        return {job,action:{kind:'open_api_config',launched:true,file:config.file,instruction:'已打开本机 Claude API 配置。密钥只需保存一次；保存后点击「保存后继续接入」。程序不会覆盖已保存的配置。'}};
+      }
+    }
     const prior=this.terminals.get(job.id);if(prior&&livePid(prior.pid))return {job,action:{kind:'login_client',launched:true,reused:true,instruction:'首次配置窗口已打开。完成自己的账号设置后，点击登录后继续接入。'}};
     const cli=this.cli(job),project=this.service.store.project(this.service.chat.store.room(job.room_id).project_id);
     // This interactive terminal opens only after the user clicks its action.

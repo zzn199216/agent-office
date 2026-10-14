@@ -4,7 +4,7 @@ const { RoomError } = require('./util.cjs');
 const MEMBER_TOOLS = new Set([
   'agentroom_room_state', 'agentroom_room_ensure', 'agentroom_member_wake', 'agentroom_heartbeat',
   'agentroom_chat_rooms', 'agentroom_chat_history', 'agentroom_chat_post', 'agentroom_chat_wait',
-  'agentroom_chat_inbox', 'agentroom_chat_reply', 'agentroom_chat_ack',
+  'agentroom_chat_inbox', 'agentroom_chat_image', 'agentroom_chat_reply', 'agentroom_chat_ack',
   'agentroom_bridge_request', 'agentroom_bridge_result', 'agentroom_bridge_wait', 'agentroom_bridge_report'
 ]);
 const PROXY_TOOLS = new Set(['agentroom_delegate', 'agentroom_delegate_wait']);
@@ -37,10 +37,17 @@ function assertMemberRoute(disk, scope, route, input, { allowJoin = false } = {}
   const denied = () => { throw new RoomError('请求超出了当前成员的房间授权；管理操作请使用本机控制界面。', 403, 'resume_scope_mismatch'); };
   if (q.has('room_id') && q.get('room_id') !== room || q.has('member_id') && q.get('member_id') !== member || input?.room_id && input.room_id !== room || input?.sender_id && input.sender_id !== member || input?.caller_member_id && input.caller_member_id !== member) denied();
   const messageRoute = p.match(new RegExp(`^/api/chat/messages/(${UUID})(?:/(wait|reply|ack|cancel))?$`, 'i'));
+  const imageRoute = p.match(new RegExp(`^/api/chat/images/(${UUID})$`, 'i'));
   const invitationRoute = p.match(new RegExp(`^/api/chat/invitations/(${UUID})$`, 'i'));
   const bridgeRoute = p.match(new RegExp(`^/api/bridge/entries/(${UUID})(?:/(wait|report))?$`, 'i'));
   const proxy = proxyFor(disk, scope);
   let message;
+  if(imageRoute){
+    const image=disk.chat.images.metadata(imageRoute[1]);
+    if(image.room_id!==room)denied();
+    const owner=disk.chat.message(image.message_id);
+    if(proxy&&owner.sender_id!==member&&owner.to_member_id!==member)denied();
+  }
   if (messageRoute) {
     message = disk.chat.message(messageRoute[1]);
     if (message.room_id !== room) denied();
@@ -61,6 +68,7 @@ function assertMemberRoute(disk, scope, route, input, { allowJoin = false } = {}
       p === '/api/launch/proxy' && q.get('room_id') === room && q.get('member_id') === member ||
       p === `/api/chat/rooms/${room}` ||
       p === '/api/chat/inbox' && q.get('room_id') === room && q.get('member_id') === member ||
+      !!imageRoute && q.get('room_id') === room && q.get('member_id') === member && q.get('format') === 'base64' ||
       !!messageRoute && (!messageRoute[2] || messageRoute[2] === 'wait') ||
       !!invitationRoute && allowJoin ||
       !!bridgeRoute && (!bridgeRoute[2] || bridgeRoute[2] === 'wait') ||

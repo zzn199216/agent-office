@@ -44,6 +44,7 @@ const tools = [
   {name:'agentroom_chat_post',description:'Post a room message. Explicit to_member_id wakes supported adapters; an unaddressed announcement does not wake everyone. Keep idempotency_key stable.',inputSchema:schema({room_id:string('Room ID'),to_member_id:string('Specific peer member ID; never your own'),text:string('Question or room announcement'),reply_to:string('Optional reference to another message in this room'),idempotency_key:string('Generate once for this logical message, reuse when retrying')},['room_id','text','idempotency_key'])},
   {name:'agentroom_chat_wait',description:'Wait for replies to an existing room message without sending it again.',inputSchema:schema({message_id:string('Existing message ID'),seconds:{type:'number',minimum:0,maximum:25}},['message_id'])},
   {name:'agentroom_chat_inbox',description:'Read messages addressed to your bound member identity. A webhook acceptance is not an answer.',inputSchema:schema({room_id:string('Optional room ID')})},
+  {name:'agentroom_chat_image',description:'Read a saved image attachment from your room as actual image content. Use its attachment ID from the timeline or inbox.',inputSchema:schema({image_id:string('Attachment ID')},['image_id'])},
   {name:'agentroom_chat_reply',description:'Reply to a message addressed to your bound member identity. Return to the same room and message thread.',inputSchema:schema({message_id:string('Original addressed message ID'),text:string('Actual answer'),idempotency_key:string('Stable answer identifier')},['message_id','text','idempotency_key'])},
   {name:'agentroom_chat_ack',description:'Acknowledge consumption of a message addressed to your identity. Does not claim the original external Grok group was resumed.',inputSchema:schema({message_id:string('Message ID')},['message_id'])},
   {name:'agentroom_list',description:'List local registered projects and discussions. Reuse discussion IDs for follow-ups.',inputSchema:schema({})},
@@ -141,6 +142,7 @@ async function dispatchTool(name,args,api,context={}){
     case'agentroom_chat_post':return api('/api/chat/messages',{...args,sender_id:member});
     case'agentroom_chat_wait':return api(`/api/chat/messages/${encodeURIComponent(args.message_id)}/wait?seconds=${Math.min(25,args.seconds??25)}${member?'&member_id='+encodeURIComponent(member):''}`);
     case'agentroom_chat_inbox':{const value=await api(`/api/chat/inbox?member_id=${encodeURIComponent(member)}${args.room_id||room?'&room_id='+encodeURIComponent(args.room_id||room):''}`);return Array.isArray(value?.items)?value.items:value;}
+    case'agentroom_chat_image':return api(`/api/chat/images/${encodeURIComponent(args.image_id)}?room_id=${encodeURIComponent(room)}&member_id=${encodeURIComponent(member)}&format=base64`);
     case'agentroom_chat_reply':return api(`/api/chat/messages/${encodeURIComponent(args.message_id)}/reply`,{member_id:member,text:args.text,idempotency_key:args.idempotency_key});
     case'agentroom_chat_ack':return api(`/api/chat/messages/${encodeURIComponent(args.message_id)}/ack`,{member_id:member});
     case'agentroom_list':{const s=await api('/api/state');return {projects:s.projects,discussions:s.discussions,grok:s.grok};}
@@ -153,6 +155,21 @@ async function dispatchTool(name,args,api,context={}){
     case'agentroom_reply':return api(`/api/deliveries/${encodeURIComponent(args.delivery_id)}/reply`,{message:args.message});
     case'agentroom_ack':return api(`/api/deliveries/${encodeURIComponent(args.delivery_id)}/ack`,{stage:args.stage});
   }
+}
+async function toolResult(name,value,api,context={}){
+  if(name==='agentroom_chat_image')return {content:[{type:'text',text:JSON.stringify({id:value.id,name:value.name,mime:value.mime})},{type:'image',mimeType:value.mime,data:value.data}]};
+  const result={content:[{type:'text',text:JSON.stringify(value)}],structuredContent:structured(value)};
+  if(name==='agentroom_chat_inbox'){
+    const messages=Array.isArray(value)?value:value?.items||[];let count=0,total=0;
+    for(const message of messages)for(const attachment of message.attachments||[]){
+      if(count++>=4)return result;
+      if(total+(attachment.size||0)>8*1024*1024)return result;
+      try{const image=await toolCall('agentroom_chat_image',{image_id:attachment.id},api,context);total+=attachment.size||0;
+        result.content.push({type:'text',text:`Image attachment ${attachment.id} for message ${message.id}`},{type:'image',mimeType:image.mime,data:image.data});
+      }catch{result.content.push({type:'text',text:`Image attachment ${attachment.id} is unavailable. The text inbox remains readable; do not claim to have seen this image.`});}
+    }
+  }
+  return result;
 }
 function runMcp(api,input=process.stdin,output=process.stdout){
   const rl=readline.createInterface({input,crlfDelay:Infinity});let initialized=false;
@@ -169,11 +186,11 @@ function runMcp(api,input=process.stdin,output=process.stdout){
       else if(!initialized)throw new Error('Initialize the MCP connection first.');
       else if(req.method==='tools/list')result={tools:memberTools(tools,await api.mcpContext?.()||{})};
       else if(req.method==='tools/call'){
-        try{const value=await toolCall(req.params?.name,req.params?.arguments || {},api,await api.mcpContext?.()||{});result={content:[{type:'text',text:JSON.stringify(value)}],structuredContent:structured(value)};}
+        try{const context=await api.mcpContext?.()||{},name=req.params?.name,value=await toolCall(name,req.params?.arguments || {},api,context);result=await toolResult(name,value,api,context);}
         catch(e){result={isError:true,content:[{type:'text',text:e.message}]};}
       }else{send({jsonrpc:'2.0',id:req.id,error:{code:-32601,message:'Method not found'}});return;}
       send({jsonrpc:'2.0',id:req.id,result});
     }catch(e){send({jsonrpc:'2.0',id:req.id,error:{code:-32600,message:e.message}});}
   });return rl;
 }
-module.exports={runMcp,toolCall,tools,memberTools};
+module.exports={runMcp,toolCall,toolResult,tools,memberTools};

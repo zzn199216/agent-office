@@ -42,7 +42,11 @@ class CodexClient extends EventEmitter {
     this.child = child; this.closed = false;
     child.on('error', e => this.disconnect(new RoomError(`Codex 无法启动：${e.code || 'unknown'}`, 503, 'codex_start_failed')));
     child.on('exit', () => this.disconnect(new RoomError('Codex 连接结束，运行中的结果需要核对。', 503, 'connection_lost')));
-    child.stderr.setEncoding('utf8'); child.stderr.on('data', () => {}); // Provider stderr may contain private configuration.
+    // Never publish raw stderr; only fixed messages for known transport stages.
+    child.stderr.setEncoding('utf8');child.stderr.on('data',chunk=>{
+      if(/falling back to HTTP/i.test(chunk))this.emit('transport-progress','模型连接已切换到 HTTP，正在等待回复。');
+      else if(/request timed out|prewarm.*time(?:d? ?out)|retrying/i.test(chunk))this.emit('transport-progress','模型网络连接超时，正在重试；本机接入仍在等待模型调用握手工具。');
+    });
     child.stdin.on('error', () => this.disconnect(new RoomError('Codex 输入通道结束。', 503, 'connection_lost')));
     readline.createInterface({ input: child.stdout, crlfDelay: Infinity }).on('line', line => {
       let m; try { m = JSON.parse(line); } catch { return; }
@@ -100,7 +104,7 @@ class CodexClient extends EventEmitter {
     // Trust only our server; other MCP servers and execution approvals retain
     // the user's policies. This does not grant filesystem or publishing rights.
     const config = { 'mcp_servers.agentroom': { command: own.command, args: [...own.args, 'mcp','--data-dir',this.dataDir||dataDirectory()], env: { AGENTROOM_CALLER: 'codex',...this.mcpEnvironment,...this.mcpEnvironment.AGENTROOM_MEMBER_ID?{AGENTROOM_ROOM_ID:discussion.id}:{} }, startup_timeout_sec: 20, default_tools_approval_mode: 'approve' } };
-    if(this.mcpEnvironment.AGENTROOM_MEMBER_ID)config['mcp_servers.agentroom'].enabled_tools=['agentroom_join','agentroom_chat_rooms','agentroom_chat_history','agentroom_chat_post','agentroom_chat_wait','agentroom_chat_inbox','agentroom_chat_reply','agentroom_chat_ack','agentroom_room_state','agentroom_room_ensure','agentroom_member_wake','agentroom_heartbeat',...TEAM_TOOLS];
+    if(this.mcpEnvironment.AGENTROOM_MEMBER_ID)config['mcp_servers.agentroom'].enabled_tools=['agentroom_join','agentroom_chat_rooms','agentroom_chat_history','agentroom_chat_post','agentroom_chat_wait','agentroom_chat_inbox','agentroom_chat_image','agentroom_chat_reply','agentroom_chat_ack','agentroom_room_state','agentroom_room_ensure','agentroom_member_wake','agentroom_heartbeat',...TEAM_TOOLS];
     if (discussion.binding_state === 'creation_uncertain') throw new RoomError('上一次创建结果不明确，请先核对 Codex 会话，不会自动再建一个。', 409, 'creation_uncertain');
     if (discussion.thread_id) {
       let t;
@@ -158,7 +162,7 @@ class CodexClient extends EventEmitter {
       if (turnId && this.child) this.call('turn/interrupt', { threadId, turnId }, 10000).catch(() => {});
       else settle(rejectEnd, new RoomError('已停止等待；执行状态需要核对。', 409, 'outcome_uncertain'));
     };
-    this.on('notification', events); this.on('request', approvals); this.on('disconnected', disconnected);
+    this.on('notification', events); this.on('request', approvals); this.on('disconnected', disconnected);this.on('transport-progress',onProgress);
     signal?.addEventListener('abort', interrupt, { once: true });
     const timer = setTimeout(() => { interrupt(); settle(rejectEnd, new RoomError('处理超时，未自动重跑。请核对 Codex 会话。', 504, 'outcome_uncertain')); }, timeout);
     try {
@@ -166,11 +170,12 @@ class CodexClient extends EventEmitter {
       // New Codex releases reject legacy *.access overrides. Use the supported
       // read-only policy; project scoping is guidance, not a claimed read ACL.
       const policy = project.access === 'read-only' ? { type: 'readOnly' } : { type: 'workspaceWrite', writableRoots: [project.path], networkAccess: false };
-      const r = await this.call('turn/start', { threadId, clientUserMessageId: request.id, input: [{ type: 'text', text: `AgentRoom request ${request.id}\nPeer: ${request.sender}\nProject: ${project.name}\n${this.mcpEnvironment.AGENTROOM_MEMBER_ID?TEAM_INSTRUCTIONS:''}\n\n${request.prompt}` }], sandboxPolicy: policy });
+      const r = await this.call('turn/start', { threadId, clientUserMessageId: request.id, input: [{ type: 'text', text: `AgentRoom request ${request.id}\nPeer: ${request.sender}\nProject: ${project.name}\n${this.mcpEnvironment.AGENTROOM_MEMBER_ID?TEAM_INSTRUCTIONS:''}\n\n${request.prompt}` },...(request.images||[]).map(image=>({type:'image',source:{url:`data:${image.mime};base64,${image.data}`}}))], sandboxPolicy: policy });
       turnId = r.turn.id; onTurn(turnId); return await ended;
     } finally {
       clearTimeout(timer); signal?.removeEventListener('abort', interrupt);
       this.off('notification', events); this.off('request', approvals); this.off('disconnected', disconnected);
+      this.off('transport-progress',onProgress);
     }
   }
   async close() {

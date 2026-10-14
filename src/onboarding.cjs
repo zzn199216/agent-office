@@ -200,15 +200,16 @@ class OnboardingManager{
       base.status='needs_action';base.stage='needs_wake_adapter';base.next_actions=[action('unsupported','尚无后台唤醒适配器')];return base;
     }
     if(row.status==='running'&&this.jobs.has(row.id)||session?.status==='preparing'||member?.status==='connecting'||nativeConnecting){
-      base.status='running';base.stage=member?.status==='connecting'||nativeConnecting?'connecting':row.stage;return base;
+      base.status='running';base.stage=member?.status==='connecting'||nativeConnecting?'connecting':row.stage;const progress=member&&this.service.chat.connectionProgress?.get(member.id);if(progress)base.detail=safeText(progress);return base;
     }
     if(proxy&&!['active','pending'].includes(credentialStatus)){
       base.status='needs_action';base.stage='awaiting_credential';base.detail=credentialStatus==='revoked'?'此成员的通信入口已撤销，需要你明确重新接入。':'此成员的通信入口不可用，需要你明确重新接入。';
       base.next_actions=[action('verify','重新授权接入',{operation:'retry'})];return base;
     }
     if(row.stage==='awaiting_auth'||member?.error&&AUTH.test(member.error)){
-      base.status='needs_action';base.stage='awaiting_auth';base.error=null;
-      base.next_actions=[DESKTOP.has(row.provider)?action('self_handshake','在本人客户端完成授权和接入',{operation:'copy_handshake_prompt'}):action('login',`登录 ${base.name}`,{operation:'login_client'}),action('verify','登录后继续接入',{operation:'retry'})];return base;
+      base.status='needs_action';base.stage='awaiting_auth';base.error=member?.error||row.error?safeText(member?.error||row.error):null;
+      if(row.provider==='claude-code'){let config;try{config=require('./claude.cjs').configurationInfo(this.options.env||process.env);}catch{}base.configuration=config?{file:config.file,api_mode:config.api_mode,credential_configured:config.credential_configured}:null;}
+      base.next_actions=[DESKTOP.has(row.provider)?action('self_handshake','在本人客户端完成授权和接入',{operation:'copy_handshake_prompt'}):action('login',base.configuration?.api_mode?'配置 Claude API':`登录 ${base.name}`,{operation:'login_client'}),action('verify',base.configuration?.api_mode?'保存后继续接入':'登录后继续接入',{operation:'retry'})];return base;
     }
     const providerStage=['awaiting_quota','awaiting_provider_action'].includes(row.stage)?row.stage:providerBlock(row.provider,member?.error||session?.error);
     if(providerStage&&providerStage!=='awaiting_runtime_install'){

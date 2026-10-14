@@ -1,0 +1,30 @@
+'use strict';
+const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path');
+const {RoomService}=require('../src/service.cjs'),{createServer}=require('../src/http.cjs'),{validateImages}=require('../src/chat-images.cjs'),{toolCall,toolResult}=require('../src/mcp.cjs'),{assertMemberRoute}=require('../src/member-policy.cjs'),{id}=require('../src/util.cjs'),{fixture,FakeCodex,FakeVault}=require('./helpers.cjs');
+const PNG='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jN8sAAAAASUVORK5CYII=';
+const image=(name='图.png')=>({name,data_url:'data:image/png;base64,'+PNG});
+function setup(t){const f=fixture(),service=new RoomService(f.data,{codex:new FakeCodex(),vault:new FakeVault()});t.after(()=>service.store.db.isOpen?service.close():undefined);const project=service.addProject({name:'图片测试',path:f.project}),room=service.chat.addRoom({project_id:project.id,title:'图片'}),member=service.chat.addMember({name:'本人窗口',adapter:'mailbox'});service.chat.join(room.id,member.id);return {f,service,room,member};}
+test('images persist as private files, deduplicate retries, survive restart and keep metadata in history',async t=>{
+  const {f,service,room,member}=setup(t),input={room_id:room.id,to_member_id:member.id,text:'',idempotency_key:id(),attachments:[image()]},message=service.chat.post(input);
+  assert.equal(message.text,'请查看附图。');assert.equal(message.attachments.length,1);assert.doesNotMatch(JSON.stringify(message),new RegExp(PNG.slice(0,32)));assert.equal(service.chat.post(input).id,message.id);assert.equal(service.chat.store.images.input(message.id)[0].data,PNG);
+  assert.throws(()=>service.chat.post({...input,attachments:[image('别的图.png')]}),error=>error.code==='idempotency_conflict');
+  const file=service.chat.store.images.file(service.chat.store.images.read(message.attachments[0].id).row);assert.ok(file.startsWith(path.join(f.data,'chat-images')));
+  await service.close();const restarted=new RoomService(f.data,{codex:new FakeCodex(),vault:new FakeVault()});t.after(()=>restarted.close());assert.equal(restarted.chat.store.message(message.id).attachments[0].id,message.attachments[0].id);assert.equal(restarted.chat.store.images.input(message.id)[0].data,PNG);
+});
+test('invalid types, content, counts, size and cross room requests are rejected before storage',t=>{
+  const {service,room,member}=setup(t);for(const attachments of [[{name:'script.svg',data_url:'data:image/svg+xml;base64,PHN2Zz4='}],[{data_url:'data:image/png;base64,YmFk'}],Array.from({length:5},()=>image()),[{data_url:'data:image/png;base64,'+'A'.repeat(6*1024*1024)}]])assert.throws(()=>service.chat.post({room_id:room.id,to_member_id:member.id,text:'bad',idempotency_key:id(),attachments}),error=>error.code==='chat_image_invalid');
+  assert.equal(service.store.db.prepare('SELECT COUNT(*) n FROM chat_images').get().n,0);assert.equal(service.chat.store.messages(room.id).length,0);
+  const message=service.chat.post({room_id:room.id,to_member_id:member.id,text:'图',idempotency_key:id(),attachments:[image()]}),other=service.chat.addRoom({project_id:room.project_id,title:'另一间'});service.chat.join(other.id,member.id);
+  const route='/api/chat/images/'+message.attachments[0].id+'?room_id='+other.id+'&member_id='+member.id+'&format=base64';assert.throws(()=>assertMemberRoute({store:service.store,chat:service.chat.store},{room_id:other.id,member_id:member.id},route),error=>error.code==='resume_scope_mismatch');
+  const unsupported=service.chat.addMember({name:'不支持图片',adapter:'grok-proxy'});service.chat.join(room.id,unsupported.id);assert.throws(()=>service.chat.post({room_id:room.id,text:'@不支持图片 看图',idempotency_key:id(),attachments:[image()]}),error=>error.code==='image_adapter_unsupported');
+});
+test('HTTP and MCP deliver image bytes only through authenticated room scoped requests',async t=>{
+  const {service,room,member}=setup(t),token=id(),server=createServer(service,{token,port:0}),port=await server.listen();t.after(()=>server.close());const origin='http://127.0.0.1:'+port;
+  const message=service.chat.post({room_id:room.id,to_member_id:member.id,text:'看看',idempotency_key:id(),attachments:[image()]}),url=message.attachments[0].url;
+  const denied=await fetch(origin+url);assert.equal(denied.status,401);
+  const accepted=await fetch(origin+url,{headers:{Authorization:'Bearer '+token}});assert.equal(accepted.headers.get('content-type'),'image/png');assert.equal(Buffer.from(await accepted.arrayBuffer()).toString('base64'),PNG);
+  const context={env:{AGENTROOM_ROOM_ID:room.id,AGENTROOM_MEMBER_ID:member.id}},api=async route=>{assertMemberRoute({store:service.store,chat:service.chat.store},{room_id:room.id,member_id:member.id},route);const response=await fetch(origin+route,{headers:{Authorization:'Bearer '+token}});assert.equal(response.status,200);return response.json();};
+  const inbox=await toolCall('agentroom_chat_inbox',{},api,context),result=await toolResult('agentroom_chat_inbox',inbox,api,context);assert.equal(result.content.filter(item=>item.type==='image').length,1);assert.equal(result.content.find(item=>item.type==='image').data,PNG);assert.ok(result.structuredContent.items);assert.doesNotMatch(JSON.stringify(result.structuredContent),new RegExp(PNG.slice(0,32)));
+  const value=await toolCall('agentroom_chat_image',{image_id:message.attachments[0].id},api,context),single=await toolResult('agentroom_chat_image',value,api,context);assert.equal(single.content[1].mimeType,'image/png');assert.equal(single.content[1].data,PNG);
+});
+test('stored image tampering cannot be forwarded to a model',t=>{const {service,room,member}=setup(t),message=service.chat.post({room_id:room.id,to_member_id:member.id,text:'图',idempotency_key:id(),attachments:[image()]}),read=service.chat.store.images.read(message.attachments[0].id);fs.writeFileSync(service.chat.store.images.file(read.row),'changed');assert.throws(()=>service.chat.store.images.input(message.id),error=>error.code==='chat_image_invalid');});

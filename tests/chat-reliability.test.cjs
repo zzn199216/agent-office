@@ -18,6 +18,11 @@ function setup(t,options={}){
 async function asyncNoNetwork(){assert.fail('this isolated test must not access a real webhook');}
 function evidence(summary='Checked the original fixture session and its final result'){return {summary,source:'fixture://original-session/turn',observed_at:now()};}
 function post(v,key='question'){return v.service.chat.post({room_id:v.room.id,to_member_id:v.member.id,text:key,idempotency_key:key});}
+test('post-handshake Claude API rejection disables the connection and fails unstarted work',t=>{
+  const v=setup(t),chat=v.service.chat,member=chat.addMember({name:'Claude API fixture',adapter:'claude-code'});chat.join(v.room.id,member.id);chat.store.updateMember(member.id,{status:'ready',verified_at:now()});chat.connectedMembers.add(member.id);const ref='native:'+member.id;v.service.runtime.workerHeartbeat(ref,{member_id:member.id,pid:process.pid});v.service.runtime.heartbeat(member.id,{session_ref:ref});
+  const queued=chat.store.post({room_id:v.room.id,to_member_id:member.id,text:'尚未执行',idempotency_key:id()}),error=new Error('Claude 模型服务拒绝了 API 凭据（401）。');error.code='claude_api_auth_required';chat.nativeFailed(member,error);
+  assert.equal(chat.store.member(member.id).status,'connection_failed');assert.equal(chat.connectedMembers.has(member.id),false);assert.equal(chat.store.message(queued.id).status,'failed');assert.equal(v.service.runtime.memberState(member.id).worker_online,false);assert.ok(chat.store.member(member.id).verified_at);
+});
 function gate(){let resolve;const promise=new Promise(done=>{resolve=done;});return {promise,resolve};}
 async function until(check){for(let i=0;i<200;i++){if(check())return;await sleep(10);}assert.fail('fixture state did not settle');}
 async function webhookMember(v){

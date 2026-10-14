@@ -34,7 +34,7 @@ async function setup(t,options={}){
     chat:{clientFactory(member){return new NativeProtocolFixture(member,service,options,clients);}},
     launch:{discover:()=>{scans++;return {candidates};},installer:async input=>{installations.push(input);return {status:'installed',installed:true,connected:false,needs_reload:true};}},
     onboarding:{runtimeInstaller:async input=>{runtimeCalls.push(input);return {status:'needs_login',installed:true};}},
-    onboardingActions:{launcher:async request=>{terminals.push(request);return {pid:process.pid,fixture:true};}}});
+    onboardingActions:{env:{USERPROFILE:files.root,HOME:files.root,CLAUDE_CONFIG_DIR:path.join(files.root,'.claude')},launcher:async request=>{terminals.push(request);return {pid:process.pid,fixture:true};}}});
   const project=service.addProject({name:'One-click HTTP fixture',path:files.project}),room=service.chat.addRoom({title:'HTTP onboarding fixture',project_id:project.id});
   const token=id(),server=createServer(service,{port:0,token}),port=await server.listen(),base=`http://127.0.0.1:${port}`;
   t.after(async()=>{await server.close();await service.close();const absolute=path.resolve(files.root);assert.equal(path.dirname(absolute),path.resolve(os.tmpdir()));assert.match(path.basename(absolute),/^agentroom-test-/);fs.rmSync(absolute,{recursive:true,force:true});});

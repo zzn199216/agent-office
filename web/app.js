@@ -23,6 +23,27 @@ let connectionDoctor = null, connectionDoctorBusy = false, connectionDoctorError
 let deleteRoomId = null, deletingRoom = false;
 let managedRoomId=null,managingRoom=false;
 let secretaryOpenRoom = null, secretaryPickingRoom = null, secretaryBusy = false, secretaryStartBusy = false, secretaryError = '', secretaryConnectRoom = null, secretaryConnectJob = null, secretaryGoalVersion = 0;
+let secretaryFinishing=false;
+const admittedMembers=members=>(members||[]).filter(member=>!!member.verified_at&&!['connection_failed','failed','disabled','revoked','unavailable'].includes(member.status));
+const imageDrafts=new Map();
+const draftImages=()=>imageDrafts.get(roomId)||[];
+function renderImageDrafts(){
+  $('image-drafts').innerHTML=draftImages().map(item=>`<div class="image-draft"><img src="${item.data_url}" alt="${escape(item.name)}"><span>${escape(item.name)}</span><button type="button" data-remove-image="${item.id}" aria-label="移除 ${escape(item.name)}">×</button></div>`).join('');
+  $('image-drafts').classList.toggle('hidden',!draftImages().length);
+}
+async function addChatImages(files){
+  const capturedRoom=roomId;if(!capturedRoom||legacyId||!webConnected)return;
+  const selected=Array.from(files);if(!selected.length)return;
+  if(selected.length>4||selected.reduce((sum,file)=>sum+file.size,0)>8*1024*1024)throw Error('每条消息最多附带 4 张图片，总大小不超过 8 MB。');
+  if(selected.some(file=>!['image/png','image/jpeg','image/webp','image/gif'].includes(file.type)||!file.size||file.size>4*1024*1024))throw Error('请选择 PNG、JPEG、WebP 或 GIF 图片，每张不超过 4 MB。');
+  const images=await Promise.all(selected.map(async file=>({id:crypto.randomUUID(),name:file.name||'粘贴的图片',size:file.size,data_url:await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result);reader.onerror=()=>reject(Error('无法读取这张图片，请重新选择。'));reader.readAsDataURL(file);})})));
+  const existing=imageDrafts.get(capturedRoom)||[];
+  if(existing.length+images.length>4||[...existing,...images].reduce((sum,image)=>sum+image.size,0)>8*1024*1024)throw Error('每条消息最多附带 4 张图片，总大小不超过 8 MB。');
+  imageDrafts.set(capturedRoom,[...existing,...images]);if(roomId===capturedRoom){renderImageDrafts();updateOfficeComposerPresentation();}
+}
+function messageImages(message){
+  return (message.attachments||[]).filter(item=>/^[a-f0-9-]{36}$/i.test(item.id)).map(item=>desktop?.offline?`<div class="saved-image">📷 ${escape(item.name)} · 开启服务后查看图片</div>`:`<a class="message-image" href="/api/chat/images/${item.id}" data-show-image="${item.id}" aria-label="查看图片 ${escape(item.name)}"><img src="/api/chat/images/${item.id}" alt="${escape(item.name)}" loading="lazy"><span>${escape(item.name)}</span></a>`).join('');
+}
 const teamRooms = new Map(), teamRequests = new Map();
 let teamSignature = '', teamBusy = false, teamDialog = null, teamLoadError = '';
 const secretaryDrafts = new Map(), secretaryDismissed = new Set();
@@ -46,6 +67,7 @@ const presenceLabels = {online:'在线',stale:'心跳已过期',offline:'离线'
 function runtimeMember(id) { return (runtime?.members || runtime?.presence || []).find?.(item => (item.id || item.member_id) === id); }
 function memberPresence(member = {}) {
   const observed = {...runtimeMember(member.id),...member.runtime_state}, value = member.presence || observed.presence || 'unknown';
+  if(['connection_failed','failed','disabled','revoked','unavailable'].includes(member.status))return {status:'unavailable',label:'连接不可用 · 需重新接入',lastSeen:member.last_seen||observed.last_seen||null,canWake:false};
   let status = typeof value === 'string' ? value : value.state || value.status || 'unknown';
   if (observed.worker_online && status !== 'online') status = 'worker_online';
   if (status === 'unknown' && observed.worker_state === 'stale') status = 'stale';
@@ -225,30 +247,31 @@ function onboardingActionMarkup(job) {
     if (operation === 'copy_handshake_prompt' || value.kind === 'self_handshake') return `<button type="button" class="secondary" data-onboarding-copy="${id}" data-onboarding-copy-kind="handshake">复制本人接入说明</button>`;
     if (operation === 'native_group_handoff') return `<button type="button" class="secondary" data-onboarding-copy="${id}" data-onboarding-copy-kind="group">复制 Grok 加群说明</button>`;
     if (value.command || value.instruction || value.prompt) return `<button type="button" class="secondary" data-onboarding-copy="${id}">${escape(value.copy_label || (value.command ? '复制首次配置说明' : '复制本人接入说明'))}</button>`;
-    if (operation === 'login_client') return `<button type="button" class="primary" data-onboarding-operation="login_client" data-onboarding-action-job="${id}">打开首次配置 ↗</button>`;
+    if (operation === 'login_client') return `<button type="button" class="primary" data-onboarding-operation="login_client" data-onboarding-action-job="${id}">${job.configuration?.api_mode?'打开 API 配置':'打开首次配置'} ↗</button>`;
     if (operation === 'retry' || operation === 'install_runtime') return `<button type="button" class="secondary" data-onboarding-operation="${escape(operation)}" data-onboarding-action-job="${id}">${escape(job.provider === 'qwen-code' && job.stage === 'awaiting_auth' && operation === 'retry' ? '配置完成后继续接入' : value.label || '继续接入')}</button>`;
     return '';
   }).filter(Boolean);
   if (job.status === 'needs_action') buttons.push(`<button type="button" class="secondary" data-onboarding-check="${escape(job.id)}">我已完成，检查连接</button>`);
-  const fallback = first.kind === 'reload_client' ? '请从客户端菜单退出后重新打开，再将本人接入说明交给它。' : first.kind === 'import_mcp' ? clientImportKind(job) === 'form' ? '在本人设置中新建自定义连接器，分别填写字段；启用后，再完成真实工具握手。' : '配置贴到这个客户端的 MCP 设置；启用后，再完成本人的工具握手。' : first.kind === 'self_handshake' ? '将下面的接入说明交给本人窗口，实际调用工具后会显示接通。' : first.kind === 'login' ? job.provider === 'qwen-code' ? '在官方命令窗口通过 /auth 配置 API 或计划凭据；完成后继续接入。此入口不复用 Qwen 桌面登录。' : job.provider === 'gemini-cli' ? '请在 Gemini CLI 中完成 Google 登录或 API 配置。它使用自己的认证，不代替你当前网页中的聊天。' : '首次登录或授权需要你本人完成，后续接入会复用账号。' : '';
+  const fallback = first.kind === 'reload_client' ? '请从客户端菜单退出后重新打开，再将本人接入说明交给它。' : first.kind === 'import_mcp' ? clientImportKind(job) === 'form' ? '在本人设置中新建自定义连接器，分别填写字段；启用后，再完成真实工具握手。' : '配置贴到这个客户端的 MCP 设置；启用后，再完成本人的工具握手。' : first.kind === 'self_handshake' ? '将下面的接入说明交给本人窗口，实际调用工具后会显示接通。' : first.kind === 'login' ? job.configuration?.api_mode ? '此成员使用本机 Claude API 配置。密钥只需保存一次；保存后继续接入，无需重新登录订阅账号。' : job.provider === 'qwen-code' ? '在官方命令窗口通过 /auth 配置 API 或计划凭据；完成后继续接入。此入口不复用 Qwen 桌面登录。' : job.provider === 'gemini-cli' ? '请在 Gemini CLI 中完成 Google 登录或 API 配置。它使用自己的认证，不代替你当前网页中的聊天。' : '首次登录或授权需要你本人完成，后续接入会复用账号。' : '';
   const title = first.kind === 'login' && job.provider === 'qwen-code' ? '配置 Qwen Code 提供商' : first.label || first.title || '需要完成一次操作';
   return `<div class="onboarding-action"><strong>${escape(title)}</strong>${first.detail || first.description || fallback ? `<p>${escape(first.detail || first.description || fallback)}</p>` : ''}<div class="onboarding-action-buttons">${buttons.join('')}</div></div>`;
+}
+function onboardingJobMarkup(job) {
+    const readyType = onboardingReady(job), ready = !!readyType, pending = onboardingRunning(job), needsAction = job.status === 'needs_action', failed = ['failed','error','interrupted','cancelled'].includes(job.status), actionValue = onboardingAction(job);
+    const stage = job.stage || job.phase || '', stageNumber = Number.isInteger(job.stage_index) ? Math.max(0,Math.min(3,job.stage_index)) : /handshake|verify|ready|complete|^connecting$/.test(stage) ? 2 : /config|install|auth|start|launch|import|reload|connection/.test(stage) ? 1 : 0;
+    const stageLabels = ['发现','配置','真实握手','本机完成'];
+    const steps = stageLabels.map((label,index) => `<li class="${ready || index < stageNumber ? 'done' : index === stageNumber && !failed ? 'current' : ''}"><span>${ready || index < stageNumber ? '✓' : index + 1}</span>${label}</li>`).join('');
+    const title = readyType === 'ready_automatic' ? '已接通 · 可后台自动回答' : readyType === 'ready_mailbox' ? '已接通 · 本人窗口处理消息' : needsAction ? job.configuration?.api_mode ? '核对已保存的 API 配置' : job.provider === 'qwen-code' && stage === 'awaiting_auth' ? '完成首次 API 或计划配置' : job.provider === 'gemini-cli' && stage === 'awaiting_auth' ? '完成 Gemini CLI 账号配置' : '完成一次授权或启用' : failed ? '接入需要核对' : pending ? '正在接入' : '等待接入确认';
+    const detail = job.message || job.detail || (ready ? readyType === 'ready_automatic' ? '本机通信已验证。Grok 加群仍按你的指令处理。' : '通信已验证。收到群里的问题后，需在这个客户端自己的窗口领取并回答。' : stage === 'awaiting_auth' ? '完成首次账号配置后，再继续接入并验证后台通信。' : stage === 'awaiting_runtime_install' ? '还需要安装这个 agent 的后台入口。确认后，只安装你指定的成员。' : stage === 'unsupported' || stage === 'needs_wake_adapter' ? '已发现应用，正式通信或后台任务入口仍待适配。' : needsAction ? '完成下面这一步后，继续检查这个成员的真实通信握手。' : '只处理这个成员；配置、启动和握手进度会自动更新。');
+    const groupState = job.native_group_status || job.group_status, reported = ['host_reported','joined'].includes(groupState);
+    const actionHtml = (needsAction || failed || ready) && actionValue ? onboardingActionMarkup(job) : '';
+    return `<article class="onboarding-job ${failed ? 'failed' : ready ? 'ready' : ''}" data-onboarding-job="${escape(job.id)}"><div class="onboarding-job-heading">${avatar(job.name || job.provider,job.provider)}<div><strong>${escape(job.name || job.provider)}</strong><span>${escape(title)}</span></div>${pending ? '<span class="pulse-dot"></span>' : ''}</div><ol class="onboarding-steps">${steps}</ol><p class="onboarding-job-detail">${escape(detail)}</p>${actionHtml}${job.error ? `<p class="onboarding-job-error">${escape(typeof job.error === 'string' ? job.error : job.error.message || '请在专业视图核对接入记录。')}</p>` : ''}${ready ? `<div class="onboarding-group-note">${escape(reported ? 'Grok 已报告加群；原群状态单独记录。' : 'Grok 群：待你指定加群。')}</div>` : ''}</article>`;
 }
 function renderOnboarding() {
   const jobs = currentOnboardingJobs();
   $('onboarding-progress').classList.toggle('hidden',!jobs.length);
   const signature = JSON.stringify([jobs,webConnected]); if (signature === onboardingSignature) return; onboardingSignature = signature;
-  $('onboarding-jobs').innerHTML = jobs.map(job => {
-    const readyType = onboardingReady(job), ready = !!readyType, pending = onboardingRunning(job), needsAction = job.status === 'needs_action', failed = ['failed','error','interrupted','cancelled'].includes(job.status), actionValue = onboardingAction(job);
-    const stage = job.stage || job.phase || '', stageNumber = Number.isInteger(job.stage_index) ? Math.max(0,Math.min(3,job.stage_index)) : /handshake|verify|ready|complete|^connecting$/.test(stage) ? 2 : /config|install|auth|start|launch|import|reload|connection/.test(stage) ? 1 : 0;
-    const stageLabels = ['发现','配置','真实握手','本机完成'];
-    const steps = stageLabels.map((label,index) => `<li class="${ready || index < stageNumber ? 'done' : index === stageNumber && !failed ? 'current' : ''}"><span>${ready || index < stageNumber ? '✓' : index + 1}</span>${label}</li>`).join('');
-    const title = readyType === 'ready_automatic' ? '已接通 · 可后台自动回答' : readyType === 'ready_mailbox' ? '已接通 · 本人窗口处理消息' : needsAction ? job.provider === 'qwen-code' && stage === 'awaiting_auth' ? '完成首次 API 或计划配置' : job.provider === 'gemini-cli' && stage === 'awaiting_auth' ? '完成 Gemini CLI 账号配置' : '完成一次授权或启用' : failed ? '接入需要核对' : pending ? '正在接入' : '等待接入确认';
-    const detail = job.message || job.detail || (ready ? readyType === 'ready_automatic' ? '本机通信已验证。Grok 加群仍按你的指令处理。' : '通信已验证。收到群里的问题后，需在这个客户端自己的窗口领取并回答。' : stage === 'awaiting_auth' ? '完成首次账号配置后，再继续接入并验证后台通信。' : stage === 'awaiting_runtime_install' ? '还需要安装这个 agent 的后台入口。确认后，只安装你指定的成员。' : stage === 'unsupported' || stage === 'needs_wake_adapter' ? '已发现应用，正式通信或后台任务入口仍待适配。' : needsAction ? '完成下面这一步后，继续检查这个成员的真实通信握手。' : '只处理这个成员；配置、启动和握手进度会自动更新。');
-    const groupState = job.native_group_status || job.group_status, reported = ['host_reported','joined'].includes(groupState);
-    const actionHtml = (needsAction || failed || ready) && actionValue ? onboardingActionMarkup(job) : '';
-    return `<article class="onboarding-job ${failed ? 'failed' : ready ? 'ready' : ''}" data-onboarding-job="${escape(job.id)}"><div class="onboarding-job-heading">${avatar(job.name || job.provider,job.provider)}<div><strong>${escape(job.name || job.provider)}</strong><span>${escape(title)}</span></div>${pending ? '<span class="pulse-dot"></span>' : ''}</div><ol class="onboarding-steps">${steps}</ol><p class="onboarding-job-detail">${escape(detail)}</p>${actionHtml}${job.error ? `<p class="onboarding-job-error">${escape(typeof job.error === 'string' ? job.error : job.error.message || '请在专业视图核对接入记录。')}</p>` : ''}${ready ? `<div class="onboarding-group-note">${escape(reported ? 'Grok 已报告加群；原群状态单独记录。' : 'Grok 群：待你指定加群。')}</div>` : ''}</article>`;
-  }).join('');
+  $('onboarding-jobs').innerHTML = jobs.map(onboardingJobMarkup).join('');
 }
 async function refreshOnboarding() {
   clearTimeout(onboardingTimer); if (!webConnected || onboardingFetching) return; onboardingFetching = true;
@@ -260,18 +283,22 @@ async function refreshOnboarding() {
   finally { onboardingFetching = false; if ([...onboardingJobs.values()].some(onboardingRunning)) onboardingTimer = setTimeout(() => action(refreshOnboarding),2000); }
 }
 async function checkOnboarding(jobId) {
-  const job = onboardingView(await api(`/api/onboarding/jobs/${encodeURIComponent(jobId)}`)); if (job?.id) onboardingJobs.set(job.id,job);
+  let job = onboardingView(await api(`/api/onboarding/jobs/${encodeURIComponent(jobId)}`));
+  if(job && !onboardingReady(job) && !onboardingRunning(job) && ['codex','claude-code','qwen-code','gemini-cli'].includes(job.provider)) job=onboardingView(await api(`/api/onboarding/jobs/${encodeURIComponent(jobId)}/retry`,{}));
+  if (job?.id) onboardingJobs.set(job.id,job);
   renderLaunch(); await refreshLaunch(); returnSecretaryAfterOnboarding(); if (onboardingRunning(job)) onboardingTimer = setTimeout(() => action(refreshOnboarding),2000);
 }
 function onboardingProgressTarget() { return $('secretary-connect-dialog').open ? $('secretary-connect-progress') : $('onboarding-progress'); }
 function returnSecretaryAfterOnboarding() {
   const job = onboardingJobs.get(secretaryConnectJob);
-  if(!job || !onboardingReady(job) || secretaryConnectRoom !== roomId || (job.room_id && job.room_id !== roomId)) return;
-  secretaryConnectJob = null; if($('secretary-connect-dialog').open) $('secretary-connect-dialog').close();
-  secretaryOpenRoom = roomId; secretaryPickingRoom = roomId; setProfessionalView(true); renderSecretary(); action(refresh);
-  toast('这位 AI 已真实接通。现在选择它当秘书，再交代目标。');
+  if(secretaryFinishing || !job || !onboardingReady(job) || secretaryConnectRoom !== roomId || (job.room_id && job.room_id !== roomId)) return;
+  const selected=currentSecretary(),assign=!selected.member_id||selected.status!=='ready';
+  if(assign && !job.can_wake){$('secretary-connect-status').textContent='这位成员使用本人窗口信箱；请先接通可后台回答的 AI 作为秘书。';return;}
+  const targetRoom=roomId;secretaryFinishing=true;
+  action(async()=>{if(assign)await api('/api/secretary',{room_id:targetRoom,member_id:job.member_id});await refresh();if(roomId!==targetRoom)return;secretaryConnectJob=null;if($('secretary-connect-dialog').open)$('secretary-connect-dialog').close();secretaryPickingRoom=null;closeSecretaryTutorial();setProfessionalView(true);selectRoomView(true);if(assign){$('recipient').value=job.member_id;updateRecipientNote();}toast(assign?'秘书已真实接通，可以在办公室交代目标。':'成员已真实接通，已进入办公室。');}).finally(()=>{secretaryFinishing=false;});
 }
 async function startOnboarding(provider) {
+  if($('secretary-connect-dialog').open&&currentOnboardingJobs().some(onboardingRunning))return;
   const candidate = (launchCandidates || []).find(item => launchProvider(item) === provider); if (!candidate || !onboardingSelectable(candidate) || onboardingStarting.has(provider)) return;
   const project = state?.projects?.find(item => item.id === projectId); if (!project) { showProject(); return; }
   const secretaryConnecting = $('secretary-connect-dialog').open && secretaryConnectRoom === roomId;
@@ -299,6 +326,7 @@ function renderRuntime() {
   if (history?.room && !legacyId) renderMemberChips();
 }
 function renderMemberChips(participants = history?.participants || []) {
+  participants=admittedMembers(participants);
   $('room-members').innerHTML = participants.length ? participants.map(member => { const status = memberStatus(member), observed = memberPresence(member); return `<button class="member-chip" data-member="${escape(member.id)}" title="${escape(`${member.name} · ${status.label} · ${observed.label}${observed.lastSeen ? ` · 最近响应 ${time(observed.lastSeen)}` : ''}${observed.canWake ? ' · 可以拉起工作会话' : ''}`)}">${avatar(member.name, member.adapter, member.appearance, member.id)}<span class="member-chip-name">${escape(member.name)}</span>${currentSecretary().member_id === member.id ? '<small class="secretary-inline-badge">秘书</small>' : ''}<i class="member-dot ${observed.status}"></i><small class="member-presence-label">${escape(observed.label)}</small></button>`; }).join('') : '<span class="members-empty">你在这里 · 等待其他成员加入</span>';
 }
 function renderResume() {
@@ -471,9 +499,9 @@ function renderSettings() {
   if (document.activeElement !== $('codex-path') && !$('codex-path').dataset.dirty) $('codex-path').value = codex.executable || '';
 }
 function renderRoom(project) {
-  const room = history.room, participants = history.participants || [], messages = history.messages || []; $('discussion-heading').textContent = room.title+(room.archived?' · 已归档':''); $('room-heading').textContent = room.title; $('room-eyebrow').textContent = 'LOCAL CHAT ROOM';
+  renderImageDrafts(); const room = history.room, participants = admittedMembers(history.participants), messages = history.messages || []; $('discussion-heading').textContent = room.title+(room.archived?' · 已归档':''); $('room-heading').textContent = room.title; $('room-eyebrow').textContent = 'LOCAL CHAT ROOM';
   $('room-subtitle').textContent = `${project?.name || room.project_name || ''} · ${participants.length} 位成员 · ${project?.access === 'workspace-write' ? '允许项目修改' : '默认仅查询资料'}`;
-  $('native-thread').classList.toggle('hidden',!participants.some(m=>['codex','native'].includes(m.adapter)&&m.native_thread_id)); $('composer').classList.remove('hidden'); $('legacy-note').classList.add('hidden'); $('room-members-bar').classList.remove('hidden');
+  $('native-thread').classList.toggle('hidden',!history.participants.some(m=>['codex','native'].includes(m.adapter)&&m.native_thread_id)); $('composer').classList.remove('hidden'); $('legacy-note').classList.add('hidden'); $('room-members-bar').classList.remove('hidden');
   renderMemberChips(participants);
   let selectedRecipient = roomRecipients.get(room.id);
   if (selectedRecipient === undefined || selectedRecipient && !participants.some(member => member.id === selectedRecipient)) selectedRecipient = messages.slice().reverse().find(message => message.sender_id === 'user' && participants.some(member => member.id === message.to_member_id))?.to_member_id || '';
@@ -490,7 +518,7 @@ function renderMessage(message, messages) {
   const name = message.coordination ? '办公室安排' : senderName(message.sender_id), member = memberById(message.sender_id), target = message.to_member_id ? senderName(message.to_member_id) : '', quoted = message.reply_to && messages.find(item => item.id === message.reply_to);
   if (['system','event'].includes(message.kind) || message.sender_id === 'system') return `<div class="system-message"><span>${escape(message.text)}</span><time>${time(message.created || message.created_at)}</time></div>`;
   const running = ['queued','creating','running','processing','waiting_input','pending','delivered'].includes(message.status);
-  return `<article class="chat-message ${message.sender_id === 'user' && !message.coordination ? 'own-message' : ''}" id="message-${escape(message.id)}"><div class="message-header">${avatar(name, member?.adapter,member?.appearance)}<button type="button" class="message-sender" ${member ? `data-open-member="${escape(member.id)}"` : 'disabled'}>${escape(name)}</button>${target ? `<span class="message-target">→ ${escape(target)}</span>` : ''}<time>${time(message.created || message.created_at)}</time></div><div class="message-body">${quoted ? `<div class="quoted-message"><strong>${escape(senderName(quoted.sender_id))}</strong><span>${escape(quoted.coordination?.title || plainMarkdown(quoted.text))}</span></div>` : ''}${messageContent(message)}${message.progress ? `<div class="progress-note">${escape(message.progress)}</div>` : ''}${message.error ? `<div class="error-note">${escape(message.error)}</div>` : ''}<div class="message-footer">${message.status && !['posted','completed','answered'].includes(message.status) ? pill(message.status) : ''}${desktop?.offline ? '' : `${messageCanReconcile(message) ? `<button class="text-button" data-reconcile-message="${escape(message.id)}">核实结果并结案</button>` : ''}<button class="text-button reply-button" data-reply="${escape(message.id)}">回复</button>${running ? `<button class="text-button danger" data-cancel-message="${escape(message.id)}">停止等待</button>` : ''}`}</div></div></article>`;
+  return `<article class="chat-message ${message.sender_id === 'user' && !message.coordination ? 'own-message' : ''}" id="message-${escape(message.id)}"><div class="message-header">${avatar(name, member?.adapter,member?.appearance)}<button type="button" class="message-sender" ${member ? `data-open-member="${escape(member.id)}"` : 'disabled'}>${escape(name)}</button>${target ? `<span class="message-target">→ ${escape(target)}</span>` : ''}<time>${time(message.created || message.created_at)}</time></div><div class="message-body">${quoted ? `<div class="quoted-message"><strong>${escape(senderName(quoted.sender_id))}</strong><span>${escape(quoted.coordination?.title || plainMarkdown(quoted.text))}</span></div>` : ''}${messageContent(message)}<div class="message-images">${messageImages(message)}</div>${message.progress ? `<div class="progress-note">${escape(message.progress)}</div>` : ''}${message.error ? `<div class="error-note">${escape(message.error)}</div>` : ''}<div class="message-footer">${message.status && !['posted','completed','answered'].includes(message.status) ? pill(message.status) : ''}${desktop?.offline ? '' : `${messageCanReconcile(message) ? `<button class="text-button" data-reconcile-message="${escape(message.id)}">核实结果并结案</button>` : ''}<button class="text-button reply-button" data-reply="${escape(message.id)}">回复</button>${running ? `<button class="text-button danger" data-cancel-message="${escape(message.id)}">停止等待</button>` : ''}`}</div></div></article>`;
 }
 function renderTyping(messages) {
   const states = {queued:'已排队，等待接手',pending:'等待接手',delivered:'已送达，等待接手',consumed:'已读取，等待回复',creating:'正在打开工作会话',running:'正在思考',processing:'正在思考',waiting_input:'在等你确认'};
@@ -616,14 +644,14 @@ function renderSetup() {
 function updateRecipientNote() { if (recipientRoom === roomId) roomRecipients.set(roomId,$('recipient').value); const target = memberById($('recipient').value), observed = target && memberPresence(target); $('recipient-note').textContent = target ? observed.canWake ? `交给 ${target.name} · 可按需拉起工作会话` : ['online','worker_online'].includes(observed.status) ? `交给 ${target.name} · ${observed.label}` : `消息会保留 · ${target.name} ${observed.label}` : '公告会保存到房间，不自动唤醒成员'; }
 function setReply(message) { replyTo = message?.id || null; $('reply-preview').classList.toggle('hidden', !message); if (message) { $('reply-to-name').textContent = `回复 ${senderName(message.sender_id)}`; $('reply-to-text').textContent = plainMarkdown(message.text); if (message.sender_id !== 'user' && history.participants?.some(member => member.id === message.sender_id)) $('recipient').value = message.sender_id; updateRecipientNote(); if(document.body.classList.contains('office-view'))toggleOfficeComposer(true);else $('prompt').focus(); } updateOfficeComposerPresentation(); }
 function mentionedMember(text) {
-  const named = (history?.participants || []).filter(member => text.toLocaleLowerCase().startsWith('@' + member.name.toLocaleLowerCase()) && /^(?:\s|[，。,:：!?！？]|$)/u.test(text.slice(member.name.length + 1))).sort((a,b) => b.name.length - a.name.length);
+  const named = admittedMembers(history?.participants).filter(member => text.toLocaleLowerCase().startsWith('@' + member.name.toLocaleLowerCase()) && /^(?:\s|[，。,:：!?！？]|$)/u.test(text.slice(member.name.length + 1))).sort((a,b) => b.name.length - a.name.length);
   if (!named.length) return null;
   const matches = named.filter(member => member.name.length === named[0].name.length);
   if (matches.length > 1) { const selected = matches.find(member => member.id === $('recipient').value); if (selected) return selected; throw new Error('房间里有同名成员，请在收件人列表中选定要交给哪一位。'); }
   return matches[0];
 }
 function moveMention(step) { const buttons = [...$('mention-choices').querySelectorAll('[data-mention]')]; if (!buttons.length) return; mentionIndex = (mentionIndex + step + buttons.length) % buttons.length; buttons.forEach((button,index) => button.classList.toggle('active',index === mentionIndex)); }
-function renderMentions() { mentionIndex = 0; const text = $('prompt').value.slice(0,$('prompt').selectionStart), match = text.match(/@([^\s@]*)$/u), members = match ? (history?.participants || []).filter(member => member.name.toLowerCase().includes(match[1].toLowerCase())) : []; $('mention-choices').classList.toggle('hidden', !members.length); $('mention-choices').innerHTML = members.map((member,index) => `<button type="button" class="${index ? '' : 'active'}" data-mention="${escape(member.id)}">${avatar(member.name,member.adapter,member.appearance,member.id)}<span>@${escape(member.name)}</span></button>`).join(''); }
+function renderMentions() { mentionIndex = 0; const text = $('prompt').value.slice(0,$('prompt').selectionStart), match = text.match(/@([^\s@]*)$/u), members = match ? admittedMembers(history?.participants).filter(member => member.name.toLowerCase().includes(match[1].toLowerCase())) : []; $('mention-choices').classList.toggle('hidden', !members.length); $('mention-choices').innerHTML = members.map((member,index) => `<button type="button" class="${index ? '' : 'active'}" data-mention="${escape(member.id)}">${avatar(member.name,member.adapter,member.appearance,member.id)}<span>@${escape(member.name)}</span></button>`).join(''); }
 function installDesktopChrome() {
   if (!desktop) return;
   const card = document.createElement('section'); card.id = 'desktop-service'; card.className = 'desktop-service'; card.setAttribute('aria-label','协作服务');
@@ -645,7 +673,7 @@ function renderService() {
   const readOnly = !webConnected;
   renderRoomActions();
   document.querySelectorAll('[data-delete-room]').forEach(button=>{button.disabled=readOnly;});
-  for (const id of ['add-project','add-room','mobile-add-project','mobile-add-room','launch-add-project','welcome-project','welcome-room','welcome-members','room-member-add','empty-add-member','inspector-add-member','send-button','prompt','recipient','scan-agents','onboarding-refresh','launch-refresh']) {
+  for (const id of ['add-project','add-room','mobile-add-project','mobile-add-room','launch-add-project','welcome-project','welcome-room','welcome-members','room-member-add','empty-add-member','inspector-add-member','send-button','attach-image','image-input','prompt','recipient','scan-agents','onboarding-refresh','launch-refresh']) {
     const control = $(id); if (!control) continue;
     if (readOnly && !control.disabled) {control.dataset.serviceBlocked='true';control.disabled=true;}
     else if (!readOnly && control.dataset.serviceBlocked === 'true') {control.disabled=false;delete control.dataset.serviceBlocked;}
@@ -721,7 +749,7 @@ function updateOfficeComposerPresentation() {
   if(visual)$('composer').setAttribute('aria-hidden',String(!expanded));else $('composer').removeAttribute('aria-hidden');
   $('office-composer-close').classList.toggle('hidden',!visual);$('office-compose-launch').classList.toggle('hidden',!visual || expanded);
   $('office-compose-launch').setAttribute('aria-expanded',String(expanded));
-  const hasDraft=!!$('prompt').value.trim() || !!replyTo || !!pendingSubmission;
+  const hasDraft=!!$('prompt').value.trim() || !!replyTo || !!pendingSubmission || !!draftImages().length;
   $('office-compose-launch').textContent=hasDraft?'继续消息 ↗':'发消息 ↗';
   updateOfficeKeyboardInset();
 }
@@ -748,7 +776,7 @@ function currentSecretary(selectedRoom = roomId) {
 function secretaryMember(selected = currentSecretary()) { return (history?.room?.id === roomId ? history.participants || [] : []).find(member => member.id === selected.member_id); }
 function secretaryTutorialVisible() {
   if (!roomId || legacyId || !history?.room || !professionalView) return false;
-  return secretaryOpenRoom === roomId || (!(history.participants || []).length && !secretaryDismissed.has(roomId));
+  return secretaryOpenRoom === roomId || (!admittedMembers(history.participants).length && !secretaryDismissed.has(roomId));
 }
 function secretaryHasReply(selected) {
   // A processing status or a handshaken member is not a secretary response.
@@ -783,7 +811,7 @@ function renderSecretary() {
   panel.classList.toggle('hidden',!visible); $('secretary-room-entry').classList.toggle('hidden',!available || visible || document.body.classList.contains('office-view'));
   $('secretary-role-card').classList.toggle('hidden',!available);
   if (!available) return;
-  const selected = currentSecretary(), member = secretaryMember(selected), members = history.participants || [], ready = selected.status === 'ready' && !!member, replied = secretaryHasReply(selected), started = !!selected.request_id && !!selected.member_id;
+  const selected = currentSecretary(), member = secretaryMember(selected), members = admittedMembers(history.participants), ready = selected.status === 'ready' && !!member, replied = secretaryHasReply(selected), started = !!selected.request_id && !!selected.member_id;
   $('empty-room').classList.toggle('hidden',visible || (history.messages || []).length > 0);
   $('secretary-room-entry').textContent = selected.member_id ? `与 ${selected.name || member?.name || '秘书'} 协作 ↗` : '从 AI 秘书开始 ↗';
   $('secretary-title').textContent = selected.member_id ? `和 ${selected.name || member?.name || '你的秘书'} 一起组织办公室` : '先选一位 AI，当你的秘书';
@@ -813,10 +841,14 @@ function renderSecretary() {
   $('secretary-error').classList.toggle('hidden',!secretaryError); $('secretary-error').textContent = secretaryError;
   $('secretary-role-card').innerHTML = `<div class="secretary-role-heading"><span class="secretary-role-mark">✦</span><div><strong>${escape(selected.name || '办公室秘书')}</strong><small>${escape(secretaryStatusText(selected))}</small></div></div><p>${selected.member_id ? '梳理目标、安排任务并跟进交付。添加其他 AI 仍由你选择。' : '先选一位成员，和它一起组织这间办公室。'}</p><button type="button" class="secondary" data-secretary-open>${selected.member_id ? '管理秘书 / 查看教程' : '选择 AI 秘书'}</button>${selected.member_id ? `<button type="button" class="text-button" data-secretary-reset ${!webConnected || secretaryBusy ? 'disabled' : ''}>清除秘书角色</button>` : ''}`;
   $('secretary-role-card').classList.toggle('hidden',!roomId || !!legacyId);
-  $('secretary-connect-status').textContent = !webConnected ? '服务未连接，请先开启本机服务。' : secretaryConnectRoom === roomId ? '接入完成后，回到教程选择这位真实成员当秘书。' : '你已切换房间。关闭此页后，在目标房间重新接入。';
+  $('secretary-connect-status').textContent = !webConnected ? '服务未连接，请先开启本机服务。' : secretaryConnectRoom === roomId ? '先接通一位可后台回答的秘书；成功后自动进入办公室。' : '你已切换房间。关闭此页后，在目标房间重新接入。';
   $('secretary-scan-agents').disabled = !webConnected || launchScanning || secretaryConnectRoom !== roomId;
-  $('secretary-connect-candidates').innerHTML = $('launch-candidates').innerHTML; $('secretary-connect-progress').innerHTML = $('onboarding-jobs').innerHTML;
-  $('secretary-connect-candidates').querySelectorAll('button').forEach(button => { if(secretaryConnectRoom !== roomId) button.disabled = true; });
+  $('secretary-connect-candidates').innerHTML = $('launch-candidates').innerHTML;
+  $('secretary-connect-candidates').querySelectorAll('.launch-candidate').forEach(card=>{const provider=card.querySelector('[data-launch-provider]')?.dataset.launchProvider;card.classList.toggle('hidden',!['codex','claude-code','qwen-code','gemini-cli'].includes(provider));});
+  $('secretary-connect-candidates').querySelectorAll('.launch-candidate-select').forEach(element=>element.remove());
+  const attempt=onboardingJobs.get(secretaryConnectJob)||currentOnboardingJobs().find(job=>onboardingRunning(job))||currentOnboardingJobs()[0];
+  $('secretary-connect-progress').innerHTML=attempt?onboardingJobMarkup(attempt):'';
+  $('secretary-connect-candidates').querySelectorAll('button').forEach(button => { if(secretaryConnectRoom !== roomId||onboardingRunning(attempt)) button.disabled = true; });
   $('secretary-connect-progress').querySelectorAll('button').forEach(button => { if(secretaryConnectRoom !== roomId || !webConnected) button.disabled = true; });
   $('secretary-connect-error').textContent = launchError; $('secretary-connect-error').classList.toggle('hidden',!launchError);
 }
@@ -886,7 +918,7 @@ function openSecretaryConnect() {
 function updateOfficeScene() {
   if(!officeView || !professionalView || !history?.room || legacyId) return;
   if(!officeScene && window.AgentOfficeScene) officeScene=window.AgentOfficeScene.mount($('officeScene'),{onCompose:()=>toggleOfficeComposer(true),onChooseSecretary:openSecretaryTutorial,onSelectMember:member=>{if(!submitting && [...$('recipient').options].some(option=>option.value===member.id)){$('recipient').value=member.id;updateRecipientNote();}toggleOfficeComposer(true);},onCustomize:member=>openInspector('appearance',member.id),onSceneSettings:()=>openInspector('scene'),onSelectMessage:message=>{selectRoomView(false);requestAnimationFrame(()=>$('message-'+message.id)?.scrollIntoView({block:'center',behavior:'smooth'}));}});
-  officeScene?.update({roomId:history.room.id,participants:history.participants||[],messages:history.messages||[],runtime,online:webConnected,scene:state?.office?.[history.room.id]||{},secretary:currentSecretary(),tutorialVisible:secretaryTutorialVisible()});
+  officeScene?.update({roomId:history.room.id,participants:admittedMembers(history.participants),messages:history.messages||[],runtime,online:webConnected,scene:state?.office?.[history.room.id]||{},secretary:currentSecretary(),tutorialVisible:secretaryTutorialVisible()});
 }
 function detailRows(values) {return values.map(([label,value])=>`<dt>${escape(label)}</dt><dd>${escape(value || '—')}</dd>`).join('');}
 function doctorTarget() { return $('connection-doctor-old-member').value.trim() || $('connection-doctor-member').value || null; }
@@ -1222,7 +1254,7 @@ $('onboarding-jobs').onclick = event => { const button = event.target.closest('[
     else if (button.dataset.onboardingOperation) {
       const operation = button.dataset.onboardingOperation;
       const response = operation === 'retry' || operation === 'install_runtime' ? await api(`/api/onboarding/jobs/${encodeURIComponent(jobId)}/retry`,operation === 'install_runtime' ? {install_runtime:true} : {}) : await api('/api/onboarding/action',{run_id:jobId,operation});
-      const updated = onboardingView(response); if (updated?.id) onboardingJobs.set(updated.id,updated); renderLaunch(); action(refreshOnboarding); toast(operation === 'login_client' ? '首次配置入口已请求打开。完成后点击继续接入。' : '已请求继续接入这个成员。');
+      const updated = onboardingView(response); if (updated?.id) onboardingJobs.set(updated.id,updated); renderLaunch(); action(refreshOnboarding); toast(response.action?.instruction || (operation === 'login_client' ? '首次配置入口已请求打开。完成后点击继续接入。' : '已请求继续接入这个成员。'));
     }
     else if (button.dataset.onboardingConfig) { const sessionId = job.launch_session_id || job.session_id; if (!sessionId) throw new Error('这个成员的导入配置尚未准备完成。'); await copyClientConfiguration(sessionId,job.provider); }
     else {
@@ -1305,11 +1337,22 @@ async function copy(kind) { const data = await api('/api/onboarding'); await nav
 $('copy-grok-setup').onclick = () => action(() => copy('grok')); $('copy-mcp').onclick = () => action(() => copy('mcp')); $('copy-skill').onclick = () => action(() => copy('skill'));
 $('recipient').onchange = updateRecipientNote; $('cancel-reply').onclick = () => setReply(null);
 document.querySelectorAll('[data-prompt]').forEach(button => button.onclick = () => { $('prompt').value = button.dataset.prompt; if (!$('recipient').value && history?.participants?.length) $('recipient').value = history.participants[0].id; updateRecipientNote(); $('prompt').focus(); });
+$('attach-image').onclick=()=>$('image-input').click();
+$('image-input').onchange=()=>{const files=Array.from($('image-input').files||[]);$('image-input').value='';action(()=>addChatImages(files));};
+$('composer').addEventListener('paste',event=>{const files=Array.from(event.clipboardData?.files||[]);if(files.length){event.preventDefault();const text=event.clipboardData.getData('text/plain');if(text)$('prompt').setRangeText(text,$('prompt').selectionStart,$('prompt').selectionEnd,'end');action(()=>addChatImages(files));}});
+$('composer').addEventListener('dragover',event=>{if(event.dataTransfer?.types.includes('Files')){event.preventDefault();event.dataTransfer.dropEffect='copy';}});
+$('composer').addEventListener('drop',event=>{if(event.dataTransfer?.files.length){event.preventDefault();action(()=>addChatImages(event.dataTransfer.files));}});
+$('image-drafts').onclick=event=>{const button=event.target.closest('[data-remove-image]');if(button){imageDrafts.set(roomId,draftImages().filter(image=>image.id!==button.dataset.removeImage));renderImageDrafts();updateOfficeComposerPresentation();}};
+$('messages').addEventListener('click',event=>{const link=event.target.closest('[data-show-image]');if(link){event.preventDefault();$('image-full').src='/api/chat/images/'+link.dataset.showImage;$('image-dialog').showModal();}});
+$('image-close').onclick=()=>$('image-dialog').close();
 $('composer').onsubmit = event => { event.preventDefault(); if (submitting) return; action(async () => {
-  const text = $('prompt').value.trim(); if (!text || !roomId || legacyId) return; const named = mentionedMember(text); if (named) { $('recipient').value = named.id; updateRecipientNote(); } const target = $('recipient').value || null, submittedRoom=roomId, fingerprint = JSON.stringify([submittedRoom,target,text,replyTo]);
+  const text = $('prompt').value.trim(),images=draftImages().slice(); if ((!text&&!images.length) || !roomId || legacyId) return; const named = mentionedMember(text); if (named) { $('recipient').value = named.id; updateRecipientNote(); } const target = $('recipient').value || null, submittedRoom=roomId, fingerprint = JSON.stringify([submittedRoom,target,text,replyTo,images.map(image=>image.id)]);
   if (!pendingSubmission || pendingSubmission.fingerprint !== fingerprint) pendingSubmission = {fingerprint,key:crypto.randomUUID()}; submitting = true; $('send-button').disabled = true;
-  try { await api('/api/chat/messages',{room_id:submittedRoom,sender_id:'user',to_member_id:target,text,idempotency_key:pendingSubmission.key,reply_to:replyTo}); pendingSubmission = null; const unchanged=JSON.stringify([roomId,$('recipient').value||null,$('prompt').value.trim(),replyTo])===fingerprint; if(unchanged){$('prompt').value = ''; $('mention-choices').classList.add('hidden'); setReply(null); if(document.body.classList.contains('office-view'))toggleOfficeComposer(false);} await refresh(); if(!officeView)$('chat-stream').scrollTop = $('chat-stream').scrollHeight; }
-  finally { submitting = false; $('send-button').disabled = !webConnected;updateOfficeComposerPresentation(); }
+  try { await api('/api/chat/messages',{room_id:submittedRoom,sender_id:'user',to_member_id:target,text,idempotency_key:pendingSubmission.key,reply_to:replyTo,attachments:images.map(({name,data_url})=>({name,data_url}))}); pendingSubmission = null;
+    const unchanged=JSON.stringify([roomId,$('recipient').value||null,$('prompt').value.trim(),replyTo,draftImages().map(image=>image.id)])===fingerprint;
+    if(unchanged){$('prompt').value = ''; imageDrafts.delete(submittedRoom);renderImageDrafts();$('mention-choices').classList.add('hidden'); setReply(null); if(document.body.classList.contains('office-view'))toggleOfficeComposer(false);}else{const sentIds=new Set(images.map(image=>image.id));imageDrafts.set(submittedRoom,(imageDrafts.get(submittedRoom)||[]).filter(image=>!sentIds.has(image.id)));renderImageDrafts();}
+    await refresh(); if(!officeView)$('chat-stream').scrollTop = $('chat-stream').scrollHeight;
+  }finally { submitting = false; $('send-button').disabled = !webConnected;updateOfficeComposerPresentation(); }
 }); };
 $('prompt').oninput = ()=>{renderMentions();updateOfficeComposerPresentation();};
 $('prompt').onkeydown = event => {
