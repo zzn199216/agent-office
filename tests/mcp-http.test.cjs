@@ -143,7 +143,8 @@ test('real HTTP MCP tools complete an addressed mailbox question and reply witho
   const message = posted.data.result.structuredContent;
   const inbox = await h.invoke(h.second.card, second, 'agentroom_chat_inbox');
   assert.equal(Array.isArray(inbox.data.result.structuredContent), false);
-  assert.deepEqual(inbox.data.result.structuredContent.items, JSON.parse(inbox.data.result.content[0].text));
+  assert.deepEqual(inbox.data.result.structuredContent, JSON.parse(inbox.data.result.content[0].text));
+  assert.equal(inbox.data.result.content.length, 1);
   assert.equal(inbox.data.result.structuredContent.items[0].id, message.id);
   const replied = await h.invoke(h.second.card, second, 'agentroom_chat_reply', { message_id: message.id, text: 'Actual fixture answer', idempotency_key: 'one-answer' });
   assert.notEqual(replied.data.result.isError, true);
@@ -268,7 +269,8 @@ test('one imported connection receives messages in newly joined rooms and report
   assert.equal(inbox.data.result.structuredContent.connection.member_id, h.first.person.id);
   assert.equal(inbox.data.result.structuredContent.connection.room_scope, 'joined_rooms');
   assert.deepEqual(new Set(inbox.data.result.structuredContent.connection.rooms.map(room => room.id)), new Set([h.room.id, fresh.id]));
-  assert.ok(inbox.data.result.content[1].text.includes(fresh.id));
+  assert.equal(inbox.data.result.content.length, 1);
+  assert.deepEqual(JSON.parse(inbox.data.result.content[0].text), inbox.data.result.structuredContent);
   const history = await h.invoke(h.first.card, session, 'agentroom_chat_history', { room_id: fresh.id });
   assert.equal(history.data.result.isError, undefined);
   h.service.chat.store.deleteRoom(h.room.id, () => {}, { force: true });

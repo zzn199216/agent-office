@@ -138,7 +138,7 @@ function createMcpHttp(service, options = {}) {
           // A room other than the card's home room is allowed when the user has seated
           // this member there; the route policy checks that seat on every call.
           const value = await toolCall(name, args, boundApi(card), contextFor(card));
-          result = await toolResult(name,value,boundApi(card),contextFor(card));
+          result = await toolResult(name,value,boundApi(card),{...contextFor(card),textResultFormat:'structured'});
         } catch (error) {
           const message = readableError(error).replaceAll(card.secret, '[credential]');
           result = { isError: true, content: [{ type: 'text', text: message }] };

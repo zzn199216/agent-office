@@ -170,8 +170,13 @@ async function toolResult(name,value,api,context={}){
     if(context.connection){
       const connection={...context.connection,queried_at:new Date().toISOString()};
       result.structuredContent={...result.structuredContent,connection};
-      result.content.push({type:'text',text:'Current authenticated Agent Office connection: '+JSON.stringify(connection)+'. This result uses current joined rooms, not the original entry card room. No new MCP configuration is needed for a room change.'});
+      // Native HTTP hosts may serialize content again before sending it to
+      // their model. Give them one JSON object, with the same shape as the
+      // structured result, rather than a list followed by diagnostic prose.
+      // Existing stdio consumers keep their first-block array contract.
+      if(context.textResultFormat!=='structured')result.content.push({type:'text',text:'Current authenticated Agent Office connection: '+JSON.stringify(connection)+'. This result uses current joined rooms, not the original entry card room. No new MCP configuration is needed for a room change.'});
     }
+    if(context.textResultFormat==='structured')result.content[0].text=JSON.stringify(result.structuredContent);
     for(const message of messages)for(const attachment of message.attachments||[]){
       if(count++>=4)return result;
       if(total+(attachment.size||0)>8*1024*1024)return result;
