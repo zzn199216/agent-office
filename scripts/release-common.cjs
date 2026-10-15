@@ -6,7 +6,10 @@ function git(root,args){const r=spawnSync('git',args,{cwd:root,encoding:'utf8',w
 function sourceState(root){
   const head=git(root,['rev-parse','HEAD']).trim(),status=git(root,['status','--porcelain=v1','--untracked-files=all']),files=git(root,['ls-files','-z','--cached','--others','--exclude-standard']).split('\0').filter(Boolean).sort(),digest=crypto.createHash('sha256');digest.update(head+'\0');
   for(const name of files){const file=path.resolve(root,name);if(!file.startsWith(path.resolve(root)+path.sep))throw new Error('Source path escapes the repository.');digest.update(name+'\0');if(!fs.existsSync(file)){digest.update('deleted\0');continue;}const stat=fs.lstatSync(file);if(!stat.isFile()||stat.isSymbolicLink())throw new Error('Release source must use regular files: '+name);digest.update(sha(file)+'\0');}
-  return {head,clean:!status.trim(),fingerprint:digest.digest('hex')};
+  const clean=!status.trim(),worktree_fingerprint=digest.digest('hex');
+  // A clean checkout may use CRLF for PS1/CMD while another uses LF. Git HEAD
+  // binds their canonical content; keep the physical byte digest separately.
+  return {head,clean,fingerprint:clean?crypto.createHash('sha256').update(head+'\0clean').digest('hex'):worktree_fingerprint,worktree_fingerprint};
 }
 function acquireLock(file){
   fs.mkdirSync(path.dirname(file),{recursive:true});const value={pid:process.pid,host:os.hostname(),token:crypto.randomUUID(),created:new Date().toISOString()};

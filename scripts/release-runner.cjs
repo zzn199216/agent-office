@@ -29,6 +29,12 @@ function copySdkCache(root,snapshot){
   const {SDK_VERSION,SDK_SHA256}=require(path.join(snapshot,'scripts','build-desktop.cjs')),relative=path.join('dist','webview2-sdk',SDK_VERSION,'webview2.nupkg'),cached=path.join(root,relative);
   if(fs.existsSync(cached)&&!fs.lstatSync(cached).isSymbolicLink()&&sha(cached)===SDK_SHA256){const target=path.join(snapshot,relative);fs.mkdirSync(path.dirname(target),{recursive:true});fs.copyFileSync(cached,target);}
 }
+function importReport(result,root,requestId,overrides={}){
+  const directory=path.join(root,'output','release-runs',requestId),original=path.dirname(result.result_path);fs.mkdirSync(directory,{recursive:true});
+  for(const name of fs.readdirSync(original)){if(!/^[a-z0-9.-]+\.(?:json|log)$/.test(name)||name==='result.json')continue;fs.copyFileSync(regularFile(original,name),path.join(directory,name));}
+  const imported={...result,...overrides,result_path:path.join(directory,'result.json'),request_id:requestId,steps:result.steps.map(row=>({...row,log:path.join(directory,path.basename(row.log)),...row.error?{error:row.error.replaceAll(original,directory)}:{}})),...result.error?{error:result.error.replaceAll(original,directory)}:{}};
+  atomicJson(imported.result_path,imported);return imported;
+}
 async function executeRequest(request,{root,signal,statusDirectory,logDirectory}){
   const temporary=fs.mkdtempSync(path.join(os.tmpdir(),'agentoffice-runner-')),snapshot=path.join(temporary,'source'),before=sourceState(root);let unlock;
   const command=async(name,command,args,cwd=root)=>{const result=await execute(command,args,{cwd,signal,log:path.join(logDirectory,name+'.log')});if(result.exit_code!==0||result.aborted||result.timed_out)throw new Error(name+' failed; see the runner log.');};
@@ -44,13 +50,11 @@ async function executeRequest(request,{root,signal,statusDirectory,logDirectory}
       const resultPath=path.join(statusDirectory,request.id+'-result.json');atomicJson(resultPath,{status:'ok',steps:['check'],source:pinned,models_called:false});return {result_path:resultPath,source:pinned};
     }
     copyDependencies(root,snapshot);copySdkCache(root,snapshot);
-    await command('release',process.execPath,['scripts/release.cjs','--json'],snapshot);
+    try{await command('release',process.execPath,['scripts/release.cjs','--json'],snapshot);}catch(error){const latest=path.join(snapshot,'output',`release-${request.expected_version}.json`);if(fs.existsSync(latest)){const failed=importReport(JSON.parse(fs.readFileSync(latest,'utf8')),root,request.id);throw Object.assign(new Error(failed.error||error.message),{result_path:failed.result_path});}throw error;}
     const result=JSON.parse(fs.readFileSync(path.join(snapshot,'output',`release-${request.expected_version}.json`),'utf8'));
     if(result.status!=='ok'||!result.fully_verified||sourceState(root).fingerprint!==before.fingerprint)throw new Error('Release failed or the shared source changed; no delivery was published.');
-    const verified=verifyArtifacts(result.package_directory,result.zip_path,request.expected_version,result.source),published=publishArtifacts(root,result.package_directory,result.zip_path,verified,request.id+'-'+result.run_id),reportDirectory=path.join(root,'output','release-runs',request.id);fs.mkdirSync(reportDirectory,{recursive:true});
-    for(const name of fs.readdirSync(path.dirname(result.result_path))){if(!/^[a-z0-9.-]+\.(?:json|log)$/.test(name)||name==='result.json')continue;fs.copyFileSync(regularFile(path.dirname(result.result_path),name),path.join(reportDirectory,name));}
-    const imported={...result,...published,result_path:path.join(reportDirectory,'result.json'),request_id:request.id,steps:result.steps.map(row=>({...row,log:path.join(reportDirectory,path.basename(row.log))})),temporary_directory:null};
-    atomicJson(imported.result_path,imported);atomicJson(path.join(root,'output',`release-${request.expected_version}.json`),imported);return {result_path:imported.result_path,source:result.source,package_directory:published.package_directory};
+    const verified=verifyArtifacts(result.package_directory,result.zip_path,request.expected_version,result.source),published=publishArtifacts(root,result.package_directory,result.zip_path,verified,request.id+'-'+result.run_id),imported=importReport(result,root,request.id,{...published,temporary_directory:null});
+    atomicJson(path.join(root,'output',`release-${request.expected_version}.json`),imported);return {result_path:imported.result_path,source:result.source,package_directory:published.package_directory};
   }finally{try{cleanStage(temporary);}finally{unlock?.();}}
 }
 async function processQueue(options={},dependencies={}){
@@ -70,7 +74,7 @@ async function processQueue(options={},dependencies={}){
       const logDirectory=path.join(root,'output','release-runs',id);fs.mkdirSync(logDirectory,{recursive:true});
       const controller=new AbortController();let timedOut=false;const timer=setTimeout(()=>{timedOut=true;controller.abort();},options.timeoutMs||20*60*1000),running={id,status:'running',created:request.created,started:new Date(now()).toISOString(),expected_head:request.expected_head,log_path:logDirectory};atomicJson(statusFile,running);
       try{const result=await executor(request,{root,signal:controller.signal,statusDirectory:statuses,logDirectory});if(timedOut)throw new Error('Host execution timed out; it was not replayed.');atomicJson(statusFile,{...running,...result,status:'ok',finished:new Date(now()).toISOString()});results.push({id,status:'ok'});}
-      catch(error){atomicJson(statusFile,{...running,status:'failed',timed_out:timedOut,error:error.message,finished:new Date(now()).toISOString()});results.push({id,status:'failed'});}
+      catch(error){atomicJson(statusFile,{...running,status:'failed',timed_out:timedOut,error:error.message,...error.result_path?{result_path:error.result_path}:{},finished:new Date(now()).toISOString()});results.push({id,status:'failed'});}
       finally{clearTimeout(timer);processed++;}
     }
   }finally{unlock();}
@@ -78,4 +82,4 @@ async function processQueue(options={},dependencies={}){
 }
 function parseArgs(args){let root;for(let i=0;i<args.length;i++){if(args[i]==='--once')continue;if(args[i]==='--root'&&args[i+1]&&!args[i+1].startsWith('--')){root=path.resolve(args[++i]);continue;}throw new Error('Usage: node scripts/release-runner.cjs --once [--root REPOSITORY]');}return {root};}
 if(require.main===module){let options;try{options=parseArgs(process.argv.slice(2));}catch(error){console.error(error.message);process.exitCode=1;}if(options)processQueue(options).then(result=>console.log(JSON.stringify(result))).catch(error=>{console.error(error.message);process.exitCode=1;});}
-module.exports={processQueue,validateRequest,executeRequest,parseArgs,copyDependencies};
+module.exports={processQueue,validateRequest,executeRequest,parseArgs,copyDependencies,importReport};
