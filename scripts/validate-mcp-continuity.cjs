@@ -10,7 +10,9 @@ const { sleep, VERSION } = require('../src/util.cjs');
 let stage = 'seed';
 
 async function main() {
-  const files = fixture(), executable = path.resolve(process.argv[2] || path.join(__dirname, '../dist/AgentOffice.exe'));
+  const executable = path.resolve(process.argv[2] || path.join(__dirname, '../dist/AgentOffice.exe'));
+  const upgrade = process.argv[3] ? await require('./validate-mcp-upgrade.cjs').validateUpgrade(executable,path.resolve(process.argv[3]),value=>{stage=value;}) : {};
+  const files = fixture();
   let child, control;
   const service = new RoomService(files.data, { codex: new FakeCodex(), vault: new FakeVault() });
   const project = service.addProject({ name: 'Packaged MCP continuity', path: files.project });
@@ -70,7 +72,7 @@ async function main() {
     assert.equal(inbox.value.result.isError, undefined); assert.deepEqual(inbox.value.result.structuredContent.items.map(item => item.id), [message.id]);
     assert.equal(inbox.value.result.structuredContent.connection.default_room_id, fresh.id);
     assert.deepEqual(inbox.value.result.structuredContent.connection.rooms.map(item => item.id), [fresh.id]);
-    const evidence = { version: VERSION, packaged_backend: true, generic_templates_generated: true, same_url: true, same_credential: true, same_http_session: true, identity_connected_without_rooms: true, new_room_message_received: true, deleted_home_recovered: true, same_instance: true, native_qwen_tested: false, user_windows_changed: false, model_calls: 0 };
+    const evidence = { version: VERSION, packaged_backend: true, generic_templates_generated: true, same_url: true, same_credential: true, same_http_session: true, identity_connected_without_rooms: true, new_room_message_received: true, deleted_home_recovered: true, same_instance: true, native_qwen_tested: false, user_windows_changed: false, model_calls: 0, ...upgrade };
     const output = path.resolve(__dirname, '../output/validation/mcp-continuity-' + VERSION + '.json'); fs.mkdirSync(path.dirname(output), { recursive: true }); fs.writeFileSync(output, JSON.stringify(evidence, null, 2)); console.log(JSON.stringify(evidence, null, 2));
     await stop();
   } finally {

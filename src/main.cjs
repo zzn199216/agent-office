@@ -13,7 +13,9 @@ async function apiCall(dir,endpoint,input,timeout=35000){
 }
 async function ensureServer(dir){
   if(readControl(dir)){try{const state=await apiCall(dir,'/api/state',undefined,3000);let expected;const file=path.join(dir,'room.sqlite');if(fs.existsSync(file)){const {DatabaseSync}=require('node:sqlite');const db=new DatabaseSync(file,{readOnly:true});try{const row=db.prepare("SELECT value FROM settings WHERE key='instance_fingerprint'").get();expected=row?JSON.parse(row.value):null;}finally{db.close();}}if(expected&&state.instance_id!==expected)throw new RoomError('处理程序与磁盘实例不匹配，没有连接另一空聊天室。',409,'instance_control_mismatch');return readControl(dir);}catch(e){if(e.code==='instance_control_mismatch')throw e;if(e.status===401||e.status===403)throw new RoomError('已有处理程序身份不匹配，没有另建替代实例。',409,'instance_control_mismatch');}}
-  fs.mkdirSync(dir,{recursive:true});const log=fs.openSync(path.join(dir,'daemon.log'),'a');const own=ownCommand();
+  fs.mkdirSync(dir,{recursive:true});const own=ownCommand();
+  if(isSea()){const current=require('./install.cjs').activeRuntime(dir);if(current)own.command=current;}
+  const log=fs.openSync(path.join(dir,'daemon.log'),'a');
   const child=spawn(own.command,[...own.args,'serve','--data-dir',dir],{detached:true,windowsHide:true,stdio:['ignore',log,log],env:{...process.env,AGENTROOM_DATA_DIR:dir}});child.unref();fs.closeSync(log);
   for(let i=0;i<80;i++){await sleep(250);if(readControl(dir)){try{await apiCall(dir,'/api/state',undefined,2000);return readControl(dir);}catch{}}}
   throw new RoomError(`启动未完成，请查看 ${path.join(dir,'daemon.log')}。`,503,'start_timeout');

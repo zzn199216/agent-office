@@ -23,7 +23,7 @@ async function discoverDesktop(endpoint,provider,{fetchImpl=fetch,timeoutMs=3000
   const targets=await response.json();
   if(!Array.isArray(targets)||targets.length>200)throw new RoomError('桌面对话列表无效。',502,'desktop_target_invalid');
   const matches=targets.filter(target=>targetMatches(target,provider));
-  if(matches.length!==1)throw new RoomError(matches.length?'发现多个桌面对话宿主，请选择对应应用实例。':'没有找到这个应用的原生对话宿主。',409,'desktop_target_ambiguous');
+  if(matches.length!==1){const error=new RoomError(matches.length?'发现多个桌面对话宿主，请选择对应应用实例。':'没有找到这个应用的原生对话宿主。',409,'desktop_target_ambiguous');if(!matches.length)error.retryable=true;throw error;}
   const target=matches[0];let socket;try{socket=new URL(target.webSocketDebuggerUrl);}catch{throw new RoomError('桌面对话通道无效。',502,'desktop_target_invalid');}
   if(socket.protocol!=='ws:'||!LOOPBACK.has(socket.hostname)||socket.port!==url.port||socket.username||socket.password)throw new RoomError('桌面对话通道不属于已选择的本机端口。',403,'desktop_target_invalid');
   return {id:target.id,provider,url:target.url,socket:socket.href};

@@ -29,7 +29,7 @@ test('protocol verification never claims a loaded native conversation or actual 
   assert.match(f.$('member-connect-guide').innerHTML,/待连接验证/);assert.match(f.$('member-connect-guide').innerHTML,/待实际任务验证/);
   assert.match(f.$('member-setup-status').innerHTML,/本人对话待验证/);assert.doesNotMatch(f.$('member-setup-status').innerHTML,/旧协议已验证|old-protocol-proof|验证于/);
   f.member.runtime_state.connection_evidence={native_conversation_loaded:true,model_reply_verified:false};f.context.renderSetup();
-  assert.match(f.$('member-setup-status').innerHTML,/本人对话已加载/);assert.match(f.$('member-connect-guide').innerHTML,/发一条消息后核对实际回复/);
+  assert.match(f.$('member-setup-status').innerHTML,/本人对话已加载/);assert.match(f.$('member-connect-guide').innerHTML,/接入时自动验证回复/);
   assert.doesNotMatch(f.$('member-connect-guide').innerHTML,/已核对原问题的真实回答/);
   f.member.runtime_state.connection_evidence={native_conversation_loaded:true,model_reply_verified:true};f.context.renderSetup();
   assert.match(f.$('member-setup-status').innerHTML,/本人实际回复已核对/);assert.match(f.$('member-connect-guide').innerHTML,/已核对原问题的真实回答/);
@@ -53,7 +53,7 @@ test('primary click sends exactly the selected native identity and refreshes act
   await f.$('member-connect-guide').onclick(click('data-native-connect'));
   assert.deepEqual(plain(f.calls[0]),{route:'/api/desktop/connect',body:{member_id:'member/native',room_id:'room:one',provider:'qwen-desktop'}});
   assert.equal(f.calls[1].route,'/api/chat/members/member%2Fnative/setup?room_id=room%3Aone');assert.equal(f.calls.length,2);
-  assert.match(f.notices[0],/实际回复将在发消息后单独核对/);assert.match(f.$('member-connect-guide').innerHTML,/待实际任务验证/);assert.doesNotMatch(f.$('member-connect-guide').innerHTML,/ACTUAL-NATIVE-ID/);
+  assert.match(f.notices[0],/正在核对实际回复/);assert.match(f.$('member-connect-guide').innerHTML,/待实际任务验证/);assert.doesNotMatch(f.$('member-connect-guide').innerHTML,/ACTUAL-NATIVE-ID/);
   assert.equal(f.context.nativeSetupPending,null);
 });
 

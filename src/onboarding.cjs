@@ -33,7 +33,12 @@ class OnboardingManager{
       runtime_result TEXT,error TEXT,created TEXT NOT NULL,updated TEXT NOT NULL,goal TEXT NOT NULL DEFAULT '');
       CREATE INDEX IF NOT EXISTS onboarding_runs_scope ON onboarding_runs(room_id,provider,mode,created);`);
     if(!this.db.prepare('PRAGMA table_info(onboarding_runs)').all().some(column=>column.name==='goal'))this.db.exec("ALTER TABLE onboarding_runs ADD COLUMN goal TEXT NOT NULL DEFAULT ''");
-    this.db.prepare("UPDATE onboarding_runs SET status='interrupted',stage='interrupted',error='接入期间本机处理程序结束。请点击重试；不会重放业务问题。',updated=? WHERE status='running'").run(now());
+    if(!this.db.prepare('PRAGMA table_info(onboarding_runs)').all().some(column=>column.name==='verify_reply'))this.db.exec('ALTER TABLE onboarding_runs ADD COLUMN verify_reply INTEGER NOT NULL DEFAULT 0');
+    if(!this.db.prepare('PRAGMA table_info(onboarding_runs)').all().some(column=>column.name==='direct_member_id'))this.db.exec('ALTER TABLE onboarding_runs ADD COLUMN direct_member_id TEXT');
+    this.db.prepare("UPDATE onboarding_runs SET status='interrupted',stage='interrupted',error='接入期间本机处理程序结束。请点击重试；不会重放业务问题。',updated=? WHERE status='running' AND stage<>'verifying_reply'").run(now());
+    this.verification=options.replyVerification===false?null:new (require('./onboarding-verification.cjs').OnboardingVerification)(service,options.verification||{});
+    this.verificationPulse=()=>this.advanceVerifications();this.service.on?.('change',this.verificationPulse);
+    this.verificationTimer=setInterval(this.verificationPulse,options.verification?.pollMs||500);this.verificationTimer.unref();
   }
   selection(input={}){
     const requested=input.provider;
@@ -62,11 +67,16 @@ class OnboardingManager{
       const snapshot=this.snapshot(previous);
       // Reading or repeating the same button cannot silently increase install
       // permission, recreate a native session or replay a model handshake.
-      if(snapshot.status==='running'||snapshot.status==='ready'||input.retry!==true&&!['error','interrupted'].includes(snapshot.status))return {...snapshot,reused:true};
+      if(['waiting','waiting_result','uncertain'].includes(snapshot.reply_verification?.status)||snapshot.status==='running'||snapshot.status==='ready'||input.retry!==true&&!['error','interrupted'].includes(snapshot.status))return {...snapshot,reused:true};
+      if(input.retry===true&&snapshot.member_id&&this.connectionSnapshot(previous).stage==='ready_automatic'&&this.verification?.retryFailed(snapshot.member_id,!snapshot.automatic_reply_verified)){
+        this.set(previous.id,{status:'needs_action',stage:'awaiting_connection',error:null});this.advanceVerifications();
+        return {...this.snapshot(this.row(previous.id)),reused:true};
+      }
+      if(input.retry===true&&snapshot.member_id)this.verification?.retryFailed(snapshot.member_id);
     }
-    const row={id:id(),room_id:room.id,...selection,status:'running',stage:'preparing',launch_session_id:null,install_client:input.install_client===true?1:0,install_runtime:input.install_runtime===true?1:0,runtime_result:null,error:null,created:now(),updated:now(),goal};
-    this.db.prepare('INSERT INTO onboarding_runs(id,room_id,requested_provider,provider,mode,status,stage,launch_session_id,install_client,install_runtime,runtime_result,error,created,updated,goal) VALUES(:id,:room_id,:requested_provider,:provider,:mode,:status,:stage,:launch_session_id,:install_client,:install_runtime,:runtime_result,:error,:created,:updated,:goal)').run(row);
-    const existing=this.snapshot(row);
+    const row={id:id(),room_id:room.id,...selection,status:'running',stage:'preparing',launch_session_id:null,install_client:input.install_client===true?1:0,install_runtime:input.install_runtime===true?1:0,runtime_result:null,error:null,created:now(),updated:now(),goal,verify_reply:this.verification?1:0};
+    this.db.prepare('INSERT INTO onboarding_runs(id,room_id,requested_provider,provider,mode,status,stage,launch_session_id,install_client,install_runtime,runtime_result,error,created,updated,goal,verify_reply) VALUES(:id,:room_id,:requested_provider,:provider,:mode,:status,:stage,:launch_session_id,:install_client,:install_runtime,:runtime_result,:error,:created,:updated,:goal,:verify_reply)').run(row);
+    const existing=this.connectionSnapshot(row);
     // A working member from an older version has no onboarding history. Keep
     // that real connection rather than reporting ready and then quietly starting
     // another model handshake or modifying its profile behind the same button.
@@ -74,6 +84,7 @@ class OnboardingManager{
       const sessions=this.db.prepare('SELECT id,selected_providers FROM launch_sessions WHERE room_id=? ORDER BY rowid DESC').all(room.id);
       const matching=sessions.find(session=>{const providers=json(session.selected_providers,[]);return Array.isArray(providers)&&providers.length===1&&providers[0]===row.provider;});
       this.set(row.id,{status:'ready',stage:existing.stage,launch_session_id:matching?.id||null});
+      this.advanceVerifications();
       return {...this.snapshot(this.row(row.id)),reused:true};
     }
     // Defer work until the job map and durable run exist. A rapid second click
@@ -82,15 +93,36 @@ class OnboardingManager{
       const login=AUTH.test(error?.message||'')||/login|auth/.test(error?.code||'');
       const block=providerBlock(row.provider,error);
       this.set(row.id,{status:login||block?'needs_action':'error',stage:login?'awaiting_auth':block||'error',error:safeText(error?.message||'接入失败，请重试。')});
-    }).finally(()=>this.jobs.delete(row.id));
+    }).finally(()=>{this.jobs.delete(row.id);this.advanceVerifications();});
     this.jobs.set(row.id,work);this.service.changed();return this.snapshot(row);
   }
   retry(input={}){
     const row=this.row(input.run_id);
     if(input.provider&&input.provider!==row.provider&&input.provider!==row.requested_provider||input.room_id&&input.room_id!==row.room_id)throw new RoomError('重试不能切换到另一个成员或房间。',403,'onboarding_scope_mismatch');
+    if(row.direct_member_id){this.verification?.retryFailed(row.direct_member_id,!this.service.runtime.connectionState(row.direct_member_id).automatic_reply_verified);return this.verifyMember({member_id:row.direct_member_id,room_id:row.room_id});}
     return this.start({provider:row.requested_provider,mode:row.mode,room_id:row.room_id,goal:row.goal||'',retry:true,
       install_client:input.install_client===undefined?!!row.install_client:input.install_client===true,
       install_runtime:input.install_runtime===undefined?!!row.install_runtime:input.install_runtime===true});
+  }
+  verifyMember(input={}){
+    if(this.closing)throw new RoomError('AgentRoom 正在停止。',503);
+    const member=this.service.chat.store.member(input.member_id),room=this.service.chat.store.room(input.room_id);
+    this.service.chat.store.requireParticipant(room.id,member.id);
+    const desktop=this.service.desktop?.row(member.id);
+    if(!desktop||!this.service.desktop.canWake(member.id))throw new RoomError('本人对话尚未接通，保留已有连接。',409,'desktop_not_connected');
+    let row=this.db.prepare('SELECT * FROM onboarding_runs WHERE room_id=? ORDER BY rowid DESC').all(room.id)
+      .find(candidate=>this.connectionSnapshot(candidate).member_id===member.id);
+    if(row){
+      this.db.prepare("UPDATE onboarding_runs SET verify_reply=?,status='needs_action',stage='awaiting_connection',error=NULL,updated=? WHERE id=?")
+        .run(this.verification?1:0,now(),row.id);
+    }else{
+      const stamp=now();row={id:id(),room_id:room.id,requested_provider:desktop.provider,provider:desktop.provider,
+        mode:BRIDGE.has(desktop.provider)?'bridge':'desktop',status:'needs_action',stage:'awaiting_connection',created:stamp,updated:stamp,
+        verify_reply:this.verification?1:0,direct_member_id:member.id};
+      this.db.prepare(`INSERT INTO onboarding_runs(id,room_id,requested_provider,provider,mode,status,stage,created,updated,verify_reply,direct_member_id)
+        VALUES(:id,:room_id,:requested_provider,:provider,:mode,:status,:stage,:created,:updated,:verify_reply,:direct_member_id)`).run(row);
+    }
+    this.advanceVerifications();return this.snapshot(this.row(row.id));
   }
   async run(row){
     if(this.closing||this.service.chat.roomDeleted?.(row.room_id))return;
@@ -125,11 +157,11 @@ class OnboardingManager{
     if(['qwen-desktop','doubao','grok-bot'].includes(row.provider)&&this.options.desktopConnector){
       const prepared=this.snapshot(this.row(row.id));
       if(prepared.member_id){
-        try{await this.options.desktopConnector({member_id:prepared.member_id,room_id:row.room_id,provider:row.provider});this.set(row.id,{status:'ready',stage:'ready_automatic',error:null});return;}
+        try{await this.options.desktopConnector({member_id:prepared.member_id,room_id:row.room_id,provider:row.provider});this.set(row.id,{status:'needs_action',stage:'awaiting_connection',error:null});this.advanceVerifications();return;}
         catch(error){this.set(row.id,{status:'needs_action',stage:'awaiting_native_desktop',error:safeText(error.message)});return;}
       }
     }
-    this.set(row.id,{status:'needs_action',stage:'awaiting_connection'});
+    this.set(row.id,{status:'needs_action',stage:'awaiting_connection'});this.advanceVerifications();
   }
   state(input={}){
     let row;
@@ -156,11 +188,63 @@ class OnboardingManager{
       return credential?.status||'missing';
     }catch(error){return error?.code==='resume_revoked'?'revoked':error?.code==='ENOENT'?'missing':'invalid';}
   }
+  advanceVerifications(){
+    if(this.closing||!this.verification||this.advancingVerification)return;
+    this.advancingVerification=true;
+    try{
+      this.verification.refresh();
+      const rows=this.db.prepare("SELECT * FROM onboarding_runs WHERE verify_reply=1 AND status NOT IN ('cancelled','error','interrupted') AND stage IN ('awaiting_connection','awaiting_native_desktop','ready_automatic','verifying_reply','verification_pending','verification_failed')").all();
+      for(const row of rows){
+        if(this.service.chat.roomDeleted?.(row.room_id))continue;
+        const connection=this.connectionSnapshot(row);
+        if(connection.member_id&&connection.local_verified&&connection.can_wake&&connection.stage==='ready_automatic'){
+          if(this.service.chat.store.joined&&!this.service.chat.store.joined(row.room_id,connection.member_id))continue;
+          let verification=this.verification.row(connection.member_id);
+          if(!verification||verification.room_id!==row.room_id&&verification.status!=='verified')verification=this.verification.begin(row,this.service.chat.store.member(connection.member_id));
+          else verification=this.verification.view(verification);
+          if(verification?.status==='verified')this.setIfDifferent(row,{status:'ready',stage:'ready_automatic',error:null});
+          else if(verification?.status==='waiting')this.setIfDifferent(row,{status:'running',stage:'verifying_reply',error:null});
+          else this.setIfDifferent(row,{status:'needs_action',stage:verification?.status==='failed'?'verification_failed':'verification_pending',error:verification?.error||null});
+        }
+      }
+    }finally{this.advancingVerification=false;}
+  }
+  setIfDifferent(row,fields){if(Object.entries(fields).some(([key,value])=>row[key]!==value))this.set(row.id,fields);}
   snapshot(row){
+    const base=this.connectionSnapshot(row);
+    if(!row.verify_reply||!this.verification)return base;
+    const verification=base.member_id?this.verification.view(this.verification.row(base.member_id)):null;
+    base.reply_verification=verification;base.ready_for_office=base.status==='ready'&&base.stage==='ready_mailbox';
+    if(base.stage!=='ready_automatic'||!base.can_wake||!base.local_verified)return base;
+    base.ready_for_office=verification?.status==='verified'&&base.automatic_reply_verified===true;
+    if(base.ready_for_office){base.detail='已自动核对本人对话的实际回复，可以开始协作。';return base;}
+    base.next_actions=[];
+    base.status=verification&&verification.status!=='waiting'?'needs_action':'running';
+    base.stage=verification?.status==='failed'?'verification_failed':verification&&verification.status!=='waiting'?'verification_pending':'verifying_reply';
+    base.error=verification?.error||null;
+    base.detail=verification?.error||'连接已建立，正在自动验证本人对话的实际回复；无需去客户端发消息。';
+    if(verification?.status==='failed')base.next_actions=[action('verify','重新验证连接',{operation:'retry'})];
+    if(verification?.status==='verified'&&!base.automatic_reply_verified){
+      base.error=base.connection_evidence?.last_error?`原生调用当前未通过（${safeText(base.connection_evidence.last_error.code)}）。`:'本人对话正在恢复，等待原连接重新上线。';
+      base.detail=`这位同事此前已通过自动回复验证。${base.error}已有连接与原对话保留。`;
+      if(base.connection_evidence?.last_error)base.next_actions=[action('verify','重新验证连接',{operation:'retry'})];
+    }
+    return base;
+  }
+  connectionSnapshot(row){
     const base={id:row.id,run_id:row.id,room_id:row.room_id,requested_provider:row.requested_provider,provider:row.provider,name:NAMES[row.provider]||row.provider,mode:row.mode,
       status:row.status,stage:row.stage,launch_session_id:row.launch_session_id,install_client:!!row.install_client,install_runtime:!!row.install_runtime,
       created:row.created,updated:row.updated,goal:row.goal||'',error:row.error?safeText(row.error):null,runtime:json(row.runtime_result,null),
       local_verified:false,can_wake:false,protocol_verified:false,model_reply_verified:false,runner_ready:false,native_conversation_loaded:false,automatic_reply_verified:false,error_stage:null,readiness:'unverified',connection_evidence:null,response_mode:BRIDGE.has(row.provider)?'manual_bridge':DESKTOP.has(row.provider)?'manual_mailbox':'managed_native',native_group_status:'not_prepared',grok_verified:false,next_actions:[],policy:this.service.launch.policy()};
+    if(row.direct_member_id){
+      let member;try{this.service.chat.store.requireParticipant(row.room_id,row.direct_member_id);member=this.service.chat.store.member(row.direct_member_id);}catch{return {...base,status:'needs_action',stage:'awaiting_connection',detail:'原人物当前不在这个房间，已有连接保留。'};}
+      const runtime=this.service.runtime.memberState(member.id),evidence=runtime.connection_evidence||null,canWake=this.service.desktop?.canWake(member.id)===true;
+      Object.assign(base,{member_id:member.id,name:member.name,local_verified:canWake,can_wake:canWake,response_mode:'managed_desktop',runner_ready:canWake,
+        connection_evidence:evidence,protocol_verified:evidence?.protocol_verified===true,model_reply_verified:evidence?.model_reply_verified===true,
+        native_conversation_loaded:evidence?.native_conversation_loaded===true,automatic_reply_verified:evidence?.automatic_reply_verified===true,
+        readiness:evidence?.verification_level||'unverified',error_stage:evidence?.last_error?.stage||null});
+      return canWake?{...base,status:'ready',stage:'ready_automatic',error:null}:{...base,status:'needs_action',stage:'awaiting_connection',detail:'正在恢复这位同事的原对话，已有连接保留。'};
+    }
     // A pure SQLite read deliberately bypasses launch.state(), which historically
     // renews or issues entry cards for unfinished desktop handshakes.
     const session=row.launch_session_id?this.db.prepare('SELECT * FROM launch_sessions WHERE id=? AND room_id=?').get(row.launch_session_id,row.room_id):null;
@@ -262,6 +346,6 @@ class OnboardingManager{
     base.next_actions.push(action('self_handshake','在本人聊天里确认接入',{operation:'copy_handshake_prompt'}));
     return base;
   }
-  async close(){this.closing=true;await Promise.allSettled([...this.jobs.values()]);}
+  async close(){this.closing=true;clearInterval(this.verificationTimer);this.service.off?.('change',this.verificationPulse);await Promise.allSettled([...this.jobs.values()]);}
 }
 module.exports={OnboardingManager};

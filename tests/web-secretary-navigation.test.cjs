@@ -25,6 +25,25 @@ function fixture(){
 function connectFlow(f,sourceName='picker',job={id:'job',room_id:'room',member_id:'member',provider:'qwen-desktop',status:'ready_automatic',can_wake:true}){
   const flow=f.context.beginSecretaryNavigation(sourceName);flow.jobId=job.id;f.context.onboardingJobs.set(job.id,job);f.context.secretaryConnectJob=job.id;f.$('secretary-connect-dialog').open=sourceName==='picker';f.$('member-setup-dialog').open=true;return flow;
 }
+
+test('automatic onboarding cannot leave setup until actual reply verification permits office navigation',async()=>{
+  const f=fixture();connectFlow(f,'picker',{id:'job',room_id:'room',member_id:'member',provider:'qwen-desktop',status:'ready',stage:'ready_automatic',can_wake:true,ready_for_office:false});
+  await f.context.returnSecretaryAfterOnboarding();assert.equal(f.calls.length,0);assert.equal(f.navigation.length,0);assert.equal(f.$('secretary-connect-dialog').open,true);
+  Object.assign(f.context.onboardingJobs.get('job'),{ready_for_office:true,automatic_reply_verified:true});await f.context.returnSecretaryAfterOnboarding();
+  assert.equal(f.calls.length,1);assert.deepEqual(f.navigation,[['workspace',true],['office',true]]);
+});
+
+test('a newly connected member enters the office without replacing or assigning the secretary',async()=>{
+  const f=fixture();connectFlow(f,'member',{id:'job',room_id:'room',member_id:'member',provider:'qwen-desktop',status:'ready',stage:'ready_automatic',can_wake:true,ready_for_office:true,automatic_reply_verified:true});
+  f.$('recipient').value='chosen-person';f.context.refresh=async()=>{};
+  await f.context.returnSecretaryAfterOnboarding();assert.equal(f.calls.length,0);assert.equal(f.context.state.secretaries.room.member_id,null);assert.equal(f.$('recipient').value,'chosen-person');
+  assert.deepEqual(f.navigation,[['workspace',true],['office',true]]);assert.equal(f.$('member-setup-dialog').open,false);
+});
+
+test('automatic verification progress remains in setup and never assigns a secretary',async()=>{
+  const f=fixture();connectFlow(f,'picker',{id:'job',room_id:'room',member_id:'member',provider:'qwen-desktop',status:'running',stage:'verifying_reply',can_wake:true,ready_for_office:false});
+  await f.context.returnSecretaryAfterOnboarding();assert.equal(f.calls.length,0);assert.equal(f.navigation.length,0);assert.equal(f.$('secretary-connect-dialog').open,true);
+});
 test('choosing a ready secretary closes its tutorial and owned setup without starting a goal',async()=>{
   const f=fixture();f.$('member-setup-dialog').open=true;await f.context.chooseSecretary('member');
   assert.equal(f.context.secretaryOpenRoom,null);assert.equal(f.context.secretaryNavigation,null);assert.equal(f.$('member-setup-dialog').open,false);assert.equal(f.$('recipient').value,'member');assert.deepEqual(f.navigation,[['workspace',true],['office',true]]);

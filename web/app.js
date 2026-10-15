@@ -140,7 +140,10 @@ function showOnboardingRequirements(candidate) {
 function onboardingCanInstall(candidate) { return candidate.capabilities?.runtime_install === true || candidate.capabilities?.runtime_installable === true || candidate.installable === true || candidate.runtime_installable === true; }
 function onboardingSelectable(candidate) { return launchSelectable(candidate) || (candidate.support !== 'unsupported' && onboardingCanInstall(candidate)); }
 function onboardingRunning(job) { return job && ['running','queued','pending','detecting','installing','configuring','starting','handshaking','waiting'].includes(job.status); }
-function onboardingReady(job) { return ['ready_automatic','ready_mailbox'].includes(job?.status) ? job.status : job?.status === 'ready' && ['ready_automatic','ready_mailbox'].includes(job.stage) ? job.stage : null; }
+function onboardingReady(job) {
+  const ready=['ready_automatic','ready_mailbox'].includes(job?.status)?job.status:job?.status==='ready'&&['ready_automatic','ready_mailbox'].includes(job.stage)?job.stage:null;
+  return ready==='ready_automatic'&&job.ready_for_office===false?null:ready;
+}
 function onboardingForProvider(provider) { return [...onboardingJobs.values()].filter(job => job.provider === provider && (!job.room_id || job.room_id === roomId)).sort((a,b) => String(b.updated_at || b.updated || b.created_at || b.created || '').localeCompare(String(a.updated_at || a.updated || a.created_at || a.created || '')))[0]; }
 function currentOnboardingJobs() { const providers = new Map(); for (const job of [...onboardingJobs.values()].filter(job => (!job.room_id || job.room_id === roomId) && (!job.project_id || job.project_id === projectId)).sort((a,b) => String(b.created_at || b.created || b.updated_at || b.updated || '').localeCompare(String(a.created_at || a.created || a.updated_at || a.updated || '')))) if (!providers.has(job.provider)) providers.set(job.provider,job); return [...providers.values()]; }
 function renderLaunchCandidates() {
@@ -279,10 +282,10 @@ setInterval(tickOnboardingElapsed, 1000);
 function onboardingJobMarkup(job) {
     const readyType = onboardingReady(job), ready = !!readyType, pending = onboardingRunning(job), needsAction = job.status === 'needs_action', failed = ['failed','error','interrupted','cancelled'].includes(job.status), actionValue = onboardingAction(job);
     const stage = job.stage || job.phase || '', stageNumber = Number.isInteger(job.stage_index) ? Math.max(0,Math.min(3,job.stage_index)) : /handshake|verify|ready|complete|^connecting$/.test(stage) ? 2 : /config|install|auth|start|launch|import|reload|connection/.test(stage) ? 1 : 0;
-    const stageLabels = ['发现','配置','验证通信','完成'];
+    const verifyingReply=stage==='verifying_reply',stageLabels = ['发现','配置',verifyingReply?'验证实际回复':'验证通信','完成'];
     const steps = stageLabels.map((label,index) => `<li class="${ready || index < stageNumber ? 'done' : index === stageNumber && !failed ? 'current' : ''}"><span>${ready || index < stageNumber ? '✓' : index + 1}</span>${label}</li>`).join('');
-    const replyVerified = job.automatic_reply_verified === true, title = readyType === 'ready_automatic' ? replyVerified ? '已核对实际回复 · 可自动处理消息' : '通信已接通 · 实际回复待验证' : readyType === 'ready_mailbox' ? '已接通 · 要在它自己的窗口里处理消息' : needsAction ? job.configuration?.api_mode ? '核对已保存的 API 配置' : job.provider === 'qwen-code' && stage === 'awaiting_auth' ? '完成首次 API 或计划配置' : job.provider === 'gemini-cli' && stage === 'awaiting_auth' ? '完成 Gemini CLI 账号配置' : '完成一次授权或启用' : failed ? '接入需要核对' : pending ? '正在接入' : '等待接入确认';
-    const detail = job.message || job.detail || (ready ? readyType === 'ready_automatic' ? replyVerified ? '可以在房间里直接交给它了。' : '先发一条消息；AO 会核对原问题对应的实际最终回答。' : '它不会自动开工：给它发消息后，到它自己的窗口里说一句“查看收件箱”。' : stage === 'awaiting_auth' ? '完成首次账号配置后，再继续接入并验证后台通信。' : stage === 'awaiting_runtime_install' ? '还需要安装这个 agent 的后台入口。确认后，只安装你指定的成员。' : stage === 'unsupported' || stage === 'needs_wake_adapter' ? '已发现应用，正式通信或后台任务入口仍待适配。' : needsAction ? '完成下面这一步，接入会自动继续。' : '正在启动它并验证通信，通常不到一分钟。');
+    const replyVerified = job.automatic_reply_verified === true, title = verifyingReply ? '连接已建立 · 正在自动验证实际回复' : readyType === 'ready_automatic' ? replyVerified ? '已核对实际回复 · 可自动处理消息' : '通信已接通 · 实际回复待验证' : readyType === 'ready_mailbox' ? '已接通 · 要在它自己的窗口里处理消息' : needsAction ? job.configuration?.api_mode ? '核对已保存的 API 配置' : job.provider === 'qwen-code' && stage === 'awaiting_auth' ? '完成首次 API 或计划配置' : job.provider === 'gemini-cli' && stage === 'awaiting_auth' ? '完成 Gemini CLI 账号配置' : '完成一次授权或启用' : failed ? '接入需要核对' : pending ? '正在接入' : '等待接入确认';
+    const detail = job.message || job.detail || (verifyingReply ? 'AO 正在核对这位同事的真实回答；完成后会自动进入办公室。' : ready ? readyType === 'ready_automatic' ? replyVerified ? '可以在房间里直接交给它了。' : 'AO 会自动核对原问题对应的实际最终回答。' : '它不会自动开工：给它发消息后，到它自己的窗口里说一句“查看收件箱”。' : stage === 'awaiting_auth' ? '完成首次账号配置后，再继续接入并验证后台通信。' : stage === 'awaiting_runtime_install' ? '还需要安装这个 agent 的后台入口。确认后，只安装你指定的成员。' : stage === 'unsupported' || stage === 'needs_wake_adapter' ? '已发现应用，正式通信或后台任务入口仍待适配。' : needsAction ? '完成下面这一步，接入会自动继续。' : '正在启动它并验证通信，通常不到一分钟。');
     const groupState = job.native_group_status || job.group_status, reported = ['host_reported','joined'].includes(groupState);
     const actionHtml = (needsAction || failed || ready) && actionValue ? onboardingActionMarkup(job) : '';
     return `<article class="onboarding-job ${failed ? 'failed' : ready ? 'ready' : ''}" data-onboarding-job="${escape(job.id)}"><div class="onboarding-job-heading">${avatar(job.name || job.provider,job.provider)}<div><strong>${escape(job.name || job.provider)}</strong><span>${escape(title)}</span></div>${pending ? '<span class="pulse-dot"></span>' : ''}</div><ol class="onboarding-steps">${steps}</ol><p class="onboarding-job-detail">${escape(detail)}${pending && job.created ? ` <span class="onboarding-elapsed" data-since="${escape(job.created)}"></span>` : ''}</p>${nativeDesktopProvider(job) ? nativeReadinessMarkup(job,job.connection_evidence) : ''}${pending ? onboardingApprovalMarkup(job) : ''}${actionHtml}${job.error ? `<p class="onboarding-job-error">${escape(typeof job.error === 'string' ? job.error : job.error.message || '请在专业视图核对接入记录。')}</p>` : ''}${ready && roomUsesGrok() ? `<div class="onboarding-group-note">${escape(reported ? 'Grok 已报告加群。' : 'Grok 群：需要时再让 Grok 把它拉进群。')}</div>` : ''}</article>`;
@@ -315,8 +318,8 @@ function returnSecretaryAfterOnboarding() {
   if(flow.source==='selection'){if(flow.accepted)finishSecretaryNavigation(flow,flow.accepted);return;}
   const job=onboardingJobs.get(flow.jobId);
   if(!job || !onboardingReady(job) || !job.member_id || (job.room_id && job.room_id!==flow.roomId))return;
-  const selected=currentSecretary(),assign=!selected.member_id||selected.status!=='ready';
-  if(!sameSecretaryAssignment(flow.accepted||flow.assignment,selected)){secretaryNavigation=null;secretaryError='秘书设置已在其他窗口变更，已显示最新角色。请重新确认。';renderSecretary();return;}
+  const selected=currentSecretary(),assign=flow.source!=='member'&&(!selected.member_id||selected.status!=='ready');
+  if(flow.source!=='member'&&!sameSecretaryAssignment(flow.accepted||flow.assignment,selected)){secretaryNavigation=null;secretaryError='秘书设置已在其他窗口变更，已显示最新角色。请重新确认。';renderSecretary();return;}
   if(assign && !job.can_wake){$('secretary-connect-status').textContent='这位成员使用本人窗口信箱；请先接通可后台回答的 AI 作为秘书。';return;}
   if(assign && flow.assignmentAttempted && !flow.accepted)return;
   flow.memberId=job.member_id;flow.requireAutomatic=assign;secretaryFinishing=true;
@@ -335,7 +338,7 @@ async function startOnboarding(provider) {
   const candidate = (launchCandidates || []).find(item => launchProvider(item) === provider); if (!candidate || !onboardingSelectable(candidate) || onboardingStarting.has(provider)) return;
   const project = state?.projects?.find(item => item.id === projectId); if (!project) { showProject(); return; }
   const secretaryConnecting = $('secretary-connect-dialog').open && secretaryConnectRoom === roomId;
-  const flow=secretaryConnecting || !professionalView && !legacyId ? beginSecretaryNavigation(secretaryConnecting?'picker':'launch') : null;
+  const flow=!legacyId?beginSecretaryNavigation(secretaryConnecting?'picker':professionalView?'member':'launch'):null;
   const selectedRoom=roomId,selectedProject=projectId,selectedLegacy=legacyId;
   const current = onboardingForProvider(provider); if (current?.status === 'needs_action' || onboardingReady(current)) { if(flow)flow.jobId=current.id;if(secretaryConnecting) secretaryConnectJob = current.id; onboardingProgressTarget().scrollIntoView({behavior:'smooth',block:'start'}); await checkOnboarding(current.id); return; }
   onboardingStarting.add(provider); launchError = ''; renderLaunch();
@@ -563,6 +566,12 @@ function renderRoom(project) {
   renderService(); renderInspector(); renderSidebar(); applyRoomView(); updateOfficeScene();
 }
 function renderMessage(message, messages) {
+  if(message.connection_verification){
+    const check=message.connection_verification,name=senderName(check.member_id);
+    if(check.status==='verified'&&check.phase==='request')return '';
+    const text=check.status==='verified'?`${name} 的自动连接已验证。`:['failed','uncertain','waiting_result'].includes(check.status)?`${name} 的连接验证尚待核对，请查看接入进度。`:check.phase==='reply'?`已收到 ${name} 的连接验证回复，正在核对。`:`正在验证 ${name} 的自动回复…`;
+    return `<div class="system-message" id="message-${escape(message.id)}"><span>${escape(text)}</span><time>${time(message.created || message.created_at)}</time></div>`;
+  }
   const name = message.coordination ? '办公室安排' : senderName(message.sender_id), member = memberById(message.sender_id), target = message.to_member_id ? senderName(message.to_member_id) : '', quoted = message.reply_to && messages.find(item => item.id === message.reply_to);
   if (['system','event'].includes(message.kind) || message.sender_id === 'system') return `<div class="system-message"><span>${escape(message.text)}</span><time>${time(message.created || message.created_at)}</time></div>`;
   const running = ['queued','creating','running','processing','waiting_input','pending','delivered'].includes(message.status);
@@ -827,17 +836,24 @@ function renderConnectGuide(client, member) {
   const error=(failure||native.error)?failure||{message:native.error,code:native.error_code||evidence.last_error?.code}:member.error?{message:member.error,code:evidence.last_error?.code}:null;
   const loaded=evidence.native_conversation_loaded===true,reply=evidence.model_reply_verified===true;
   const fallback=fallbackConnectGuide(client),port={'qwen-desktop':19245,doubao:19246,'grok-bot':19247}[client.provider];
-  box.innerHTML=`<h3>连接这位同事的本人对话</h3><p class="small-note">沿用本人客户端的登录，为这位同事保留独立的原生对话。加入新房间后继续沿用。</p>${nativeReadinessMarkup({},evidence)}<div class="connect-actions"><button type="button" class="primary" data-native-connect ${busy||!webConnected?'disabled':''}>${busy?'正在核对本人对话…':'连接本人对话'}</button><span class="connect-state">${escape(reply&&loaded?'本人的实际回复已核对':loaded?'本人对话已加载，发一条消息后核对实际回复':'点击后核对本机连接和本人会话')}</span></div>${error?`<div class="native-connect-error" role="alert"><strong>${escape(typeof error.message==='string'?error.message:'本人对话连接尚未完成。')}</strong><p>${escape(nativeConnectNextStep(client.provider,error))}</p></div>`:''}<details class="native-connect-advanced"><summary>高级：连接诊断与兼容 MCP</summary><p class="small-note">首次启用本机连接后，后续沿用这位同事的本人会话；版本变化时会重新核对接口。</p><button type="button" class="secondary" data-native-diagnostics>查看连接诊断</button>${port?`<p class="small-note">对应客户端的本机诊断端口：${port}。在客户端关闭后按该版本的启动说明开启一次。</p>`:''}${fallback?`<div class="native-connect-fallback">${legacyConnectGuide(fallback,member,{hidePrivateValues:true})}</div>`:''}</details>`;
+  box.innerHTML=`<h3>连接这位同事的本人对话</h3><p class="small-note">沿用本人客户端的登录，为这位同事保留独立的原生对话。加入新房间后继续沿用。</p>${nativeReadinessMarkup({},evidence)}<div class="connect-actions"><button type="button" class="primary" data-native-connect ${busy||!webConnected?'disabled':''}>${busy?'正在核对本人对话…':'连接本人对话'}</button><span class="connect-state">${escape(reply&&loaded?'本人的实际回复已核对':loaded?'本人对话已加载，接入时自动验证回复':'点击后核对本机连接和本人会话')}</span></div>${error?`<div class="native-connect-error" role="alert"><strong>${escape(typeof error.message==='string'?error.message:'本人对话连接尚未完成。')}</strong><p>${escape(nativeConnectNextStep(client.provider,error))}</p></div>`:''}<details class="native-connect-advanced"><summary>高级：连接诊断与兼容 MCP</summary><p class="small-note">首次启用本机连接后，后续沿用这位同事的本人会话；版本变化时会重新核对接口。</p><button type="button" class="secondary" data-native-diagnostics>查看连接诊断</button>${port?`<p class="small-note">对应客户端的本机诊断端口：${port}。在客户端关闭后按该版本的启动说明开启一次。</p>`:''}${fallback?`<div class="native-connect-fallback">${legacyConnectGuide(fallback,member,{hidePrivateValues:true})}</div>`:''}</details>`;
 }
 async function connectNativeDesktop() {
   const memberId=selectedSetupMember,selectedRoom=roomId,provider=setupData?.client?.provider;
   if(!memberId||!selectedRoom||legacyId||setupData?.client?.kind!=='native_desktop')throw new Error('先选择这位同事的本人对话连接。');
   if(nativeSetupPending)return;const request={memberId,roomId:selectedRoom,provider};nativeSetupPending=request;nativeSetupFailure=null;renderSetup();
   try{
-    await api('/api/desktop/connect',{member_id:memberId,room_id:selectedRoom,provider});
+    const result=await api('/api/desktop/connect',{member_id:memberId,room_id:selectedRoom,provider});
+    const job=result?.onboarding?.job||result?.onboarding;
+    if(job?.id&&job.member_id===memberId&&job.room_id===selectedRoom&&selectedSetupMember===memberId&&roomId===selectedRoom&&!legacyId){
+      onboardingJobs.set(job.id,job);
+      let flow=secretaryNavigation;
+      if(!secretaryNavigationCurrent(flow)||flow.memberId&&flow.memberId!==memberId)flow=beginSecretaryNavigation('member');
+      flow.jobId=job.id;flow.memberId=memberId;
+    }
     const data=await api(`/api/chat/members/${encodeURIComponent(memberId)}/setup?room_id=${encodeURIComponent(selectedRoom)}`);
     await refresh();
-    if(selectedSetupMember===memberId&&roomId===selectedRoom){setupData=data;const evidence=memberById(memberId)?.runtime_state?.connection_evidence;toast(evidence?.model_reply_verified&&evidence?.native_conversation_loaded?'本人对话和实际回复已核对。':evidence?.native_conversation_loaded?'本人对话已加载；实际回复将在发消息后单独核对。':'连接已准备；请核对本人会话的加载状态。');}
+    if(selectedSetupMember===memberId&&roomId===selectedRoom){setupData=data;const evidence=memberById(memberId)?.runtime_state?.connection_evidence;toast(evidence?.model_reply_verified&&evidence?.native_conversation_loaded?'本人对话和实际回复已核对。':job?.stage==='verifying_reply'?'本人对话已加载，正在自动验证实际回复。':evidence?.native_conversation_loaded?'本人对话已加载；正在核对实际回复。':'连接已准备；请核对本人会话的加载状态。');if(job?.id){returnSecretaryAfterOnboarding();action(refreshOnboarding);}}
   }catch(error){
     if(selectedSetupMember===memberId&&roomId===selectedRoom){nativeSetupFailure={...request,message:error.message||'本人对话连接尚未完成。',code:error.code||''};toast(nativeSetupFailure.message);}
   }finally{if(nativeSetupPending===request)nativeSetupPending=null;if(selectedSetupMember===memberId&&roomId===selectedRoom){lastSetupSignature='';renderSetup();}}
@@ -1106,7 +1122,8 @@ function secretaryNavigationCurrent(flow) {
 function finishSecretaryNavigation(flow,expected) {
   const selected=currentSecretary();
   const members=admittedMembers(history?.participants);
-  if(!secretaryNavigationCurrent(flow) || !sameSecretaryAssignment(expected,selected) || selected.status!=='ready' || history?.room?.id!==flow.roomId || !members.some(member=>member.id===selected.member_id) || flow.memberId && !members.some(member=>member.id===flow.memberId))return false;
+  if(!secretaryNavigationCurrent(flow) || history?.room?.id!==flow.roomId || flow.memberId && !members.some(member=>member.id===flow.memberId))return false;
+  if(flow.source!=='member'&&(!sameSecretaryAssignment(expected,selected) || selected.status!=='ready' || !members.some(member=>member.id===selected.member_id)))return false;
   const job=flow.jobId && onboardingJobs.get(flow.jobId);
   if(flow.jobId && (!job || !onboardingReady(job) || job.member_id!==flow.memberId || job.room_id && job.room_id!==flow.roomId || flow.requireAutomatic && !job.can_wake))return false;
   // Consume only this user-initiated flow. Loading an already-ready room never navigates.
@@ -1115,8 +1132,9 @@ function finishSecretaryNavigation(flow,expected) {
   if(selectedSetupMember===(flow.memberId||selected.member_id) && $('member-setup-dialog').open)$('member-setup-dialog').close();
   secretaryPickingRoom=null;closeSecretaryTutorial();setProfessionalView(true);selectRoomView(true);
   // Only a newly seated secretary becomes the recipient; connecting another member keeps the person's choice.
-  if(!flow.memberId || flow.memberId===selected.member_id){$('recipient').value=selected.member_id;updateRecipientNote();}
-  toast(flow.memberId && flow.memberId!==selected.member_id?'成员已真实接通，已进入办公室。':'秘书已真实接通，可以在办公室交代目标。');return true;
+  if(flow.source==='member'){if(!$('recipient').value){$('recipient').value=flow.memberId;updateRecipientNote();}}
+  else if(!flow.memberId || flow.memberId===selected.member_id){$('recipient').value=selected.member_id;updateRecipientNote();}
+  toast(flow.source==='member'||flow.memberId && flow.memberId!==selected.member_id?onboardingReady(job)==='ready_mailbox'?'成员信箱已接通，已进入办公室。':'成员已真实接通，已进入办公室。':'秘书已真实接通，可以在办公室交代目标。');return true;
 }
 function secretaryResponse(value, selectedRoom) {
   const selected = value?.secretary || value; if (!selected || selected.room_id !== selectedRoom) throw new Error('尚未确认秘书角色，请刷新查看。');
@@ -1186,7 +1204,7 @@ function openSecretaryConnect() {
 function updateOfficeScene() {
   if(!officeView || !professionalView || !history?.room || legacyId) return;
   if(!officeScene && window.AgentOfficeScene) officeScene=window.AgentOfficeScene.mount($('officeScene'),{onCompose:()=>toggleOfficeComposer(true),onChooseSecretary:openSecretaryTutorial,onSelectMember:member=>{if(!submitting && [...$('recipient').options].some(option=>option.value===member.id)){$('recipient').value=member.id;updateRecipientNote();}toggleOfficeComposer(true);},onCustomize:member=>openInspector('appearance',member.id),onSceneSettings:()=>openInspector('scene'),onSelectMessage:message=>{selectRoomView(false);requestAnimationFrame(()=>$('message-'+message.id)?.scrollIntoView({block:'center',behavior:'smooth'}));}});
-  officeScene?.update({roomId:history.room.id,participants:admittedMembers(history.participants),messages:history.messages||[],runtime,online:webConnected,scene:state?.office?.[history.room.id]||{},secretary:currentSecretary(),tutorialVisible:secretaryTutorialVisible()});
+  officeScene?.update({roomId:history.room.id,participants:admittedMembers(history.participants),messages:(history.messages||[]).filter(message=>!message.connection_verification),runtime,online:webConnected,scene:state?.office?.[history.room.id]||{},secretary:currentSecretary(),tutorialVisible:secretaryTutorialVisible()});
 }
 function detailRows(values) {return values.map(([label,value])=>`<dt>${escape(label)}</dt><dd>${escape(value || '—')}</dd>`).join('');}
 function doctorTarget() { return $('connection-doctor-old-member').value.trim() || $('connection-doctor-member').value || null; }

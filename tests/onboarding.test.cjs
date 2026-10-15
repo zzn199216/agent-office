@@ -51,7 +51,7 @@ function setup(t,options={}){
       }).finally(()=>service.launch.jobs.delete(session.id));
       service.launch.jobs.set(session.id,work);return session;
     }};
-  const managerOptions={};
+  const managerOptions={replyVerification:false}; // This fixture covers preparation/transport only; real reply checks have a service-level fixture.
   if(options.runtimeInstaller)managerOptions.runtimeInstaller=async input=>{runtimes.push(input);return options.runtimeInstaller(input);};
   const manager=new OnboardingManager(service,managerOptions);
   t.after(async()=>{await manager.close();db.close();const absolute=path.resolve(data);assert.equal(path.dirname(absolute),path.resolve(os.tmpdir()));assert.match(path.basename(absolute),/^agentroom-onboarding-test-/);fs.rmSync(absolute,{recursive:true,force:true});});
@@ -211,7 +211,7 @@ test('explicit retry creates a scoped new attempt without executing business pro
 test('unfinished durable setup becomes interrupted after process restart and is never auto replayed',async t=>{
   const v=setup(t),stamp=now(),run=id();
   v.db.prepare("INSERT INTO onboarding_runs(id,room_id,requested_provider,provider,mode,status,stage,launch_session_id,install_client,install_runtime,runtime_result,error,created,updated) VALUES(?,?,?,?,?,'running','connecting',NULL,0,0,NULL,NULL,?,?)").run(run,v.room.id,'codex','codex','managed',stamp,stamp);
-  const restarted=new OnboardingManager(v.service);t.after(()=>restarted.close());
+  const restarted=new OnboardingManager(v.service,{replyVerification:false});t.after(()=>restarted.close());
   const state=restarted.state({run_id:run});assert.equal(state.status,'interrupted');assert.equal(state.stage,'interrupted');assert.equal(state.next_actions[0].operation,'retry');assert.equal(v.calls.length,0);assert.equal(v.scans,0);
 });
 test('invalid or broad selections fail before discovery, installation and room mutation',t=>{

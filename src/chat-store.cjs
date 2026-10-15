@@ -272,6 +272,21 @@ class ChatStore {
   publicMessage(row) {
     const { idempotency_key, body_hash, ...visible } = row;
     const attachments=this.images.list(row.id);if(attachments.length)visible.attachments=attachments;
+    // Only a controller-persisted verification record can label these messages.
+    // Keep the original text for native execution and diagnostic history.
+    if(this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='onboarding_reply_verifications'").get()){
+      let verification=this.db.prepare('SELECT * FROM onboarding_reply_verifications WHERE message_id=? OR message_id=? LIMIT 1').get(row.id,row.reply_to||'');
+      if(!verification&&this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='onboarding_verification_history'").get()){
+        const archived=this.db.prepare('SELECT record FROM onboarding_verification_history WHERE message_id=? OR message_id=? LIMIT 1').get(row.id,row.reply_to||'');
+        if(archived)try{verification=JSON.parse(archived.record);}catch{}
+      }
+      const original=verification&&this.db.prepare('SELECT sender_id,to_member_id,text FROM chat_messages WHERE id=?').get(verification.message_id);
+      if(verification?.room_id===row.room_id&&original?.sender_id==='user'&&original.to_member_id===verification.member_id&&original.text.endsWith('请只回复这一行：'+verification.nonce)){
+        const request=verification.message_id===row.id&&row.sender_id==='user'&&row.to_member_id===verification.member_id;
+        const reply=verification.message_id===row.reply_to&&row.kind==='reply'&&row.sender_id===verification.member_id;
+        if(request||reply)visible.connection_verification={request_id:verification.message_id,member_id:verification.member_id,phase:request?'request':'reply',status:verification.status};
+      }
+    }
     // Only persisted scheduler provenance can label a message as coordination.
     // User text and caller-supplied message kinds are never trusted for this.
     if(row.sender_id==='user'&&this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='team_outbox'").get()) {

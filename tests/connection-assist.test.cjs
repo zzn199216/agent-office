@@ -11,6 +11,8 @@ class HandshakeFixture extends EventEmitter{
   constructor(member,service,calls){super();this.member=member;this.service=service;this.calls=calls;}
   async status(){return {connected:true,signedIn:true};}
   async run(input){this.calls.push(input.request.prompt);const thread=input.discussion.thread_id||id();input.onBinding('bound',thread);input.onTurn(id());
+    const verification=[...input.request.prompt.matchAll(/AO-CONNECT-[a-f0-9-]+/gi)].at(-1)?.[0];
+    if(verification)return {threadId:thread,turnId:id(),answer:verification};
     const invitation=input.request.prompt.match(/invite_id=([a-z0-9-]+)[,，]\s*nonce=([A-Za-z0-9_-]+)/i);assert.ok(invitation,'fixture runs only connection handshake');
     this.service.chat.completeInvite(invitation[1],invitation[2],this.member.id);return {threadId:thread,turnId:id(),answer:'fixture 已接通'};}
   async close(){}
@@ -71,7 +73,8 @@ test('scheduler provenance is rejected even before team_outbox.message_id is lin
 test('selected managed provider follows existing real fixture handshake without runtime installation',async t=>{
   const v=setup(t),message=v.message('请把 Codex 接入办公室');v.manager.begin(message);const [state]=await v.finish();
   assert.equal(state.provider,'codex');assert.equal(state.status,'ready');assert.equal(state.can_wake,true);assert.equal(state.local_verified,true);assert.equal(state.document_path,null);
-  assert.equal(v.calls.native.length,1);assert.equal(v.calls.scans,1);assert.equal(v.calls.install,0);
+  assert.equal(v.calls.native.length,2);assert.equal(v.calls.scans,1);assert.equal(v.calls.install,0);
+  assert.equal(state.automatic_reply_verified,true);
   const row=v.service.store.db.prepare('SELECT install_client,install_runtime FROM onboarding_runs WHERE id=?').get(state.run_id);assert.equal(row.install_client,0);assert.equal(row.install_runtime,0);
   const context=await v.manager.prepareContext(message.id);assert.match(context,/已接通/);assert.doesNotMatch(context,/fixture-private-token/);
 });

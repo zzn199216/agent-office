@@ -33,7 +33,7 @@ async function setup(t,options={}){
   service=new RoomService(files.data,{codex:new FakeCodex(),vault:new FakeVault(),fetch:async()=>{throw new Error('fixture prohibits external HTTP');},
     chat:{clientFactory(member){return new NativeProtocolFixture(member,service,options,clients);}},
     launch:{discover:()=>{scans++;return {candidates};},installer:async input=>{installations.push(input);return {status:'installed',installed:true,connected:false,needs_reload:true};}},
-    onboarding:{runtimeInstaller:async input=>{runtimeCalls.push(input);return {status:'needs_login',installed:true};}},
+    onboarding:{replyVerification:false,runtimeInstaller:async input=>{runtimeCalls.push(input);return {status:'needs_login',installed:true};}},
     onboardingActions:{env:{USERPROFILE:files.root,HOME:files.root,CLAUDE_CONFIG_DIR:path.join(files.root,'.claude')},launcher:async request=>{terminals.push(request);return {pid:process.pid,fixture:true};}}});
   const project=service.addProject({name:'One-click HTTP fixture',path:files.project}),room=service.chat.addRoom({title:'HTTP onboarding fixture',project_id:project.id});
   const token=id(),server=createServer(service,{port:0,token}),port=await server.listen(),base=`http://127.0.0.1:${port}`;

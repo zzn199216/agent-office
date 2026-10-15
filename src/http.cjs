@@ -172,7 +172,7 @@ function createServer(service,{token,port=47831,onShutdown}={}) {
       if(pathname==='/api/resume/accept')return json(res,service.entry.accept(input.card));
       if(pathname==='/api/resume/revoke')return json(res,service.entry.revoke(input.member_id,input.room_id));
       if(pathname==='/api/runtime/wake')return json(res,await service.entry.wake(input.room_id,input.member_id,input.caller_member_id));
-      if(pathname==='/api/desktop/connect')return json(res,await service.desktop.connect(input));
+      if(pathname==='/api/desktop/connect'){const connection=await service.desktop.connect(input);return json(res,{...connection,onboarding:service.onboarding.verifyMember(input)});}
       if(pathname==='/api/bridge/setup')return json(res,service.bridge.setup(input.member_id,input.room_id,input));
       if(pathname==='/api/bridge/bind')return json(res,service.bridge.bind(input));
       if(pathname==='/api/bridge/request')return json(res,service.bridge.request(input),202);

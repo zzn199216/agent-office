@@ -1,5 +1,23 @@
 # 本机构建与验收
 
+## 0.15.0-preview.7 连接连续性
+
+- 已有原生人物连接使用持久化退避重连，沿用原对话；断线后的未决轮次先核对，不自动重发。撤销授权、没有房间时暂停，版本、身份、权限问题保留明确原因。
+- 用户主动接入后，自动发送一次带关联标识的验证消息。正确人物的原生执行证据和实际回复吻合后，页面进入办公室；读取进度和重启不重复调用模型。MCP 信箱保持手动处理的能力说明。
+- 稳定安装入口保存经过路径、安装标记和内容校验的当前 runtime。Windows 上旧 EXE 被 MCP 占用时，核对原文件后保留运行中的旧映像，将原命令路径切换到新版；其他文件锁不允许切换时才并排安装，稍后打开新版再更新稳定入口。
+- 原凭据、URL、人物、会话、历史与其他 MCP 配置保留。稳定路径更新后，仍运行的旧 stdio 进程也能通过原路径启动新版后台，无需重配或结束该 MCP 进程。
+
+隔离验收命令：
+
+```powershell
+node scripts/validate-onboarding-verification.cjs
+node scripts/validate-connection-assist-ui.cjs
+node scripts/validate-onboarding-layout.cjs
+node scripts/validate-mcp-continuity.cjs release/AgentOffice-0.15.0-preview.7-windows-x64/AgentOffice.exe release/AgentOffice-0.15.0-preview.6-windows-x64/AgentOffice.exe
+```
+
+前三项使用专属无头浏览器与假原生客户端，不接触个人窗口和账号；最后一项用旧版程序创建临时数据库，保留原 stdio 进程并实际锁住旧 EXE，再升级到新包，核对原 HTTP 会话、地址、凭据、历史、人物原生会话和明确撤销状态；停止新版后台后，同一个旧 MCP 进程还须能启动新版。
+
 ## 产品命令行诊断
 
 `agentoffice selftest --json`（源码入口为 `node src/main.cjs selftest --json`）在独立临时目录用假客户端检查审批、只读权限拒绝、秘书幂等指派和房间删除。输出逐项状态，失败时退出非零；清理临时目录，不启动服务或真实模型，也不使用指定的用户数据目录。该自检证明核心本机流程，不能代替第三方客户端和模型的真实验收。

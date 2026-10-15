@@ -410,3 +410,120 @@ test('a configured native desktop rejects unsupported images before creating a m
   const proof=f.service.runtime.connectionState(f.member.id);
   assert.equal(proof.model_reply_verified,false);assert.equal(proof.automatic_reply_verified,false);
 });
+
+test('automatic reconnect waits with capped exponential backoff, survives restart, and reloads the original person without sending',async t=>{
+  const f=setup(t);await f.service.desktop.connect({member_id:f.member.id,room_id:f.room.id});
+  const nativeId=f.service.desktop.row(f.member.id).native_session_id,factory=f.service.desktop.options.driverFactory;
+  let stamp=10000,attempts=0,available=false;
+  Object.assign(f.service.desktop.options,{clock:()=>stamp,random:()=>0.5,reconnectBaseMs:100,reconnectMaxMs:250,driverFactory:row=>{attempts++;if(!available)throw Object.assign(Error('fetch failed'),{cause:{code:'ECONNREFUSED'}});return factory(row);}});
+  await f.reopen();f.service.desktop.start();await until(()=>attempts===1&&!f.service.desktop.connecting.size);
+  assert.equal(f.service.desktop.state(f.member.id).reconnect.status,'waiting');
+  assert.equal(f.service.desktop.state(f.member.id).reconnect.next_at,new Date(10100).toISOString());
+  for(let i=0;i<5;i++)f.service.desktop.pulse();assert.equal(attempts,1);
+  stamp=10100;f.service.desktop.pulse();await until(()=>attempts===2&&!f.service.desktop.connecting.size);
+  assert.equal(f.service.desktop.state(f.member.id).reconnect.next_at,new Date(10300).toISOString());
+  stamp=10300;f.service.desktop.pulse();await until(()=>attempts===3&&!f.service.desktop.connecting.size);
+  assert.equal(f.service.desktop.state(f.member.id).reconnect.next_at,new Date(10550).toISOString());
+  await f.reopen();f.service.desktop.start();assert.equal(attempts,3,'a service restart cannot reset an outstanding backoff');
+  available=true;stamp=10550;f.service.desktop.pulse();await until(()=>f.service.desktop.canWake(f.member.id));
+  assert.equal(attempts,4);assert.equal(f.ledger.initializations.at(-1).nativeChatId,nativeId);
+  assert.equal(f.service.desktop.row(f.member.id).native_session_id,nativeId);
+  assert.equal(f.service.desktop.state(f.member.id).reconnect.attempt,0);assert.equal(f.ledger.sends.length,0);
+});
+
+test('automatic recovery has one in-flight connection per person even across repeated pulses',async t=>{
+  const f=setup(t);await f.service.desktop.connect({member_id:f.member.id,room_id:f.room.id});await f.reopen();
+  const factory=f.service.desktop.options.driverFactory;let attempts=0,release;
+  f.service.desktop.options.driverFactory=row=>{attempts++;return new Promise(resolve=>{release=()=>resolve(factory(row));});};
+  f.service.desktop.start();for(let i=0;i<10;i++)f.service.desktop.pulse();await until(()=>!!release);
+  assert.equal(attempts,1);assert.equal(f.service.desktop.state(f.member.id).reconnect.status,'connecting');
+  release();await until(()=>f.service.desktop.canWake(f.member.id));assert.equal(attempts,1);assert.equal(f.ledger.sends.length,0);
+});
+
+test('a disconnect during recovery schedules one failed attempt and never advertises the disconnected driver',async t=>{
+  const f=setup(t);await f.service.desktop.connect({member_id:f.member.id,room_id:f.room.id});await f.reopen();
+  const transport={closed:false};let rejectLoad;
+  f.service.desktop.options.driverFactory=row=>{const driver=new FakeDesktopDriver(row,f.ledger);driver.transport=transport;driver.initialize=()=>new Promise((resolve,reject)=>{rejectLoad=reject;});return driver;};
+  f.service.desktop.start();await until(()=>!!rejectLoad);transport.closed=true;f.service.desktop.transportDisconnected(f.member.id,transport);
+  rejectLoad(Object.assign(Error('connection lost during load'),{code:'desktop_connection_lost'}));await until(()=>!f.service.desktop.connecting.size);
+  assert.equal(f.service.desktop.state(f.member.id).reconnect.attempt,1);assert.equal(f.service.desktop.canWake(f.member.id),false);assert.equal(f.ledger.sends.length,0);
+});
+
+test('transient reconnect jitter remains in range and never exceeds its cap',async t=>{
+  const f=setup(t);await f.service.desktop.connect({member_id:f.member.id,room_id:f.room.id});let stamp=1000;
+  Object.assign(f.service.desktop.options,{clock:()=>stamp,random:()=>1,reconnectBaseMs:100,reconnectMaxMs:150});
+  f.service.desktop.scheduleReconnect(f.member.id,{code:'desktop_connection_lost'});
+  let retry=f.service.desktop.state(f.member.id).reconnect;assert.equal(Date.parse(retry.next_at)-stamp,120);
+  stamp=2000;f.service.desktop.scheduleReconnect(f.member.id,{code:'desktop_bridge_unavailable'});
+  retry=f.service.desktop.state(f.member.id).reconnect;assert.equal(Date.parse(retry.next_at)-stamp,150);
+});
+
+for(const code of ['desktop_version_unsupported','desktop_contract_mismatch','desktop_identity_mismatch','desktop_adapter_unverified','operation_policy_denied'])test('automatic reconnect stops on a permanent boundary and retains it across restart: '+code,async t=>{
+  const f=setup(t);await f.service.desktop.connect({member_id:f.member.id,room_id:f.room.id});await f.reopen();let attempts=0;
+  Object.assign(f.service.desktop.options,{clock:()=>Date.now()+9999999,driverFactory:()=>{attempts++;throw Object.assign(Error('fixture permanent boundary'),{code});}});
+  f.service.desktop.start();await until(()=>attempts===1&&!f.service.desktop.connecting.size);
+  assert.equal(f.service.desktop.state(f.member.id).reconnect.status,'needs_action');assert.equal(f.service.desktop.state(f.member.id).reconnect.error_code,code);
+  for(let i=0;i<4;i++)f.service.desktop.pulse();assert.equal(attempts,1);
+  await f.reopen();f.service.desktop.start();f.service.desktop.pulse();assert.equal(attempts,1);assert.equal(f.ledger.sends.length,0);
+});
+
+test('an explicitly revoked person credential prevents reconnect and never reissues an entry',async t=>{
+  const f=setup(t);await f.service.desktop.connect({member_id:f.member.id,room_id:f.room.id});
+  const card=f.service.resume.issue(f.member.id,f.room.id).card,nativeId=f.service.desktop.row(f.member.id).native_session_id;
+  f.service.resume.revoke(card.credential_id);await f.reopen();let attempts=0;
+  f.service.desktop.options.driverFactory=()=>{attempts++;throw Error('revoked driver must not be contacted');};
+  f.service.desktop.start();f.service.desktop.pulse();await sleep(10);
+  assert.equal(attempts,0);assert.equal(f.service.desktop.state(f.member.id).reconnect.status,'paused');assert.equal(f.service.desktop.state(f.member.id).reconnect.error_code,'resume_revoked');
+  await assert.rejects(f.service.desktop.connect({member_id:f.member.id,room_id:f.room.id}),{code:'resume_revoked'});
+  assert.equal(f.service.resume.credentials(f.member.id).length,1);assert.equal(f.service.resume.credentials(f.member.id)[0].status,'revoked');
+  assert.equal(f.service.desktop.row(f.member.id).native_session_id,nativeId);assert.equal(f.ledger.sends.length,0);
+});
+
+test('revoking the only credential withdraws live wake capability before another recovery attempt',async t=>{
+  const f=setup(t);await f.service.desktop.connect({member_id:f.member.id,room_id:f.room.id});
+  const card=f.service.resume.issue(f.member.id,f.room.id).card,driver=f.service.desktop.clients.get(f.member.id),before=f.ledger.initializations.length;
+  f.service.resume.revoke(card.credential_id);assert.equal(f.service.desktop.canWake(f.member.id),false);
+  f.service.desktop.pulse();assert.equal(driver.closed,true);assert.equal(f.service.desktop.clients.size,0);
+  assert.equal(f.service.runtime.connectionState(f.member.id).runner_online,false);assert.equal(f.ledger.initializations.length,before);assert.equal(f.ledger.sends.length,0);
+});
+
+test('a transient nested diagnostic cannot bypass an explicit permanent identity boundary',async t=>{
+  const f=setup(t);await f.service.desktop.connect({member_id:f.member.id,room_id:f.room.id});
+  f.service.desktop.scheduleReconnect(f.member.id,{code:'desktop_identity_mismatch',cause:{code:'ECONNRESET'}});
+  await f.reopen();f.service.desktop.start();f.service.desktop.pulse();
+  assert.equal(f.service.desktop.state(f.member.id).reconnect.status,'needs_action');
+  assert.equal(f.service.desktop.state(f.member.id).reconnect.error_code,'desktop_identity_mismatch');
+  assert.equal(f.ledger.initializations.length,1);assert.equal(f.ledger.sends.length,0);
+});
+
+test('a person without rooms stays paused then automatically resumes the same conversation when rejoined',async t=>{
+  const f=setup(t);await f.service.desktop.connect({member_id:f.member.id,room_id:f.room.id});
+  const nativeId=f.service.desktop.row(f.member.id).native_session_id;f.service.chat.leave(f.room.id,f.member.id);await f.reopen();
+  const before=f.ledger.initializations.length;f.service.desktop.start();f.service.desktop.pulse();assert.equal(f.ledger.initializations.length,before);
+  assert.equal(f.service.desktop.state(f.member.id).reconnect.error_code,'desktop_membership_missing');
+  const room=f.service.chat.addRoom({title:'Rejoined room',project_id:f.project.id});f.service.chat.join(room.id,f.member.id);
+  f.service.desktop.pulse();await until(()=>f.service.desktop.canWake(f.member.id));
+  assert.equal(f.ledger.initializations.at(-1).nativeChatId,nativeId);assert.equal(f.ledger.sends.length,0);
+});
+
+test('lost transport automatically reconnects and reconciles the original completed turn without resubmitting it',async t=>{
+  const f=setup(t,{turnTimeoutMs:25,driver:{hold:true}});await f.service.desktop.connect({member_id:f.member.id,room_id:f.room.id});
+  const original=f.post('finish once after disconnect','disconnect-original');await until(()=>f.service.chat.store.message(original.id).status==='uncertain'&&!f.service.desktop.jobs.size);
+  const oldDriver=f.service.desktop.clients.get(f.member.id),nativeRuns=oldDriver.runs,nativeId=f.service.desktop.row(f.member.id).native_session_id;
+  oldDriver.transport={closed:true};f.service.desktop.transportDisconnected(f.member.id,oldDriver.transport);
+  assert.equal(f.service.desktop.canWake(f.member.id),false);
+  const native=nativeRuns.get(original.id);native.status='completed';native.replies[0].content='original reply after reconnect';
+  Object.assign(f.service.desktop.options,{clock:()=>Date.now()+9999999,driverFactory:row=>{const driver=new FakeDesktopDriver(row,f.ledger);driver.runs=nativeRuns;f.ledger.drivers.push(driver);return driver;}});
+  f.service.desktop.pulse();await until(()=>f.service.chat.store.message(original.id).status==='answered');
+  assert.equal(f.ledger.sends.length,1);assert.equal(f.service.desktop.row(f.member.id).native_session_id,nativeId);
+  assert.equal(f.service.chat.store.messages(f.room.id).filter(row=>row.reply_to===original.id&&row.kind==='reply').length,1);
+});
+
+test('shutdown stops future recovery and cannot initialize a driver that connects after close began',async t=>{
+  const f=setup(t);await f.service.desktop.connect({member_id:f.member.id,room_id:f.room.id});await f.reopen();
+  const initializations=f.ledger.initializations.length;let release,driver;
+  f.service.desktop.options.driverFactory=row=>new Promise(resolve=>{release=()=>{driver=new FakeDesktopDriver(row,f.ledger);resolve(driver);};});
+  f.service.desktop.start();await until(()=>!!release);const closing=f.service.desktop.close();
+  release();await closing;f.service.desktop.pulse();f.service.desktop.start();
+  assert.equal(f.ledger.initializations.length,initializations);assert.equal(driver.closed,true);assert.equal(f.service.desktop.clients.size,0);assert.equal(f.service.desktop.connecting.size,0);assert.equal(f.ledger.sends.length,0);
+});

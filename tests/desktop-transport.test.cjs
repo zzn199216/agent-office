@@ -52,6 +52,11 @@ test('discovery rejects ambiguous, absent, oversized and malformed target lists'
   await assert.rejects(discoverDesktop(endpoint,'qwen-desktop',{fetchImpl:fetchFixture([],503)}),{code:'desktop_bridge_unavailable'});
 });
 
+test('a native host still opening is retryable while multiple possible identities require selection',async()=>{
+  await assert.rejects(discoverDesktop(endpoint,'qwen-desktop',{fetchImpl:fetchFixture([])}),error=>error.code==='desktop_target_ambiguous'&&error.retryable===true);
+  await assert.rejects(discoverDesktop(endpoint,'qwen-desktop',{fetchImpl:fetchFixture([target,{...target,id:'other'}])}),error=>error.code==='desktop_target_ambiguous'&&error.retryable!==true);
+});
+
 test('discovery refuses debugger sockets outside the selected loopback port',async()=>{
   for(const socket of ['ws://192.168.1.8:19245/devtools/page/x','ws://127.0.0.1:19246/devtools/page/x','wss://127.0.0.1:19245/devtools/page/x','ws://fixture:secret@127.0.0.1:19245/devtools/page/x','invalid'])await assert.rejects(discoverDesktop(endpoint,'qwen-desktop',{fetchImpl:fetchFixture([{...target,webSocketDebuggerUrl:socket}])}),{code:'desktop_target_invalid'});
 });
