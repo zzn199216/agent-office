@@ -921,8 +921,8 @@ async function pollGrokSetup(){
     if(!grokSetupWatchCurrent(watch))return;
     setupData=data;grokSetupWatchError='';await refresh();
     if(!grokSetupWatchCurrent(watch))return;
-    lastSetupSignature='';renderSetup();if(grokSetupFresh(data,watch)&&enterGrokOffice(watch))return;
-  }catch(error){if(grokSetupWatchCurrent(watch)){grokSetupWatchError=error.message||'暂时无法检查连接结果。';lastSetupSignature='';renderSetup();}}
+    renderSetup();if(grokSetupFresh(data,watch)&&enterGrokOffice(watch))return;
+  }catch(error){if(grokSetupWatchCurrent(watch)){grokSetupWatchError=error.message||'暂时无法检查连接结果。';renderSetup();}}
   finally{if(grokSetupWatchCurrent(watch))grokSetupWatchTimer=setTimeout(()=>pollGrokSetup(),grokSetupWatchError?6000:2500);}
 }
 function renderGrokConnectGuide(client,member){
@@ -978,8 +978,12 @@ function renderSetup() {
   const guided=data.client?.kind==='grok_guided';
   const done=$('member-setup-dialog').querySelector('.member-setup-actions .primary.close-dialog');if(done)done.textContent=guided&&!grokSetupFresh(data)?'稍后继续':'完成';
   const observed = memberPresence(member);
-  $('member-runtime-status').innerHTML = `<span class="member-dot ${observed.status}"></span><strong>${escape(observed.label)}</strong><span>${observed.lastSeen ? `最近响应 ${escape(time(observed.lastSeen))}` : '尚无近期响应记录'}</span>${observed.canWake ? '<small>可拉起后台工作会话</small>' : ''}`;
-  const signature = JSON.stringify([selectedSetupMember,member.name,member.status,member.error,member.verified_at,member.runtime_state?.connection_evidence,data.error,data.invite,data.client,instructions,mcp,nativeSetupPending,nativeSetupFailure,grokSetupWatch?.copied,grokSetupWatch?.clipboardFailure,grokSetupWatchError]); if (signature === lastSetupSignature) return; lastSetupSignature = signature;
+  $('member-runtime-status').innerHTML = guided?'':`<span class="member-dot ${observed.status}"></span><strong>${escape(observed.label)}</strong><span>${observed.lastSeen ? `最近响应 ${escape(time(observed.lastSeen))}` : '尚无近期响应记录'}</span>${observed.canWake ? '<small>可拉起后台工作会话</small>' : ''}`;
+  // Read-only evidence includes a new observed_at on every query. The guided
+  // view renders only these stable fields; timestamp-only reads must not replace
+  // a focused button or the text the person is manually selecting to copy.
+  const clientSignature=guided?[data.client.kind,data.client.provider,data.client.copy,data.client.needs_prepare,data.client.needs_reauthorization,data.client.entry_status,data.client.revoked,data.client.handshake_verified,data.client.handshake_observed_at,data.client.ready_for_office,data.client.error,data.client.native_error,webConnected]:data.client;
+  const signature = JSON.stringify([selectedSetupMember,member.name,member.status,member.error,member.verified_at,guided?null:member.runtime_state?.connection_evidence,data.error,data.invite,clientSignature,instructions,mcp,nativeSetupPending,nativeSetupFailure,grokSetupWatch?.copied===true,grokSetupWatch?.clipboardFailure===true,grokSetupWatchError]); if (signature === lastSetupSignature) return; lastSetupSignature = signature;
   const needsInvite = !['codex','native'].includes(member.adapter) && !member.verified_at && !data.invite;
   const native=data.client?.kind==='native_desktop',evidence=member.runtime_state?.connection_evidence||data.client?.connection_evidence||data.client?.native_state?.connection_evidence||{};
   const connectionLabel=native?evidence.native_conversation_loaded===true?evidence.model_reply_verified===true?'本人实际回复已核对':'本人对话已加载':'本人对话待验证':status.label,connectionTone=native?evidence.native_conversation_loaded===true?'online':'connecting':status.tone;

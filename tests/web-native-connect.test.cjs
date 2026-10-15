@@ -153,6 +153,13 @@ test('Grok guided screen exposes one clear handoff and hides configuration and o
   assert.equal(f.$('member-setup-content').innerHTML,'');assert.equal(f.$('bridge-webhook-section').classList.contains('hidden'),true);assert.equal(f.calls.length,1);
   await f.$('member-connect-guide').onclick(click('data-grok-copy'));assert.deepEqual(f.copied,['OWNED-HANDOFF-WITH-PRIVATE-CREDENTIAL']);assert.equal(f.context.grokSetupWatch.copied,true);assert.equal(f.calls.length,1,'copying an existing credential does not reissue or retry');
 });
+test('unchanged Grok polling preserves guide DOM and keeps technical runtime status hidden',async()=>{
+  const f=guidedFixture(),guide=f.$('member-connect-guide');let writes=0,html='',observation=0;f.client.connection_evidence={observed_at:'initial',sessions:[]};f.member.runtime_state.connection_evidence={observed_at:'initial',sessions:[]};
+  f.context.api=async()=>({member:f.member,client:{...f.client,connection_evidence:{observed_at:String(++observation),sessions:[]}}});f.context.refresh=async()=>{f.member.runtime_state.connection_evidence={observed_at:String(++observation),sessions:[]};f.context.renderSetup();};
+  Object.defineProperty(guide,'innerHTML',{get:()=>html,set:value=>{html=value;writes++;}});await f.context.showMemberSetup(f.member.id);const initial=writes;
+  for(let i=0;i<3;i++)await f.context.pollGrokSetup();assert.equal(writes,initial,'readonly unchanged polls must preserve focused buttons and manual copy selections');assert.equal(f.$('member-runtime-status').innerHTML,'');
+  f.context.api=async()=>{throw Error('fixture status temporarily unavailable');};await f.context.pollGrokSetup();assert.equal(writes,initial+1,'a real changed error still renders');await f.context.pollGrokSetup();assert.equal(writes,initial+1,'the same unchanged error must not replace DOM repeatedly');
+});
 
 test('Grok explicit first-copy prepares once, concurrent clicks do not issue additional credentials',async()=>{
   const f=guidedFixture();f.client.copy=null;f.client.needs_prepare=true;await f.context.showMemberSetup(f.member.id);const gate=deferred();
