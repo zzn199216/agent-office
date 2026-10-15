@@ -5,6 +5,9 @@ async function main(){
   const option=name=>{const index=process.argv.indexOf(name);if(index<0)return null;if(!process.argv[index+1]||process.argv[index+1].startsWith('--'))throw new Error(name+' needs a value');return path.resolve(process.argv[index+1]);};
   const root=path.resolve(__dirname,'..'),exe=option('--executable')||path.join(root,'dist','AgentRoom.exe'),base=fs.mkdtempSync(path.join(os.tmpdir(),'agentroom-package-')),infoDir=path.join(base,'version-only'),data=path.join(base,'runtime'),output=option('--output')||path.join(root,'output','validation',process.argv.includes('--chat-live')?'packaged-chat-runtime.json':'packaged-runtime.json');
   const version=(await run(exe,['--version','--data-dir',infoDir])).trim();if(version!==require('../package.json').version||fs.existsSync(infoDir))throw new Error('Version check unexpectedly installed or started the application.');
+  const selftest=JSON.parse(await run(exe,['selftest','--json','--data-dir',infoDir])),approvals=JSON.parse(await run(exe,['approvals','--json','--data-dir',infoDir]));
+  if(!selftest.ok||selftest.real_models_called!==false||selftest.checks?.length!==4||selftest.checks.some(value=>value.status!=='ok')||fs.existsSync(infoDir))throw new Error('Packaged isolated selftest failed.');
+  if(approvals.available!==false||approvals.approvals!==null||approvals.approval_reviews!==null||fs.existsSync(infoDir))throw new Error('Packaged approval diagnostics started a service or claimed an empty queue.');
   const start=JSON.parse(await run(exe,['start','--data-dir',data,'--project',root,'--name','打包验收']));
   try{
     const status=JSON.parse(await run(exe,['status','--data-dir',data]));if(!status.projects.some(p=>p.name==='打包验收'))throw new Error('Packaged runtime registration failed.');
@@ -13,7 +16,7 @@ async function main(){
     if(await asset.text()!==fs.readFileSync(path.join(root,'web','app.js'),'utf8'))throw new Error('Embedded UI script differs from the current source.');
     const installed=path.join(data,'bin','AgentRoom.exe');if(!fs.existsSync(installed))throw new Error('Stable self-install failed.');
     const sourceHash=crypto.createHash('sha256').update(fs.readFileSync(exe)).digest('hex'),installedHash=crypto.createHash('sha256').update(fs.readFileSync(installed)).digest('hex');if(sourceHash!==installedHash)throw new Error('Installed binary differs.');
-    const evidence={tested_at:new Date().toISOString(),version,self_install_verified:true,embedded_ui_verified:true,no_node_or_python_child_runtime_required:true,version_command_no_side_effects:true,projects:status.projects.length,url:start.url};
+    const evidence={tested_at:new Date().toISOString(),version,self_install_verified:true,embedded_ui_verified:true,no_node_or_python_child_runtime_required:true,version_command_no_side_effects:true,selftest_verified:true,offline_approvals_verified:true,projects:status.projects.length,url:start.url};
     const {OFFICE_FILES}=require('../src/office-assets.cjs');
     for(const name of OFFICE_FILES){
       const response=await fetch(start.url+'/'+name),mime={'.png':'image/png','.svg':'image/svg+xml; charset=utf-8','.json':'application/json; charset=utf-8'}[path.extname(name)];

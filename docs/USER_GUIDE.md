@@ -1,4 +1,6 @@
-# Agent 办公室 · Agent Office 0.15.0-preview.4 使用说明
+# Agent 办公室 · Agent Office 0.15.0-preview.5 使用说明
+
+命令行诊断：`AgentOffice.exe selftest --json` 在临时目录用假客户端检查审批、权限拒绝、秘书指派与房间删除，不启动真实模型。`AgentOffice.exe approvals --json` 只读取已运行后台的待确认记录；后台关闭时明确返回 `available: false` 和 null，不自动启动服务，也不把未知待办数显示为零。
 
 连接按办公室人物保留，不按房间重新配置。已核对版本的 Qwen、豆包桌面可在开启一次本机连接后点「连接本人对话」，由 AO 自动创建独立人物对话、派发问题并回写真实回答。加入新房间、删除旧房间或重启 AO 后继续沿用同一人物与原生对话，不需要再次导入 MCP 或到窗口催收。详细版本与首次连接说明见 [原生桌面对话](NATIVE_DESKTOP.md)。豆包的原生 MCP 工具调用与 Grok 的原生收发仍待独立验收；其他信箱入口保留高级兼容配置。
 

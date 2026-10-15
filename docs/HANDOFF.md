@@ -4,6 +4,8 @@
 
 ## 最新续修（0.15.0-preview.5，审计修复）
 
+- 第 3 步新增产品 CLI `selftest --json` 和 `approvals --json`。前者仅用隔离假客户端检查审批、权限拒绝、秘书幂等指派和房间删除；后者仅查询已运行服务，服务关闭时明确 unavailable/null，不启动后台或误报空待办。成员入口不允许读取控制器诊断。源码自检已通过；新增离线无写入、活服务只读、身份冲突、连接失败、隔离自检及成员范围测试。打包冒烟新增两个命令的真实可执行文件验证；最终打包结果以最新完整发布报告为准。
+
 - 第 2 步新增 release-runner 固定动作队列与当前用户隐藏计划任务安装/卸载脚本。请求绑定 expected_head、版本与 10 分钟时效；在本地提交快照执行，终态不重跑，超时取消子进程树，崩溃残留明确失败。队列与发布锁、来源核对、快照交付复制均有独立边界；不会启动用户 AO 或模型。FIFO、并发、拒绝、超时和恢复测试覆盖，真实主机请求状态以 output/release-status 为准。安装说明见 RELEASE.md。
 - 真实主机快照检查 host-check-1792023930709 已成功。NAS 未签名 PowerShell 入口受 RemoteSigned 限制，因此改用 Node 安装入口及本地隐藏宿主，不修改执行策略；同时修复 Store 应用 LOCALAPPDATA 虚拟化和 nvm 链接路径：任务登记真实 native 文件路径。当前用户 AgentOfficeReleaseRunner 已安装，Interactive/Limited、每分钟检查、无窗口，真实启动退出码为 0。WebView2 SDK 缓存按固定 SHA 复用；具体可用性见 `node scripts/release-task.cjs status`。
 

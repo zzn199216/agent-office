@@ -78,6 +78,11 @@ async function main(args=process.argv.slice(2)){
   if(options['data-dir'])process.env.AGENTROOM_DATA_DIR=path.resolve(options['data-dir']);let dir=dataDirectory(),entry;
   if(command==='mcp'&&options.setup){if(options.entry)throw new RoomError('初始化 MCP 与成员代理入口不能混用。');process.env.AGENTROOM_SETUP_MODE='1';}
   if(command==='--version'||options.version){console.log(VERSION);return;}
+  if(command==='approvals'||command==='selftest'){
+    if(options.entry||process.env.AGENTROOM_MEMBER_ID)throw new RoomError('诊断命令属于本机用户操作，成员入口不能读取全部待办。',403,'resume_scope_mismatch');
+    const diagnostics=require('./diagnostics.cjs'),result=command==='selftest'?await diagnostics.selftest():await diagnostics.approvals(dir,{readControl,apiCall});print(result);if(result.ok===false)process.exitCode=1;return;
+  }
+  if(command==='help'||options.help)console.log('Diagnostics: selftest --json (isolated fake clients), approvals --json (read-only; never starts a service).');
   if(command==='work-record'){
     if(options.entry||process.env.AGENTROOM_MEMBER_ID)throw new RoomError('完整工作记录属于本机用户查看操作。',403,'resume_scope_mismatch');
     const result=await require('./work-records.cjs').offlineWorkRecord(dir,{room_id:options.room,member_id:options.member,discussion_id:options.discussion});print({path:result.path,thread_id:result.thread_id,turn_count:result.turns.length,read_only:true});return;

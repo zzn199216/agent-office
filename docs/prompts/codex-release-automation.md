@@ -1,5 +1,7 @@
 # Prompt for Codex: release automation (English)
 
+Implementation note (2026-10-15): this plan has been implemented with explicit user authorization. Read docs/RELEASE.md and docs/HANDOFF.md for the current commands and verification. Do not recreate the pipeline. Missing-thread requests now receive an explicit rejection; the other product and identity decisions remain unchanged.
+
 Work in the repository root. Read docs/RELEASE_AUTOMATION_PLAN.md first for the background (Chinese). Do the steps one at a time. After each step: run the full test suite and `node scripts/check.cjs`, commit only when everything passes, and do not push. Do not touch the user's data directory (~/.agentroom), older release directories, real model calls, or personal client configurations. Do not deploy or restart anything that is not part of this task.
 
 ## Step 1: scripts/release.cjs
