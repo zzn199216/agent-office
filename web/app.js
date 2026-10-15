@@ -832,20 +832,23 @@ function fallbackConnectGuide(client=setupData?.client){return client?.kind==='n
 function stopGrokSetupWatch(){clearTimeout(grokSetupWatchTimer);grokSetupWatchTimer=null;grokSetupWatch=null;grokSetupWatchSequence++;}
 function grokSetupWatchCurrent(watch){return !!watch&&grokSetupWatch===watch&&watch.sequence===grokSetupWatchSequence&&watch.memberId===selectedSetupMember&&watch.roomId===roomId&&!legacyId&&$('member-setup-dialog').open&&setupData?.client?.kind==='grok_guided';}
 function grokSetupReady(data){return data?.client?.ready_for_office===true&&data.client.handshake_verified===true;}
+function grokSetupObservation(data){const value=Date.parse(data?.client?.handshake_observed_at);return Number.isFinite(value)?value:0;}
+function grokSetupFresh(data,watch=grokSetupWatch){return !!watch&&grokSetupReady(data)&&grokSetupObservation(data)>watch.initialHandshakeObservation;}
 function grokSetupBlocked(client){return client?.revoked===true||client?.needs_reauthorization===true||client?.entry_status==='revoked';}
 function openGrokSetup(){
   stopGrokSetupWatch();grokSetupWatchError='';lastSetupSignature='';
   for(const id of ['member-dialog','secretary-connect-dialog','bridge-dialog'])if($(id).open)$(id).close();
   renderSetup();if(!$('member-setup-dialog').open)$('member-setup-dialog').showModal();
-  grokSetupWatch={memberId:selectedSetupMember,roomId,sequence:grokSetupWatchSequence,copied:false,copying:false,initialHandshakeVerified:setupData.client.handshake_verified===true};
+  grokSetupWatch={memberId:selectedSetupMember,roomId,sequence:grokSetupWatchSequence,copied:false,copying:false,initialHandshakeObservation:grokSetupObservation(setupData)};
   grokSetupWatchTimer=setTimeout(()=>pollGrokSetup(),2500);
 }
-function enterGrokOffice(watch){
-  if(!grokSetupWatchCurrent(watch)||!grokSetupReady(setupData))return false;
+function enterGrokOffice(watch,{allowHistorical=false}={}){
+  const fresh=grokSetupFresh(setupData,watch);
+  if(!grokSetupWatchCurrent(watch)||!(fresh||allowHistorical&&grokSetupReady(setupData)))return false;
   const member=memberById(watch.memberId);if(!member||!history?.participants?.some(value=>value.id===watch.memberId)||history.room?.id!==watch.roomId)return false;
   stopGrokSetupWatch();$('member-setup-dialog').close();secretaryNavigation=null;closeSecretaryTutorial();setProfessionalView(true);selectRoomView(true);
   if(!$('recipient').value){$('recipient').value=member.id;updateRecipientNote();}
-  toast('Grok 已完成真实连接，已进入办公室。后台自动接手能力会单独核对。');return true;
+  toast(fresh?'Grok 本次真实连接已核对，已进入办公室。后台自动接手能力会单独核对。':'已进入办公室，原连接和记录保留；Grok 本次连接仍待核对。');return true;
 }
 async function pollGrokSetup(){
   clearTimeout(grokSetupWatchTimer);
@@ -857,15 +860,15 @@ async function pollGrokSetup(){
     if(!grokSetupWatchCurrent(watch))return;
     setupData=data;grokSetupWatchError='';await refresh();
     if(!grokSetupWatchCurrent(watch))return;
-    lastSetupSignature='';renderSetup();if((watch.copied||!watch.initialHandshakeVerified)&&enterGrokOffice(watch))return;
+    lastSetupSignature='';renderSetup();if(grokSetupFresh(data,watch)&&enterGrokOffice(watch))return;
   }catch(error){if(grokSetupWatchCurrent(watch)){grokSetupWatchError=error.message||'暂时无法检查连接结果。';lastSetupSignature='';renderSetup();}}
   finally{if(grokSetupWatchCurrent(watch))grokSetupWatchTimer=setTimeout(()=>pollGrokSetup(),grokSetupWatchError?6000:2500);}
 }
 function renderGrokConnectGuide(client,member){
-  const ready=grokSetupReady({client}),verified=client.handshake_verified===true,copied=grokSetupWatch?.memberId===member.id&&grokSetupWatch.copied;
+  const ready=grokSetupFresh({client}),historical=grokSetupReady({client}),verified=ready,copied=grokSetupWatch?.memberId===member.id&&grokSetupWatch.copied;
   const blocked=grokSetupBlocked(client);
   const reason=client.error||client.native_error||member.error||'';
-  return `<h3>${ready?'Grok 本机入口已接通':'把这位 Grok Bot 连进办公室'}</h3><p class="grok-connect-intro">把下面的连接说明发给你正在使用的 Grok，让它按说明连接这位 Bot。无需先建群，换房间或升级后仍沿用这位人物。</p><ol class="grok-connect-steps"><li><strong>复制连接说明</strong><p>${blocked?'这个连接已被撤销，请在原接入记录中明确重新授权后继续。':'说明已包含这位人物的连接入口，无需填写任何编号。'}</p><button type="button" class="primary" data-grok-copy ${(!client.copy&&!client.needs_prepare)||blocked||!webConnected||grokSetupWatch?.copying?'disabled':''}>${grokSetupWatch?.copying?'正在准备说明…':copied?'再次复制连接说明':'复制连接说明'}</button>${grokSetupWatch?.clipboardFailure?`<p>请选中下方说明复制，粘贴到 Grok Bot 对话：</p><textarea class="grok-handoff-copy" data-grok-copy-fallback readonly aria-label="Grok 连接说明，选中后复制">${escape(client.copy||'')}</textarea>`:''}</li><li><strong>发给 Grok，完成它提出的一次授权</strong><p>粘贴到你要连接的 Grok Bot 对话；如果当前是主 Grok，请明确让它按说明连接这位人物的专用 Bot。Grok 请求本机命令执行授权时，在 Grok 中确认。</p></li><li class="${verified?'verified':''}"><strong>${ready?'已验证本机入口':verified?'连接入口已验证':'回到这里，AO 自动检查连接'}</strong><p role="status">${ready?'可以进入办公室。连接已保留，今后无需重复粘贴。':verified?'已收到这位 Bot 的真实连接记录，正在核对当前可用状态。':copied?'正在等待 Grok 执行连接说明。AO 会自动更新，无需重复点连接。':'复制后按第二步发送。AO 只在收到真实连接后显示成功。'}</p>${ready?'<button type="button" class="primary" data-grok-enter>进入办公室</button>':''}</li></ol>${grokSetupWatchError?'<p class="setup-note">暂时无法检查结果；AO 会自动继续检查，保留当前说明即可。</p>':''}<p class="small-note">接通入口不等于能后台唤醒 Grok。自动接手会依据实际接口另行验证。</p><details class="native-connect-advanced"><summary>遇到问题？查看帮助与诊断</summary><p>如果 Grok 说“没有本机执行工具”，请使用具有本机命令能力的 Grok Bot 执行这份说明。无需删除 AO 人物或重新生成连接。</p><p>需要群聊时，连接成功后再让 Grok 创建群聊并邀请其他成员。</p>${reason||grokSetupWatchError?`<pre class="setup-code">${escape(grokSetupWatchError||reason)}</pre>`:''}<button type="button" class="secondary" data-native-diagnostics>查看连接诊断</button></details>`;
+  return `<h3>${ready?'Grok 本机入口已接通':'把这位 Grok Bot 连进办公室'}</h3><p class="grok-connect-intro">把下面的连接说明发给你正在使用的 Grok，让它按说明连接这位 Bot。无需先建群，换房间或升级后仍沿用这位人物。</p><ol class="grok-connect-steps"><li><strong>复制连接说明</strong><p>${blocked?'这个连接已被撤销，请在原接入记录中明确重新授权后继续。':'说明已包含这位人物的连接入口，无需填写任何编号。'}</p><button type="button" class="primary" data-grok-copy ${(!client.copy&&!client.needs_prepare)||blocked||!webConnected||grokSetupWatch?.copying?'disabled':''}>${grokSetupWatch?.copying?'正在准备说明…':copied?'再次复制连接说明':'复制连接说明'}</button>${grokSetupWatch?.clipboardFailure?`<p>请选中下方说明复制，粘贴到 Grok Bot 对话：</p><textarea class="grok-handoff-copy" data-grok-copy-fallback readonly aria-label="Grok 连接说明，选中后复制">${escape(client.copy||'')}</textarea>`:''}</li><li><strong>发给 Grok，完成它提出的一次授权</strong><p>粘贴到你要连接的 Grok Bot 对话；如果当前是主 Grok，请明确让它按说明连接这位人物的专用 Bot。Grok 请求本机命令执行授权时，在 Grok 中确认。</p></li><li class="${verified?'verified':''}"><strong>${ready?'本次真实连接已核对':historical?'以前已验证，本次连接待核对':'回到这里，AO 自动检查连接'}</strong><p role="status">${ready?'可以进入办公室。连接已保留，今后无需重复粘贴。':historical?'原连接仍保留；尚未收到本次 Grok 调用。请把说明发给它，AO 会核对新的连接记录。':copied?'正在等待 Grok 执行连接说明。AO 会自动更新，无需重复点连接。':'复制后按第二步发送。AO 只在收到真实连接后显示成功。'}</p>${ready?'<button type="button" class="primary" data-grok-enter>进入办公室</button>':historical?'<button type="button" class="secondary" data-grok-enter-history>先进入办公室（本次待核对）</button>':''}</li></ol>${grokSetupWatchError?'<p class="setup-note">暂时无法检查结果；AO 会自动继续检查，保留当前说明即可。</p>':''}<p class="small-note">接通入口不等于能后台唤醒 Grok。自动接手会依据实际接口另行验证。</p><details class="native-connect-advanced"><summary>遇到问题？查看帮助与诊断</summary><p>如果 Grok 说“没有本机执行工具”，请使用具有本机命令能力的 Grok Bot 执行这份说明。无需删除 AO 人物或重新生成连接。</p><p>需要群聊时，连接成功后再让 Grok 创建群聊并邀请其他成员。</p>${reason||grokSetupWatchError?`<pre class="setup-code">${escape(grokSetupWatchError||reason)}</pre>`:''}<button type="button" class="secondary" data-native-diagnostics>查看连接诊断</button></details>`;
 }
 // The primary action binds an owned native dialogue. Protocol and actual model
 // reply observations stay separate, including when a legacy entry was verified.
@@ -912,7 +915,7 @@ async function connectOnboardingNative(job) {
 function renderSetup() {
   const member = memberById(selectedSetupMember) || setupData?.member || {}, status = memberStatus(member), data = setupData || {}, instructions = instructionsText(data), mcp = data.mcp, isBridge = member.adapter === 'grok-bridge';
   const guided=data.client?.kind==='grok_guided';
-  const done=$('member-setup-dialog').querySelector('.member-setup-actions .primary.close-dialog');if(done)done.textContent=guided&&!grokSetupReady(data)?'稍后继续':'完成';
+  const done=$('member-setup-dialog').querySelector('.member-setup-actions .primary.close-dialog');if(done)done.textContent=guided&&!grokSetupFresh(data)?'稍后继续':'完成';
   const observed = memberPresence(member);
   $('member-runtime-status').innerHTML = `<span class="member-dot ${observed.status}"></span><strong>${escape(observed.label)}</strong><span>${observed.lastSeen ? `最近响应 ${escape(time(observed.lastSeen))}` : '尚无近期响应记录'}</span>${observed.canWake ? '<small>可拉起后台工作会话</small>' : ''}`;
   const signature = JSON.stringify([selectedSetupMember,member.name,member.status,member.error,member.verified_at,member.runtime_state?.connection_evidence,data.error,data.invite,data.client,instructions,mcp,nativeSetupPending,nativeSetupFailure,grokSetupWatch?.copied,grokSetupWatch?.clipboardFailure,grokSetupWatchError]); if (signature === lastSetupSignature) return; lastSetupSignature = signature;
@@ -923,7 +926,7 @@ function renderSetup() {
   $('bridge-webhook-section').classList.toggle('hidden', member.adapter !== 'grok-bridge'||native);
   renderConnectGuide(data.client, member);
   if(guided){
-    $('member-setup-status').innerHTML=`<span class="member-dot ${data.client.handshake_verified?'online':'connecting'}"></span><strong>${grokSetupReady(data)?'这位 Grok 的连接已验证':'完成下面两步，AO 会自动检查'}</strong>`;
+    $('member-setup-status').innerHTML=`<span class="member-dot ${grokSetupFresh(data)?'online':'connecting'}"></span><strong>${grokSetupFresh(data)?'这位 Grok 本次连接已核对':grokSetupReady(data)?'以前已验证，本次连接待核对':'完成下面两步，AO 会自动检查'}</strong>`;
     $('member-runtime-status').innerHTML='';$('bridge-webhook-section').classList.add('hidden');$('member-setup-content').innerHTML='';$('retry-member-connect').classList.add('hidden');$('leave-member').classList.toggle('hidden',!roomId||legacyId);return;
   }
   $('member-setup-content').innerHTML = `${!native&&(member.error || data.error) ? `<div class="error-note">${escape(member.error || data.error)}</div>` : ''}${status.tone === 'connecting' ? `<p class="setup-note"><span class="pulse-dot"></span> ${native?'正在核对本人对话的连接；实际模型回复会在任务发送后单独验证。':'正在后台询问成员并验证通信。你可以关闭这个窗口，连接结果会更新到成员列表。'}</p>` : ''}${instructions && (!data.client||native) ? `<details class="setup-block"><summary>${native?'高级：兼容接入说明':'兼容接入说明'}</summary><div class="setup-block-heading"><strong>${isBridge ? '桥接 Bot 协作说明' : '旧邀请 / 原生握手说明'}</strong><button class="secondary" data-copy-setup="instructions">复制说明</button></div>${native?'<p class="small-note">按需复制兼容说明，房间由 AO 自动确定。</p>':`<pre class="setup-code">${escape(instructions)}</pre>`}</details>` : ''}${mcp && (!data.client||native) ? `<details class="setup-block"><summary>${native?'高级：兼容 MCP 配置':'MCP 配置'}</summary><button class="secondary" data-copy-setup="mcp">复制配置</button>${native?'<p class="small-note">配置只在明确复制时提供，用于本人客户端的兼容入口。</p>':`<pre class="setup-code">${escape(setupText(mcp))}</pre>`}</details>` : ''}${!native&&!instructions && !mcp && status.tone !== 'connecting' ? `<p class="setup-note">${member.verified_at ? '身份已验证。使用上方恢复入口可以继续访问这个房间。' : '长期接入请复制上方恢复入口，由成员在自己的窗口实际进入。'}</p>` : ''}${isBridge&&!native ? '<div class="bridge-note"><strong>把房间带进 Grok 群聊</strong><p>在 Grok 中添加一个桥接 Bot，把上面的说明交给它，再邀请它加入你的群聊。它负责把问题带到 AgentRoom，并把成员回复带回群聊。长期入口与原群回传分别验证，发现窗口或保存 Webhook 不代表已经接通群聊。</p></div>' : ''}`;
@@ -1660,7 +1663,8 @@ $('room-recovery').onclick = () => showResume();
 $('member-view-entry').onclick = () => showResume(selectedSetupMember);
 $('bridge-view-entry').onclick = () => showResume(bridgeMemberId);
 $('member-connect-guide').onclick = event => {
-  const button=event.target.closest('[data-native-connect],[data-native-diagnostics],[data-copy-guide],[data-copy-bootstrap],[data-copy-install],[data-grok-copy],[data-grok-enter]');if(!button)return;
+  const button=event.target.closest('[data-native-connect],[data-native-diagnostics],[data-copy-guide],[data-copy-bootstrap],[data-copy-install],[data-grok-copy],[data-grok-enter],[data-grok-enter-history]');if(!button)return;
+  if(button.hasAttribute('data-grok-enter-history'))return enterGrokOffice(grokSetupWatch,{allowHistorical:true});
   if(button.hasAttribute('data-grok-enter'))return enterGrokOffice(grokSetupWatch);
   if(button.hasAttribute('data-grok-copy'))return action(async()=>{
     const watch=grokSetupWatch;if(!watch||!grokSetupWatchCurrent(watch)||watch.copying||grokSetupBlocked(setupData.client))return;

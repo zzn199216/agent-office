@@ -172,13 +172,22 @@ async function main(args=process.argv.slice(2)){
   if(command==='chat-connect'){print(await api(`/api/chat/members/${options.member}/connect`,{room_id:options.room}));return;}
   if(command==='chat-join'){print(await api('/api/chat/join',{invite_id:options.invite,nonce:options.nonce,member_id:options.member}));return;}
   if(command==='chat-history'){print(await api(`/api/chat/rooms/${options.room}`));return;}
-  if(command==='chat-rooms'){if(!options.member)throw new RoomError('请使用本人的长期入口，或指定要查询的成员。');print(await api(`/api/chat/members/${encodeURIComponent(options.member)}/rooms`));return;}
+  if(command==='chat-rooms'){
+    if(!options.member)throw new RoomError('请使用本人的长期入口，或指定要查询的成员。');
+    const scope=entry?inspectScope():null;
+    if(scope?.proxy){print({member_id:options.member,rooms:scope.connection.rooms});return;}
+    print(await api(`/api/chat/members/${encodeURIComponent(options.member)}/rooms`));return;
+  }
   if(command==='chat-post'){
     const text=options.file?fileText(options.file):options.stdin?await stdinText():options.message;
     const m=await api('/api/chat/messages',{room_id:options.room,sender_id:options.member||'user',to_member_id:options.to||null,text,reply_to:options.reply||null,idempotency_key:options.key||crypto.randomUUID()});print(options.wait?await waitChat(api,m.id,Number(options.wait),options.member):m);return;
   }
   if(command==='chat-wait'){print(await waitChat(api,pos[1],Number(options.timeout||300),options.member));return;}
-  if(command==='chat-inbox'){const result=await api(`/api/chat/inbox?member_id=${encodeURIComponent(options.member)}${options.room&&(!entry||roomExplicitlyRequested)?'&room_id='+encodeURIComponent(options.room):''}`);print(Array.isArray(result?.items)?result.items:result);return;}
+  if(command==='chat-inbox'){
+    let room=options.room&&(!entry||roomExplicitlyRequested)?options.room:null;
+    if(entry&&!roomExplicitlyRequested){const scope=inspectScope();if(scope.proxy)room=scope.env.AGENTROOM_ROOM_ID;}
+    const result=await api(`/api/chat/inbox?member_id=${encodeURIComponent(options.member)}${room?'&room_id='+encodeURIComponent(room):''}`);print(Array.isArray(result?.items)?result.items:result);return;
+  }
   if(command==='chat-reply'){print(await api(`/api/chat/messages/${pos[1]}/reply`,{member_id:options.member,text:options.file?fileText(options.file):options.stdin?await stdinText():options.message,idempotency_key:options.key||crypto.randomUUID()}));return;}
   if(command==='chat-ack'){print(await api(`/api/chat/messages/${pos[1]}/ack`,{member_id:options.member}));return;}
   if(command==='bridge-request'){

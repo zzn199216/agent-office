@@ -159,7 +159,7 @@ test('Grok explicit first-copy prepares once, concurrent clicks do not issue add
 test('Grok waits for actual handshake and enters office without assigning a secretary or claiming auto wake',async()=>{
   const f=guidedFixture();await f.context.showMemberSetup(f.member.id);await f.$('member-connect-guide').onclick(click('data-grok-copy'));
   await f.context.pollGrokSetup();assert.equal(f.office,undefined);assert.equal(f.$('member-setup-dialog').open,true);assert.equal(f.calls.filter(call=>call.body).length,0);
-  f.member.verified_at='REAL-HANDSHAKE';Object.assign(f.client,{handshake_verified:true,ready_for_office:true});await f.context.pollGrokSetup();
+  f.member.verified_at='REAL-HANDSHAKE';Object.assign(f.client,{handshake_verified:true,ready_for_office:true,handshake_observed_at:'2026-10-15T12:00:01.000Z'});await f.context.pollGrokSetup();
   assert.equal(f.office,true);assert.equal(f.$('member-setup-dialog').open,false);assert.equal(f.context.grokSetupWatch,null);assert.equal(f.context.secretaryNavigation,null);assert.equal(f.calls.filter(call=>call.body).length,0);assert.equal(f.$('recipient').value,f.member.id);assert.match(f.notices.at(-1),/后台自动接手能力会单独核对/);
 });
 
@@ -178,7 +178,21 @@ test('revoked Grok guidance blocks copying, while clipboard failure exposes sele
   assert.match(f.$('member-connect-guide').innerHTML,/data-grok-copy disabled/);assert.match(f.$('member-connect-guide').innerHTML,/这个连接已被撤销/);await f.$('member-connect-guide').onclick(click('data-grok-copy'));assert.equal(f.calls.length,1);assert.equal(f.copied.length,0);
   Object.assign(f.client,{copy:'<OWNED>SECRET',entry_status:'pending',needs_reauthorization:false});f.context.navigator.clipboard.writeText=async()=>{throw Error('clipboard unavailable');};
   await f.$('member-connect-guide').onclick(click('data-grok-copy'));assert.match(f.$('member-connect-guide').innerHTML,/textarea class="grok-handoff-copy" data-grok-copy-fallback readonly/);assert.match(f.$('member-connect-guide').innerHTML,/&lt;OWNED&gt;SECRET/);assert.equal(f.context.grokSetupWatch.copied,false);assert.equal(f.office,undefined);
-  f.member.verified_at='REAL-AFTER-MANUAL-COPY';Object.assign(f.client,{handshake_verified:true,ready_for_office:true});await f.context.pollGrokSetup();assert.equal(f.office,true,'a real pending-to-verified transition enters office even after manual copying');
+  f.member.verified_at='REAL-AFTER-MANUAL-COPY';Object.assign(f.client,{handshake_verified:true,ready_for_office:true,handshake_observed_at:'2026-10-15T12:00:01.000Z'});await f.context.pollGrokSetup();assert.equal(f.office,true,'a real pending-to-verified transition enters office even after manual copying');
+});
+
+test('historic active offline Grok never auto-enters after copy or readonly polling until authenticated contact advances',async()=>{
+  const f=guidedFixture();f.member.verified_at='HISTORICAL-PROOF';f.member.status='offline';Object.assign(f.client,{handshake_verified:true,ready_for_office:true,handshake_observed_at:'2026-10-14T00:00:00.000Z'});
+  await f.context.showMemberSetup(f.member.id);assert.match(f.$('member-setup-status').innerHTML,/以前已验证，本次连接待核对/);assert.match(f.$('member-connect-guide').innerHTML,/data-grok-enter-history/);assert.doesNotMatch(f.$('member-connect-guide').innerHTML,/data-grok-enter>/);
+  await f.$('member-connect-guide').onclick(click('data-grok-copy'));for(let i=0;i<3;i++)await f.context.pollGrokSetup();
+  assert.equal(f.office,undefined);assert.equal(f.$('member-setup-dialog').open,true);assert.equal(f.calls.filter(call=>call.body).length,0);assert.equal(f.context.enterGrokOffice(f.context.grokSetupWatch),false);assert.doesNotMatch(f.notices.join('\n'),/本次真实连接已核对|已进入办公室/);
+  f.client.handshake_observed_at='2026-10-14T00:00:00.000Z';assert.equal(f.context.grokSetupFresh(f.context.setupData),false);
+  f.client.handshake_observed_at='2026-10-15T12:00:01.000Z';await f.context.pollGrokSetup();assert.equal(f.office,true);assert.match(f.notices.at(-1),/本次真实连接已核对/);
+});
+
+test('explicit entry to a historically verified office keeps current connection uncertainty visible',async()=>{
+  const f=guidedFixture();f.member.verified_at='HISTORICAL-PROOF';Object.assign(f.client,{handshake_verified:true,ready_for_office:true,handshake_observed_at:'2026-10-14T00:00:00.000Z'});await f.context.showMemberSetup(f.member.id);
+  await f.$('member-connect-guide').onclick(click('data-grok-enter-history'));assert.equal(f.office,true);assert.match(f.notices.at(-1),/本次连接仍待核对/);assert.doesNotMatch(f.notices.at(-1),/真实连接已核对/);assert.equal(f.calls.filter(call=>call.body).length,0);
 });
 
 test('inspector keeps actual native model evidence separate and preserves manual client guidance',()=>{

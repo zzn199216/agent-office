@@ -92,3 +92,18 @@ test('Grok old entry CLI inbox spans current joined rooms and explicit room sele
   const wrongMember=await cli(['chat-inbox','--member',id(),'--entry',entry.file]);assert.equal(wrongMember.code,1);assert.equal(wrongMember.value.code,'resume_scope_mismatch');
   assert.equal(v.credentials().length,1);assert.deepEqual(fs.readFileSync(entry.file),bytes);assert.equal(v.calls.fetch+v.calls.desktop,0);
 });
+test('fixed proxy CLI inbox uses its authoritative fixed room even when its entry names another joined room',async t=>{
+  const v=await setup(t),backend=v.service.chat.addMember({name:'Fixed backend fixture',adapter:'mailbox'});v.service.chat.join(v.room.id,backend.id);
+  const proxy=v.service.launch.proxy(v.room,{provider:'codex',name:'Fixed proxy fixture'},backend),other=v.service.chat.addRoom({title:'Another joined room',project_id:v.project.id});
+  v.service.chat.join(other.id,proxy.proxy_member_id);
+  // This controller-issued card deliberately names the other seat. A fixed
+  // proxy must derive routing from its saved backend binding, not that hint.
+  const entry=v.service.entry.issue(proxy.proxy_member_id,other.id),bytes=fs.readFileSync(entry.file);v.service.entry.accept(JSON.parse(bytes));
+  const one=v.service.chat.store.post({room_id:v.room.id,sender_id:'user',to_member_id:proxy.proxy_member_id,text:'Fixed home question',idempotency_key:'fixed-home-question'});
+  v.service.chat.store.post({room_id:other.id,sender_id:'user',to_member_id:proxy.proxy_member_id,text:'Different seat question',idempotency_key:'fixed-other-question'});
+  const received=await cli(['chat-inbox','--entry',entry.file]);assert.equal(received.code,0);assert.deepEqual(received.value.map(message=>message.id),[one.id]);
+  const rooms=await cli(['chat-rooms','--entry',entry.file]);assert.equal(rooms.code,0);assert.deepEqual(rooms.value.rooms,[{id:v.room.id,title:v.room.title}]);assert.equal(JSON.stringify(rooms.value).includes(other.title),false);assert.equal(JSON.stringify(rooms.value).includes(other.id),false);
+  const home=await cli(['chat-inbox','--room',v.room.id,'--entry',entry.file]);assert.equal(home.code,0);assert.deepEqual(home.value.map(message=>message.id),[one.id]);
+  const denied=await cli(['chat-inbox','--room',other.id,'--entry',entry.file]);assert.equal(denied.code,1);assert.equal(denied.value.code,'resume_scope_mismatch');
+  assert.deepEqual(fs.readFileSync(entry.file),bytes);assert.equal(v.credentials().length,1);assert.equal(v.calls.fetch+v.calls.desktop,0);
+});
