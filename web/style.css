@@ -222,6 +222,8 @@ body.pixel-theme .secretary-connection-note,body.pixel-theme .secretary-steps,bo
 /* member connect guide */
 .connect-guide{border:2px solid var(--ink,#2b2d42);border-radius:6px;padding:14px 16px;background:#fffdf7;margin:12px 0}
 .connect-guide:empty{display:none}
+.grok-handoff-copy{width:100%;min-height:140px;max-height:250px;font:11px/1.6 Consolas,monospace;resize:vertical;white-space:pre-wrap;overflow-wrap:anywhere}
+.grok-connect-intro{font-size:13px;line-height:1.8;margin:8px 0 18px;color:var(--ink)}.grok-connect-steps{list-style:none;counter-reset:grok-step;margin:0;padding:0;display:grid;gap:14px}.grok-connect-steps>li{counter-increment:grok-step;position:relative;padding:14px 14px 14px 46px;border:1px solid var(--line);border-radius:6px;background:#fff}.grok-connect-steps>li:before{content:counter(grok-step);position:absolute;left:14px;top:15px;font-size:13px;font-weight:700;color:var(--accent)}.grok-connect-steps strong{font-size:14px}.grok-connect-steps p{font-size:12px;line-height:1.8;margin:7px 0;color:var(--muted)}.grok-connect-steps .primary{margin-top:5px;font-size:13px;white-space:normal}.grok-connect-steps .verified{background:#f1f7ed}.member-setup-dialog:has(.grok-connect-steps){width:620px}.member-setup-dialog:has(.grok-connect-steps) .member-setup-status{margin:14px 0 10px}@media(max-width:560px){.grok-connect-steps>li{padding-left:36px}.grok-connect-steps>li:before{left:11px}.grok-connect-steps .primary{width:100%}.grok-connect-steps strong{font-size:13px}}
 .connect-guide h3{margin:0 0 8px;font-size:15px}
 .connect-steps{margin:0 0 10px;padding-left:1.3em;font-size:13px;line-height:1.7}
 .connect-actions{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:8px}

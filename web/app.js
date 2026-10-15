@@ -22,6 +22,7 @@ let inspectorOpen = false, inspectorTab = 'members', inspectorMemberId = null, o
 let officeComposerOpen = false;
 let connectionDoctor = null, connectionDoctorBusy = false, connectionDoctorError = '', connectionDoctorRoom = null, connectionDoctorSequence = 0;
 let nativeSetupPending = null, nativeSetupFailure = null;
+let grokSetupWatch = null, grokSetupWatchTimer = null, grokSetupWatchSequence = 0, grokSetupWatchError = '';
 let deleteRoomId = null, deletingRoom = false, deletePreview = null;
 let managedRoomId=null,managingRoom=false;
 let secretaryOpenRoom = null, secretaryPickingRoom = null, secretaryBusy = false, secretaryStartBusy = false, secretaryError = '', secretaryConnectRoom = null, secretaryConnectJob = null, secretaryGoalVersion = 0;
@@ -106,6 +107,7 @@ function launchView(value) {
 }
 function launchProvider(candidate) { return candidate.provider || candidate.id; }
 function nativeDesktopProvider(value) { return ['qwen-desktop','doubao','grok-bot'].includes(value?.provider || value?.id); }
+function grokGuidedPerson(value){return (value?.provider==='grok-bot'||value?.adapter==='grok-bridge')&&value?.runtime_state?.connection_evidence?.native_conversation_loaded!==true;}
 function launchSelectable(candidate) { return candidate.installed === true && candidate.support !== 'unsupported' && (candidate.capabilities?.automatic_launch === true || candidate.capabilities?.mcp_prepare === true || candidate.capabilities?.manual_connect === true); }
 function onboardingMode(candidate) { return candidate.capabilities?.manual_connect === true ? 'bridge' : candidate.capabilities?.automatic_launch === true ? 'managed' : 'desktop'; }
 const providerDocs = Object.freeze({'gemini-cli':'https://geminicli.com/docs/get-started/installation/','doubao':'https://open.doubao.com/','opencode':'https://opencode.ai/docs/mcp-servers/','cline':'https://docs.cline.bot/mcp/mcp-overview','roo-code':'https://roocodeinc.github.io/Roo-Code/features/mcp/using-mcp-in-roo/','cherry-studio':'https://docs.cherryai.com.cn/advanced-basic/extensions/mcp.md'});
@@ -157,8 +159,8 @@ function renderLaunchCandidates() {
   const renderCandidate = candidate => {
     const provider = launchProvider(candidate), selectable = launchSelectable(candidate), canJoin = onboardingSelectable(candidate), mode = onboardingMode(candidate), job = onboardingForProvider(provider), pending = onboardingStarting.has(provider) || onboardingRunning(job);
     const availability = !canJoin ? candidate.support === 'unsupported' ? '已发现，接口待适配' : !candidate.installed ? mode === 'managed' ? '需安装官方 CLI · 查看说明' : '尚未安装 · 查看官方接入说明' : '已发现 · 待适配' : !candidate.installed ? '尚未安装 · 可安装接入' : candidate.running ? '正在运行 · 接入后验证通信' : '已安装 · 可接入';
-    const native = nativeDesktopProvider(candidate), label = pending ? '正在接入…' : onboardingReady(job) ? native ? '检查本人连接' : '重新检查' : job?.status === 'needs_action' ? '继续接入' : !candidate.installed && canJoin ? '安装并接入' : native ? '连接本人对话' : '一键接入';
-    const accountNote = native ? provider === 'grok-bot' ? '为这位同事保留专用 Bot，连接后核对实际回复' : '沿用本人客户端的登录，为这位同事保留原生对话' : mode === 'bridge' ? '复用桥接 Bot 的本人窗口；复制接入说明后完成实际握手' : provider === 'qwen-code' ? '首次配置 API 或 Token 计划凭据' : provider === 'gemini-cli' ? '使用 Gemini CLI 自己的账号或 API；网页登录不会自动代替' : '';
+    const guidedGrok=provider==='grok-bot'&&candidate.capabilities?.native_direct_available!==true,native = nativeDesktopProvider(candidate)&&!guidedGrok, label = pending ? '正在接入…' : onboardingReady(job) ? native ? '检查本人连接' : '查看连接' : job?.status === 'needs_action' ? '继续接入' : !candidate.installed && canJoin ? '安装并接入' : guidedGrok?'连接 Grok':native ? '连接本人对话' : '一键接入';
+    const accountNote = guidedGrok?'复制一次说明到已有 Grok Bot，AO 自动检查；无需先建群':native ? provider === 'grok-bot' ? '为这位同事保留专用 Bot，连接后核对实际回复' : '沿用本人客户端的登录，为这位同事保留原生对话' : mode === 'bridge' ? '复用桥接 Bot 的本人窗口；复制接入说明后完成实际握手' : provider === 'qwen-code' ? '首次配置 API 或 Token 计划凭据' : provider === 'gemini-cli' ? '使用 Gemini CLI 自己的账号或 API；网页登录不会自动代替' : '';
     return `<article class="launch-candidate ${canJoin ? '' : 'unavailable'}"><label class="launch-candidate-select"><input type="checkbox" data-launch-provider="${escape(provider)}" aria-label="批量选择 ${escape(candidate.name || provider)}" ${launchSelection.has(provider) ? 'checked' : ''} ${selectable && !launchBusy ? '' : 'disabled'}></label>${avatar(candidate.name,provider)}<div class="launch-candidate-info"><strong>${escape(candidate.name || provider)}</strong><span class="launch-mode ${mode === 'managed' && canJoin ? 'automatic' : ''}">${escape(native ? '本人对话 · 连接后验证' : mode === 'bridge' ? '本人窗口 · 桥接' : mode === 'managed' ? '后台 CLI · 独立会话' : candidate.capabilities?.mcp_prepare ? '本人 MCP · 信箱' : '接口待适配')}</span><small>${escape(availability)}</small>${accountNote ? `<small>${escape(accountNote)}</small>` : ''}</div><button type="button" class="${canJoin ? 'primary' : 'secondary'} onboarding-start" ${canJoin ? 'data-onboarding-provider' : 'data-onboarding-requirements'}="${escape(provider)}" aria-label="${escape(candidate.name || provider)} ${escape(canJoin ? label : '查看接入要求')}" ${!pending && !launchBusy && !launchScanning && (webConnected || !canJoin) ? '' : 'disabled'}>${escape(canJoin ? label : '查看接入要求')}</button></article>`;
   };
   const running = visible.filter(candidate => candidate.running === true), others = visible.filter(candidate => candidate.running !== true);
@@ -288,7 +290,7 @@ function onboardingJobMarkup(job) {
     const detail = job.message || job.detail || (verifyingReply ? 'AO 正在核对这位同事的真实回答；完成后会自动进入办公室。' : ready ? readyType === 'ready_automatic' ? replyVerified ? '可以在房间里直接交给它了。' : 'AO 会自动核对原问题对应的实际最终回答。' : '它不会自动开工：给它发消息后，到它自己的窗口里说一句“查看收件箱”。' : stage === 'awaiting_auth' ? '完成首次账号配置后，再继续接入并验证后台通信。' : stage === 'awaiting_runtime_install' ? '还需要安装这个 agent 的后台入口。确认后，只安装你指定的成员。' : stage === 'unsupported' || stage === 'needs_wake_adapter' ? '已发现应用，正式通信或后台任务入口仍待适配。' : needsAction ? '完成下面这一步，接入会自动继续。' : '正在启动它并验证通信，通常不到一分钟。');
     const groupState = job.native_group_status || job.group_status, reported = ['host_reported','joined'].includes(groupState);
     const actionHtml = (needsAction || failed || ready) && actionValue ? onboardingActionMarkup(job) : '';
-    return `<article class="onboarding-job ${failed ? 'failed' : ready ? 'ready' : ''}" data-onboarding-job="${escape(job.id)}"><div class="onboarding-job-heading">${avatar(job.name || job.provider,job.provider)}<div><strong>${escape(job.name || job.provider)}</strong><span>${escape(title)}</span></div>${pending ? '<span class="pulse-dot"></span>' : ''}</div><ol class="onboarding-steps">${steps}</ol><p class="onboarding-job-detail">${escape(detail)}${pending && job.created ? ` <span class="onboarding-elapsed" data-since="${escape(job.created)}"></span>` : ''}</p>${nativeDesktopProvider(job) ? nativeReadinessMarkup(job,job.connection_evidence) : ''}${pending ? onboardingApprovalMarkup(job) : ''}${actionHtml}${job.error ? `<p class="onboarding-job-error">${escape(typeof job.error === 'string' ? job.error : job.error.message || '请在专业视图核对接入记录。')}</p>` : ''}${ready && roomUsesGrok() ? `<div class="onboarding-group-note">${escape(reported ? 'Grok 已报告加群。' : 'Grok 群：需要时再让 Grok 把它拉进群。')}</div>` : ''}</article>`;
+    return `<article class="onboarding-job ${failed ? 'failed' : ready ? 'ready' : ''}" data-onboarding-job="${escape(job.id)}"><div class="onboarding-job-heading">${avatar(job.name || job.provider,job.provider)}<div><strong>${escape(job.name || job.provider)}</strong><span>${escape(title)}</span></div>${pending ? '<span class="pulse-dot"></span>' : ''}</div><ol class="onboarding-steps">${steps}</ol><p class="onboarding-job-detail">${escape(detail)}${pending && job.created ? ` <span class="onboarding-elapsed" data-since="${escape(job.created)}"></span>` : ''}</p>${nativeDesktopProvider(job)&&job.native_direct_available!==false ? nativeReadinessMarkup(job,job.connection_evidence) : ''}${pending ? onboardingApprovalMarkup(job) : ''}${actionHtml}${job.error ? `<p class="onboarding-job-error">${escape(typeof job.error === 'string' ? job.error : job.error.message || '请在专业视图核对接入记录。')}</p>` : ''}${ready && roomUsesGrok() ? `<div class="onboarding-group-note">${escape(reported ? 'Grok 已报告加群。' : 'Grok 群：需要时再让 Grok 把它拉进群。')}</div>` : ''}</article>`;
 }
 function renderOnboarding() {
   const jobs = currentOnboardingJobs();
@@ -317,6 +319,7 @@ function returnSecretaryAfterOnboarding() {
   if(secretaryFinishing || !secretaryNavigationCurrent(flow))return;
   if(flow.source==='selection'){if(flow.accepted)finishSecretaryNavigation(flow,flow.accepted);return;}
   const job=onboardingJobs.get(flow.jobId);
+  if(job?.provider==='grok-bot'&&job.member_id&&(!job.room_id||job.room_id===flow.roomId)&&job.native_direct_available!==true&&(job.status==='needs_action'||onboardingReady(job)==='ready_mailbox')&&!flow.grokGuideOpened){flow.grokGuideOpened=true;return action(()=>showMemberSetup(job.member_id,flow));}
   if(!job || !onboardingReady(job) || !job.member_id || (job.room_id && job.room_id!==flow.roomId))return;
   const selected=currentSecretary(),assign=flow.source!=='member'&&(!selected.member_id||selected.status!=='ready');
   if(flow.source!=='member'&&!sameSecretaryAssignment(flow.accepted||flow.assignment,selected)){secretaryNavigation=null;secretaryError='秘书设置已在其他窗口变更，已显示最新角色。请重新确认。';renderSecretary();return;}
@@ -793,14 +796,16 @@ async function connectMember(id, knownMember) {
   const prepared=await api(`/api/chat/members/${encodeURIComponent(id)}/setup?room_id=${encodeURIComponent(selectedRoom)}`);
   if(roomId!==selectedRoom||legacyId)return;
   if(prepared.client?.kind==='native_desktop'){selectedSetupMember=id;setupData=prepared;nativeSetupFailure=null;renderSetup();if(!$('member-setup-dialog').open)$('member-setup-dialog').showModal();await connectNativeDesktop();return;}
+  if(prepared.client?.kind==='grok_guided'){selectedSetupMember=id;setupData=prepared;nativeSetupFailure=null;openGrokSetup();return;}
   if ((memberById(id) || knownMember)?.adapter === 'grok-bridge') { await showBridge(id); return; }
   const result = await api(`/api/chat/members/${encodeURIComponent(id)}/connect`, {room_id:selectedRoom}); await refresh();if(roomId!==selectedRoom||legacyId)return; selectedSetupMember = id; setupData = result; renderSetup(); if (!$('member-setup-dialog').open) $('member-setup-dialog').showModal();
 }
-async function showMemberSetup(id) {
+async function showMemberSetup(id,expectedFlow=null) {
   if (!webConnected) return showResume(id);
   const selectedRoom=roomId;selectedSetupMember=id;nativeSetupFailure=null;$('member-grok-key').value='';$('member-grok-url').value='';
   const data=await api(`/api/chat/members/${encodeURIComponent(id)}/setup?room_id=${encodeURIComponent(selectedRoom)}`);
-  if(selectedSetupMember!==id||roomId!==selectedRoom)return;
+  if(selectedSetupMember!==id||roomId!==selectedRoom||expectedFlow&&!secretaryNavigationCurrent(expectedFlow))return;
+  if(data.client?.kind==='grok_guided'){setupData=data;openGrokSetup();return;}
   if(memberById(id)?.adapter==='grok-bridge'&&data.client?.kind!=='native_desktop')return showBridge(id);
   setupData=data;renderSetup();if(!$('member-setup-dialog').open)$('member-setup-dialog').showModal();
 }
@@ -824,11 +829,50 @@ function legacyConnectGuide(client,member,{hidePrivateValues=false}={}) {
   return `<h3>${escape(client.title||'兼容连接')}</h3>${client.installation_prompt ? `<div class="connect-actions"><button type="button" class="primary" data-copy-install>复制 AI 安装说明</button><span class="small-note">交给有本机配置能力的 AI，保留已有连接</span></div>${hidePrivateValues?'':`<details class="setup-block"><summary>查看 AI 安装说明</summary><pre class="setup-code">${escape(client.installation_prompt)}</pre></details>`}` : ''}<ol class="connect-steps">${(client.steps||[]).map(step => `<li>${escape(step)}</li>`).join('')}</ol>${fields}${client.copy ? `<div class="connect-actions"><button type="button" class="primary" data-copy-guide>${escape(client.copy_label || '复制')}</button><span class="connect-state">${verified ? '入口已有成功调用 · 当前对话仍须验证' : '导入后实际调用工具才算接通'}</span></div>${hidePrivateValues?'':`<details class="setup-block"><summary>查看 MCP 设置配置</summary><pre class="setup-code">${escape(client.copy)}</pre></details>`}` : ''}${client.bootstrap ? `<div class="connect-actions"><button type="button" class="secondary" data-copy-bootstrap>复制连接人物说明</button><span class="small-note">发到这位同事的 AI 对话，只需一次</span></div>${hidePrivateValues?'':`<details class="setup-block"><summary>查看连接人物说明</summary><pre class="setup-code">${escape(client.bootstrap)}</pre></details>`}` : ''}${client.note ? `<p class="small-note">${escape(client.note)}</p>` : ''}`;
 }
 function fallbackConnectGuide(client=setupData?.client){return client?.kind==='native_desktop'?client.fallback||client.legacy_guide||client.manual_guide||null:client;}
+function stopGrokSetupWatch(){clearTimeout(grokSetupWatchTimer);grokSetupWatchTimer=null;grokSetupWatch=null;grokSetupWatchSequence++;}
+function grokSetupWatchCurrent(watch){return !!watch&&grokSetupWatch===watch&&watch.sequence===grokSetupWatchSequence&&watch.memberId===selectedSetupMember&&watch.roomId===roomId&&!legacyId&&$('member-setup-dialog').open&&setupData?.client?.kind==='grok_guided';}
+function grokSetupReady(data){return data?.client?.ready_for_office===true&&data.client.handshake_verified===true;}
+function grokSetupBlocked(client){return client?.revoked===true||client?.needs_reauthorization===true||client?.entry_status==='revoked';}
+function openGrokSetup(){
+  stopGrokSetupWatch();grokSetupWatchError='';lastSetupSignature='';
+  for(const id of ['member-dialog','secretary-connect-dialog','bridge-dialog'])if($(id).open)$(id).close();
+  renderSetup();if(!$('member-setup-dialog').open)$('member-setup-dialog').showModal();
+  grokSetupWatch={memberId:selectedSetupMember,roomId,sequence:grokSetupWatchSequence,copied:false,copying:false,initialHandshakeVerified:setupData.client.handshake_verified===true};
+  grokSetupWatchTimer=setTimeout(()=>pollGrokSetup(),2500);
+}
+function enterGrokOffice(watch){
+  if(!grokSetupWatchCurrent(watch)||!grokSetupReady(setupData))return false;
+  const member=memberById(watch.memberId);if(!member||!history?.participants?.some(value=>value.id===watch.memberId)||history.room?.id!==watch.roomId)return false;
+  stopGrokSetupWatch();$('member-setup-dialog').close();secretaryNavigation=null;closeSecretaryTutorial();setProfessionalView(true);selectRoomView(true);
+  if(!$('recipient').value){$('recipient').value=member.id;updateRecipientNote();}
+  toast('Grok 已完成真实连接，已进入办公室。后台自动接手能力会单独核对。');return true;
+}
+async function pollGrokSetup(){
+  clearTimeout(grokSetupWatchTimer);
+  const watch=grokSetupWatch;if(!watch||!grokSetupWatchCurrent(watch)){stopGrokSetupWatch();return;}
+  try{
+    if(watch.copying)return;
+    if(!webConnected)throw Error('AO 服务暂时未连接。服务恢复后会继续检查，无需重新配置。');
+    const data=await api(`/api/chat/members/${encodeURIComponent(watch.memberId)}/setup?room_id=${encodeURIComponent(watch.roomId)}`);
+    if(!grokSetupWatchCurrent(watch))return;
+    setupData=data;grokSetupWatchError='';await refresh();
+    if(!grokSetupWatchCurrent(watch))return;
+    lastSetupSignature='';renderSetup();if((watch.copied||!watch.initialHandshakeVerified)&&enterGrokOffice(watch))return;
+  }catch(error){if(grokSetupWatchCurrent(watch)){grokSetupWatchError=error.message||'暂时无法检查连接结果。';lastSetupSignature='';renderSetup();}}
+  finally{if(grokSetupWatchCurrent(watch))grokSetupWatchTimer=setTimeout(()=>pollGrokSetup(),grokSetupWatchError?6000:2500);}
+}
+function renderGrokConnectGuide(client,member){
+  const ready=grokSetupReady({client}),verified=client.handshake_verified===true,copied=grokSetupWatch?.memberId===member.id&&grokSetupWatch.copied;
+  const blocked=grokSetupBlocked(client);
+  const reason=client.error||client.native_error||member.error||'';
+  return `<h3>${ready?'Grok 本机入口已接通':'把这位 Grok Bot 连进办公室'}</h3><p class="grok-connect-intro">把下面的连接说明发给你正在使用的 Grok，让它按说明连接这位 Bot。无需先建群，换房间或升级后仍沿用这位人物。</p><ol class="grok-connect-steps"><li><strong>复制连接说明</strong><p>${blocked?'这个连接已被撤销，请在原接入记录中明确重新授权后继续。':'说明已包含这位人物的连接入口，无需填写任何编号。'}</p><button type="button" class="primary" data-grok-copy ${(!client.copy&&!client.needs_prepare)||blocked||!webConnected||grokSetupWatch?.copying?'disabled':''}>${grokSetupWatch?.copying?'正在准备说明…':copied?'再次复制连接说明':'复制连接说明'}</button>${grokSetupWatch?.clipboardFailure?`<p>请选中下方说明复制，粘贴到 Grok Bot 对话：</p><textarea class="grok-handoff-copy" data-grok-copy-fallback readonly aria-label="Grok 连接说明，选中后复制">${escape(client.copy||'')}</textarea>`:''}</li><li><strong>发给 Grok，完成它提出的一次授权</strong><p>粘贴到你要连接的 Grok Bot 对话；如果当前是主 Grok，请明确让它按说明连接这位人物的专用 Bot。Grok 请求本机命令执行授权时，在 Grok 中确认。</p></li><li class="${verified?'verified':''}"><strong>${ready?'已验证本机入口':verified?'连接入口已验证':'回到这里，AO 自动检查连接'}</strong><p role="status">${ready?'可以进入办公室。连接已保留，今后无需重复粘贴。':verified?'已收到这位 Bot 的真实连接记录，正在核对当前可用状态。':copied?'正在等待 Grok 执行连接说明。AO 会自动更新，无需重复点连接。':'复制后按第二步发送。AO 只在收到真实连接后显示成功。'}</p>${ready?'<button type="button" class="primary" data-grok-enter>进入办公室</button>':''}</li></ol>${grokSetupWatchError?'<p class="setup-note">暂时无法检查结果；AO 会自动继续检查，保留当前说明即可。</p>':''}<p class="small-note">接通入口不等于能后台唤醒 Grok。自动接手会依据实际接口另行验证。</p><details class="native-connect-advanced"><summary>遇到问题？查看帮助与诊断</summary><p>如果 Grok 说“没有本机执行工具”，请使用具有本机命令能力的 Grok Bot 执行这份说明。无需删除 AO 人物或重新生成连接。</p><p>需要群聊时，连接成功后再让 Grok 创建群聊并邀请其他成员。</p>${reason||grokSetupWatchError?`<pre class="setup-code">${escape(grokSetupWatchError||reason)}</pre>`:''}<button type="button" class="secondary" data-native-diagnostics>查看连接诊断</button></details>`;
+}
 // The primary action binds an owned native dialogue. Protocol and actual model
 // reply observations stay separate, including when a legacy entry was verified.
 function renderConnectGuide(client, member) {
   const box=$('member-connect-guide');$('member-durable-card').classList.toggle('hidden',!!client);
   if(!client){box.innerHTML='';return;}
+  if(client.kind==='grok_guided'){box.innerHTML=renderGrokConnectGuide(client,member);return;}
   if(client.kind!=='native_desktop'){box.innerHTML=legacyConnectGuide(client,member);return;}
   const native=client.native_state||{},evidence=member.runtime_state?.connection_evidence||client.connection_evidence||native.connection_evidence||{};
   const busy=nativeSetupPending?.memberId===member.id&&nativeSetupPending?.roomId===roomId;
@@ -867,15 +911,21 @@ async function connectOnboardingNative(job) {
 }
 function renderSetup() {
   const member = memberById(selectedSetupMember) || setupData?.member || {}, status = memberStatus(member), data = setupData || {}, instructions = instructionsText(data), mcp = data.mcp, isBridge = member.adapter === 'grok-bridge';
+  const guided=data.client?.kind==='grok_guided';
+  const done=$('member-setup-dialog').querySelector('.member-setup-actions .primary.close-dialog');if(done)done.textContent=guided&&!grokSetupReady(data)?'稍后继续':'完成';
   const observed = memberPresence(member);
   $('member-runtime-status').innerHTML = `<span class="member-dot ${observed.status}"></span><strong>${escape(observed.label)}</strong><span>${observed.lastSeen ? `最近响应 ${escape(time(observed.lastSeen))}` : '尚无近期响应记录'}</span>${observed.canWake ? '<small>可拉起后台工作会话</small>' : ''}`;
-  const signature = JSON.stringify([selectedSetupMember,member.name,member.status,member.error,member.verified_at,member.runtime_state?.connection_evidence,data.error,data.invite,data.client,instructions,mcp,nativeSetupPending,nativeSetupFailure]); if (signature === lastSetupSignature) return; lastSetupSignature = signature;
+  const signature = JSON.stringify([selectedSetupMember,member.name,member.status,member.error,member.verified_at,member.runtime_state?.connection_evidence,data.error,data.invite,data.client,instructions,mcp,nativeSetupPending,nativeSetupFailure,grokSetupWatch?.copied,grokSetupWatch?.clipboardFailure,grokSetupWatchError]); if (signature === lastSetupSignature) return; lastSetupSignature = signature;
   const needsInvite = !['codex','native'].includes(member.adapter) && !member.verified_at && !data.invite;
   const native=data.client?.kind==='native_desktop',evidence=member.runtime_state?.connection_evidence||data.client?.connection_evidence||data.client?.native_state?.connection_evidence||{};
   const connectionLabel=native?evidence.native_conversation_loaded===true?evidence.model_reply_verified===true?'本人实际回复已核对':'本人对话已加载':'本人对话待验证':status.label,connectionTone=native?evidence.native_conversation_loaded===true?'online':'connecting':status.tone;
   $('member-setup-heading').textContent = member.name ? `连接 ${member.name}` : '连接成员'; $('member-setup-status').innerHTML = `<span class="member-dot ${connectionTone}"></span><strong>${escape(connectionLabel)}</strong>${!native&&member.verified_at ? `<span>验证于 ${time(member.verified_at)}</span>` : ''}`;
   $('bridge-webhook-section').classList.toggle('hidden', member.adapter !== 'grok-bridge'||native);
   renderConnectGuide(data.client, member);
+  if(guided){
+    $('member-setup-status').innerHTML=`<span class="member-dot ${data.client.handshake_verified?'online':'connecting'}"></span><strong>${grokSetupReady(data)?'这位 Grok 的连接已验证':'完成下面两步，AO 会自动检查'}</strong>`;
+    $('member-runtime-status').innerHTML='';$('bridge-webhook-section').classList.add('hidden');$('member-setup-content').innerHTML='';$('retry-member-connect').classList.add('hidden');$('leave-member').classList.toggle('hidden',!roomId||legacyId);return;
+  }
   $('member-setup-content').innerHTML = `${!native&&(member.error || data.error) ? `<div class="error-note">${escape(member.error || data.error)}</div>` : ''}${status.tone === 'connecting' ? `<p class="setup-note"><span class="pulse-dot"></span> ${native?'正在核对本人对话的连接；实际模型回复会在任务发送后单独验证。':'正在后台询问成员并验证通信。你可以关闭这个窗口，连接结果会更新到成员列表。'}</p>` : ''}${instructions && (!data.client||native) ? `<details class="setup-block"><summary>${native?'高级：兼容接入说明':'兼容接入说明'}</summary><div class="setup-block-heading"><strong>${isBridge ? '桥接 Bot 协作说明' : '旧邀请 / 原生握手说明'}</strong><button class="secondary" data-copy-setup="instructions">复制说明</button></div>${native?'<p class="small-note">按需复制兼容说明，房间由 AO 自动确定。</p>':`<pre class="setup-code">${escape(instructions)}</pre>`}</details>` : ''}${mcp && (!data.client||native) ? `<details class="setup-block"><summary>${native?'高级：兼容 MCP 配置':'MCP 配置'}</summary><button class="secondary" data-copy-setup="mcp">复制配置</button>${native?'<p class="small-note">配置只在明确复制时提供，用于本人客户端的兼容入口。</p>':`<pre class="setup-code">${escape(setupText(mcp))}</pre>`}</details>` : ''}${!native&&!instructions && !mcp && status.tone !== 'connecting' ? `<p class="setup-note">${member.verified_at ? '身份已验证。使用上方恢复入口可以继续访问这个房间。' : '长期接入请复制上方恢复入口，由成员在自己的窗口实际进入。'}</p>` : ''}${isBridge&&!native ? '<div class="bridge-note"><strong>把房间带进 Grok 群聊</strong><p>在 Grok 中添加一个桥接 Bot，把上面的说明交给它，再邀请它加入你的群聊。它负责把问题带到 AgentRoom，并把成员回复带回群聊。长期入口与原群回传分别验证，发现窗口或保存 Webhook 不代表已经接通群聊。</p></div>' : ''}`;
   if (needsInvite && !data.client) { const note = document.createElement('p'); note.className = 'small-note'; note.textContent = '下方保留兼容邀请方式。长期接入请使用上方“复制恢复入口”，无需每次重新领取邀请。'; $('member-setup-content').prepend(note); const copyButton = $('member-setup-content').querySelector('[data-copy-setup="instructions"]'); if (copyButton) copyButton.textContent = '生成兼容邀请'; }
   $('retry-member-connect').textContent = status.tone === 'connecting' ? '连接中…' : needsInvite ? '生成兼容邀请' : '重新验证连接'; $('retry-member-connect').classList.toggle('hidden', !!data.client && data.client.kind !== 'background'); $('retry-member-connect').disabled = status.tone === 'connecting'; $('leave-member').classList.toggle('hidden', !roomId || legacyId);
@@ -1253,17 +1303,17 @@ function renderInspector() {
   const room = history?.room || (state.chat?.rooms || []).find(item => item.id === roomId), members = visibleMembers(history?.participants), project = state.projects.find(item => item.id === projectId);
   $('inspector-room-name').textContent = room?.title || '你的协作空间'; $('inspector-project-name').textContent = project?.name || '选择一个项目，开始协作';
   if(!members.some(member=>member.id===inspectorMemberId)){inspectorMemberId=members[0]?.id||null;appearanceDraft=null;appearanceDirty=false;appearanceUploadVersion++;}
-  $('inspector-members').innerHTML = members.length ? members.map(member => {const presence=memberPresence(member),evidence=member.runtime_state?.connection_evidence||{},hint=nativeDesktopProvider(member)?evidence.native_conversation_loaded===true?evidence.model_reply_verified===true?'本人实际回复已核对':'本人对话已加载，实际回复待验证':'本人对话连接待核对，点开继续':!member.verified_at ? (member.status === 'connection_failed' ? '接入失败，点开查看原因' : '还没接通，点开看怎么连接') : presence.canWake ? '发消息会自动开工' : '要在它自己的窗口里处理';return `<button type="button" class="inspector-member" data-inspector-member="${escape(member.id)}">${avatar(member.name,member.adapter,member.appearance)}<div><strong>${escape(member.name)}${currentSecretary().member_id === member.id ? ' <span class="secretary-inline-badge">秘书</span>' : ''}</strong><span><i class="member-dot ${presence.status}"></i>${escape(presence.label)}</span><small>${escape(hint)}</small></div><span class="inspector-member-arrow">›</span></button>`;}).join('') + (staleMembers().length ? `<button type="button" class="text-button danger" id="cleanup-stale-members">清理 ${staleMembers().length} 个没接通的旧成员</button>` : '') : '<p class="inspector-empty">房间成员会显示在这里。<br>只接入你选择的 agent。</p>';
+  $('inspector-members').innerHTML = members.length ? members.map(member => {const presence=memberPresence(member),evidence=member.runtime_state?.connection_evidence||{},hint=grokGuidedPerson(member)?member.verified_at?'Grok 本机入口已验证，点开查看':'把连接说明发给 Grok，AO 自动检查':nativeDesktopProvider(member)?evidence.native_conversation_loaded===true?evidence.model_reply_verified===true?'本人实际回复已核对':'本人对话已加载，实际回复待验证':'本人对话连接待核对，点开继续':!member.verified_at ? (member.status === 'connection_failed' ? '接入失败，点开查看原因' : '还没接通，点开看怎么连接') : presence.canWake ? '发消息会自动开工' : '要在它自己的窗口里处理';return `<button type="button" class="inspector-member" data-inspector-member="${escape(member.id)}">${avatar(member.name,member.adapter,member.appearance)}<div><strong>${escape(member.name)}${currentSecretary().member_id === member.id ? ' <span class="secretary-inline-badge">秘书</span>' : ''}</strong><span><i class="member-dot ${presence.status}"></i>${escape(presence.label)}</span><small>${escape(hint)}</small></div><span class="inspector-member-arrow">›</span></button>`;}).join('') + (staleMembers().length ? `<button type="button" class="text-button danger" id="cleanup-stale-members">清理 ${staleMembers().length} 个没接通的旧成员</button>` : '') : '<p class="inspector-empty">房间成员会显示在这里。<br>只接入你选择的 agent。</p>';
   const bridge = members.find(member => member.adapter === 'grok-bridge'), proxies=launchSession&&room?.id&&launchSession.room_id===room.id?launchSession.proxies||[]:[], linked = proxies.filter(proxy=>proxy.native_group_status==='host_reported').length || members.filter(member=>member.native_group_status==='host_reported').length, groupRef=proxies.find(proxy=>proxy.native_group_ref)?.native_group_ref || (launchSession&&room?.id&&launchSession.room_id===room.id?launchSession.native_sync?.group_ref:null);
   $('inspector-bridge-detail').textContent = bridge ? `已有 ${bridge.name} 桥接入口。群里的问题和成员回复可以回到同一房间。` : linked ? 'Grok 已报告加群。原群状态与本机通信分别记录。' : '给 Grok Bot 接入说明后，可以在你指定的群里与这些成员交流。';
   $('inspector-bridge').disabled = !webConnected;
   $('inspector-project-details').innerHTML=detailRows([['项目',project?.name],['文件夹',project?.path||room?.project_path],['访问权限',project?.access==='workspace-write'?'允许项目修改':'仅查询资料']]);
   $('inspector-room-details').innerHTML=detailRows([['房间',room?.title],['成员',String(members.length)+' 位'],['保存消息',String(history?.messages?.length||0)+' 条'],['房间标识',room?.id],['记录位置',state.dataDirectory],['服务',webConnected?'本机服务运行中':'服务未连接，查看本机记录']]);
   $('inspector-native-detail').textContent=groupRef ? `Grok 已报告群引用：${groupRef}。${linked} 位成员已报告加群，原群状态仍需核对；桥接的请求和回复保存在本机。` : linked ? `${linked} 位成员已报告加群。通过本机桥接投递的消息保留在这里。` : bridge ? `已配置 ${bridge.name}。完整 Grok 群消息暂不自动同步，桥接的请求与回复会留在本机。` : '还未绑定 Grok 群聊。可在连接页查看桥接入口。';
-  const member=members.find(item=>item.id===inspectorMemberId), presence=member?memberPresence(member):null,native=nativeDesktopProvider(member),evidence=member?.runtime_state?.connection_evidence||{};
-  $('inspector-selected-member').innerHTML=member?`${avatar(member.name,member.adapter,member.appearance)}<h3>${escape(member.name)}</h3><p>${escape(presence.label)} · ${escape(native?'本人客户端中的独立原生对话':presence.canWake?'可按需后台处理':'本人窗口领取消息')}</p>${native?nativeReadinessMarkup({},evidence):`<p>${escape(memberStatus(member).label)}</p>`}`:'<p class="inspector-description">先在成员页选择一位成员。</p>';
-  $('inspector-member-connect').disabled=!member||!webConnected;$('inspector-member-connect').textContent=native?'连接本人对话':'查看成员连接';$('inspector-member-connect').classList.toggle('primary',native);$('inspector-member-connect').classList.toggle('secondary',!native);$('inspector-member-recovery').disabled=!member;
-  $('inspector-connection-note').textContent=native?'AO 为这位同事保留本人客户端中的原生对话。点击“连接本人对话”核对本机连接；会话加载与实际问题的回答分别验证。':'桌面信箱成员需要在本人窗口领取消息。窗口打开不会自动唤醒它。';
+  const member=members.find(item=>item.id===inspectorMemberId), presence=member?memberPresence(member):null,guidedGrok=grokGuidedPerson(member),native=nativeDesktopProvider(member)&&!guidedGrok,evidence=member?.runtime_state?.connection_evidence||{};
+  $('inspector-selected-member').innerHTML=member?`${avatar(member.name,member.adapter,member.appearance)}<h3>${escape(member.name)}</h3><p>${escape(presence.label)} · ${escape(native?'本人客户端中的独立原生对话':guidedGrok?'Grok 本机入口 · 自动接手另行验证':presence.canWake?'可按需后台处理':'本人窗口领取消息')}</p>${native?nativeReadinessMarkup({},evidence):`<p>${escape(memberStatus(member).label)}</p>`}`:'<p class="inspector-description">先在成员页选择一位成员。</p>';
+  $('inspector-member-connect').disabled=!member||!webConnected;$('inspector-member-connect').textContent=guidedGrok?'连接 Grok':native?'连接本人对话':'查看成员连接';$('inspector-member-connect').classList.toggle('primary',native||guidedGrok);$('inspector-member-connect').classList.toggle('secondary',!native&&!guidedGrok);$('inspector-member-recovery').disabled=!member;
+  $('inspector-connection-note').textContent=guidedGrok?'复制一次连接说明，发给这位 Grok Bot。AO 自动检查真实连接，无需先建群，也无需填写编号。':native?'AO 为这位同事保留本人客户端中的原生对话。点击“连接本人对话”核对本机连接；会话加载与实际问题的回答分别验证。':'桌面信箱成员需要在本人窗口领取消息。窗口打开不会自动唤醒它。';
   renderAppearance(members,member);renderScene();applyInspector();renderSecretary();renderConnectionDoctor();renderTeam();
 }
 function teamValue(selectedRoom = roomId) { return teamRooms.get(selectedRoom); }
@@ -1574,6 +1624,7 @@ for (const id of ['add-room','welcome-room','mobile-add-room']) $(id).onclick = 
 for (const id of ['settings-button','top-settings']) $(id).onclick = showSettings;
 for (const id of ['welcome-members','room-member-add','empty-add-member']) $(id).onclick = () => action(showMembers);
 document.querySelectorAll('.close-dialog').forEach(button => button.onclick = () => button.closest('dialog').close());
+$('member-setup-dialog').addEventListener('close',()=>{stopGrokSetupWatch();grokSetupWatchError='';});
 $('connector-fields-dialog').addEventListener('close',()=>{connectorFields=null;for(const name of ['name','transport','url','headers'])$('connector-'+name).value='';$('connector-instructions').textContent='';$('connector-docs').removeAttribute('href');});
 $('connector-fields-dialog').onclick=event=>{const button=event.target.closest('[data-connector-copy]');if(!button||!connectorFields)return;action(async()=>{const name=button.dataset.connectorCopy,value=connectorFields[name];if(value===undefined)return;if(name==='headers'&&!Object.keys(value).length){toast('这个连接器不需要标头。');return;}await navigator.clipboard.writeText(typeof value==='string'?value:JSON.stringify(value,null,2));toast('已复制。只填写到这个 AI 本人的连接器设置。');});};
 $('connector-copy-all').onclick=()=>action(async()=>{if(!connectorFields)return;const fields=connectorFields;await navigator.clipboard.writeText(`名称：${fields.name}\n连接方式：${fields.transport}\nURL：${fields.url}\n标头：${Object.keys(fields.headers).length?JSON.stringify(fields.headers,null,2):'无需填写'}`);toast('字段已复制。按名称、连接方式、URL 分别填写，不作为 JSON 导入。');});
@@ -1609,7 +1660,18 @@ $('room-recovery').onclick = () => showResume();
 $('member-view-entry').onclick = () => showResume(selectedSetupMember);
 $('bridge-view-entry').onclick = () => showResume(bridgeMemberId);
 $('member-connect-guide').onclick = event => {
-  const button=event.target.closest('[data-native-connect],[data-native-diagnostics],[data-copy-guide],[data-copy-bootstrap],[data-copy-install]');if(!button)return;
+  const button=event.target.closest('[data-native-connect],[data-native-diagnostics],[data-copy-guide],[data-copy-bootstrap],[data-copy-install],[data-grok-copy],[data-grok-enter]');if(!button)return;
+  if(button.hasAttribute('data-grok-enter'))return enterGrokOffice(grokSetupWatch);
+  if(button.hasAttribute('data-grok-copy'))return action(async()=>{
+    const watch=grokSetupWatch;if(!watch||!grokSetupWatchCurrent(watch)||watch.copying||grokSetupBlocked(setupData.client))return;
+    watch.copying=true;lastSetupSignature='';renderSetup();
+    try{
+      if(setupData.client.needs_prepare){const data=await api(`/api/chat/members/${encodeURIComponent(watch.memberId)}/setup`,{room_id:watch.roomId});if(!grokSetupWatchCurrent(watch))return;setupData=data;}
+      const text=setupData?.client?.copy;if(!text||grokSetupBlocked(setupData.client))throw Error('连接说明尚未准备好，请查看下方帮助，保留现有人物。');
+      try{await navigator.clipboard.writeText(text);}catch(error){if(grokSetupWatchCurrent(watch)){watch.clipboardFailure=true;toast('未能自动复制。请选中页面中的连接说明，复制后发给 Grok。');}return;}if(!grokSetupWatchCurrent(watch))return;
+      watch.clipboardFailure=false;watch.copied=true;toast('已复制。现在粘贴到 Grok 对话中，AO 会自动检查连接结果。');
+    }finally{watch.copying=false;if(grokSetupWatchCurrent(watch)){lastSetupSignature='';renderSetup();}}
+  });
   if(button.hasAttribute('data-native-connect'))return action(connectNativeDesktop);
   if(button.hasAttribute('data-native-diagnostics')){const memberId=selectedSetupMember;$('member-setup-dialog').close();openInspector('connections',memberId);$('connection-doctor-member').value=memberId;return action(runConnectionDoctor);}
   const guide=fallbackConnectGuide(),install=button.hasAttribute('data-copy-install'),bootstrap=button.hasAttribute('data-copy-bootstrap'),text=install?guide?.installation_prompt:bootstrap?guide?.bootstrap:guide?.copy;if(!text)return;

@@ -154,7 +154,7 @@ class OnboardingManager{
     this.set(row.id,{launch_session_id:launch.id,stage:'connecting'});
     const work=this.service.launch.jobs.get(launch.id);if(work)await work;
     if(this.closing)return;
-    if(['qwen-desktop','doubao','grok-bot'].includes(row.provider)&&this.options.desktopConnector){
+    if(['qwen-desktop','doubao','grok-bot'].includes(row.provider)&&this.options.desktopConnector&&(row.provider!=='grok-bot'||this.service.desktop?.nativeCapability(row.provider).available)){
       const prepared=this.snapshot(this.row(row.id));
       if(prepared.member_id){
         try{await this.options.desktopConnector({member_id:prepared.member_id,room_id:row.room_id,provider:row.provider});this.set(row.id,{status:'needs_action',stage:'awaiting_connection',error:null});this.advanceVerifications();return;}
@@ -176,6 +176,10 @@ class OnboardingManager{
     return row?this.snapshot(row):{status:'not_started',stage:'not_started',next_actions:[],local_verified:false,can_wake:false,native_group_status:'not_prepared',policy:this.service.launch.policy()};
   }
   credentialState(roomId,member){
+    // The original file may still name a deleted room. The credential row is
+    // authoritative after rehoming; describe follows it without issuing cards.
+    if(this.service.entry?.describePrimary)return this.service.entry.describePrimary(member.id,roomId).status;
+    if(this.service.entry?.describe)return this.service.entry.describe(member.id,roomId).status;
     const file=path.join(this.service.store.dir,'entries',`${member.id}-${roomId}.json`);
     try{
       if(fs.statSync(file).size>64000)return 'invalid';
@@ -235,7 +239,8 @@ class OnboardingManager{
     const base={id:row.id,run_id:row.id,room_id:row.room_id,requested_provider:row.requested_provider,provider:row.provider,name:NAMES[row.provider]||row.provider,mode:row.mode,
       status:row.status,stage:row.stage,launch_session_id:row.launch_session_id,install_client:!!row.install_client,install_runtime:!!row.install_runtime,
       created:row.created,updated:row.updated,goal:row.goal||'',error:row.error?safeText(row.error):null,runtime:json(row.runtime_result,null),
-      local_verified:false,can_wake:false,protocol_verified:false,model_reply_verified:false,runner_ready:false,native_conversation_loaded:false,automatic_reply_verified:false,error_stage:null,readiness:'unverified',connection_evidence:null,response_mode:BRIDGE.has(row.provider)?'manual_bridge':DESKTOP.has(row.provider)?'manual_mailbox':'managed_native',native_group_status:'not_prepared',grok_verified:false,next_actions:[],policy:this.service.launch.policy()};
+      local_verified:false,can_wake:false,protocol_verified:false,model_reply_verified:false,runner_ready:false,native_conversation_loaded:false,automatic_reply_verified:false,error_stage:null,readiness:'unverified',connection_evidence:null,response_mode:BRIDGE.has(row.provider)?'manual_bridge':DESKTOP.has(row.provider)?'manual_mailbox':'managed_native',native_group_status:'not_prepared',grok_verified:false,next_actions:[],policy:this.service.launch.policy(),
+      ...BRIDGE.has(row.provider)?{native_direct_available:this.service.desktop?.nativeCapability(row.provider).available===true,connection_method:'grok_command_bridge'}:{}};
     if(row.direct_member_id){
       let member;try{this.service.chat.store.requireParticipant(row.room_id,row.direct_member_id);member=this.service.chat.store.member(row.direct_member_id);}catch{return {...base,status:'needs_action',stage:'awaiting_connection',detail:'原人物当前不在这个房间，已有连接保留。'};}
       const runtime=this.service.runtime.memberState(member.id),evidence=runtime.connection_evidence||null,canWake=this.service.desktop?.canWake(member.id)===true;
@@ -263,9 +268,9 @@ class OnboardingManager{
         if(this.service.desktop?.canWake(member.id)){Object.assign(base,{status:'ready',stage:'ready_automatic',local_verified:true,can_wake:true,response_mode:'managed_desktop',runner_ready:true,error:null,detail:base.automatic_reply_verified?'本人对话已核对实际自动回复。':'本人对话已接通；首条消息将核对实际自动回复。'});return base;}
         if(['interrupted','error'].includes(row.status)||session?.error){base.status='error';base.stage='error';base.error=safeText(session?.error||row.error||'本机桥接入口准备失败。');base.next_actions=[action('verify','重试准备入口',{operation:'retry'})];return base;}
         if(!['active','pending'].includes(credentialStatus)){base.status='needs_action';base.stage='awaiting_credential';base.detail='既有 Grok 成员的长期入口不可用，需你明确重新授权接入。';base.next_actions=[action('verify','重新授权接入',{operation:'retry'})];return base;}
-        if(verified){base.status='ready';base.stage='ready_mailbox';base.error=null;base.detail='已验证 Grok 本人窗口的本机入口；已有的 Webhook 和固定路由设置保持原样。应用进程不证明执行宿主在线，原生群状态另行核对。';return base;}
-        if(row.stage==='awaiting_native_desktop'){base.detail='本人对话未接通；检查客户端是否开启本机连接，再点击连接本人对话。';base.next_actions=[action('verify','连接本人对话',{operation:'native_desktop_connect'})];return base;}
-        base.status='needs_action';base.stage='awaiting_bridge_handshake';base.detail='入口已准备；在选定的已有 Grok Bot 窗口执行一次长期本机命令。应用开着不代表执行宿主连通，不能以说明或配置代替实际握手。';base.next_actions=[action('self_handshake','在已有 Grok Bot 窗口启用',{operation:'copy_handshake_prompt'})];return base;
+        if(verified){base.status='ready';base.stage='ready_mailbox';base.error=null;base.handshake_verified=true;base.detail='已验证 Grok 本机入口，可以进入办公室。已有 Bot、Webhook 和固定路由保留；尚未验证 AO 自动唤醒 Grok，不需要先创建群聊。';return base;}
+        if(row.stage==='awaiting_native_desktop'&&base.native_direct_available){base.detail='本人对话未接通；检查客户端是否开启本机连接，再点击连接本人对话。';base.next_actions=[action('verify','连接本人对话',{operation:'native_desktop_connect'})];return base;}
+        base.status='needs_action';base.stage='awaiting_bridge_handshake';base.error=null;base.handshake_verified=false;base.detail='复制连接说明，发到已有 Grok Bot 对话。让它使用已授权的本机命令接通，AO 会自动核对实际握手；不需要先创建群聊。';base.next_actions=[action('self_handshake','复制连接说明',{operation:'copy_handshake_prompt'})];return base;
       }
       if(row.status==='running'&&this.jobs.has(row.id)||session?.status==='preparing'){base.status='running';return base;}
       base.status='needs_action';base.stage='unsupported';base.next_actions=[action('verify','重试准备 Grok Bot 本人入口',{operation:'retry'})];return base;

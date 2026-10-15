@@ -380,8 +380,10 @@ test('each client gets the one connection method it can actually use', async t =
   const doubaoGuide = service.chat.setup(make('豆包', 'mailbox', 'doubao').id, room.id).client;assert.equal(doubaoGuide.kind,'native_desktop');const doubao=doubaoGuide.fallback;
   assert.equal(doubao.kind, 'http_fields'); assert.match(doubao.copy, /^http:\/\/127\.0\.0\.1:47831\/mcp\//);
   assert.equal(service.chat.setup(make('Codex', 'codex').id, room.id).client.kind, 'background');
-  const grokGuide = service.chat.setup(make('Grok Bot', 'grok-bridge').id, room.id).client;assert.equal(grokGuide.kind,'native_desktop');const grok=grokGuide.fallback;
-  assert.equal(grok.kind, 'command'); assert.match(grok.copy, /enter/);
+  const grokMember=make('Grok Bot','grok-bridge'),grokPending=service.chat.setup(grokMember.id,room.id).client;
+  assert.equal(grokPending.kind,'grok_guided');assert.equal(grokPending.native_direct_available,false);assert.equal(grokPending.needs_prepare,true);
+  const grok=service.chat.prepareGrokHandoff(grokMember.id,room.id).client;
+  assert.equal(grok.kind,'grok_guided');assert.match(grok.copy,/enter/);assert.match(grok.copy,/不需要创建群聊/);
   // The same client keeps one configuration across rooms.
   const member = service.chat.store.members().find(value => value.name === 'Qwen 桌面客户端');
   const other = service.chat.addRoom({ title: '另一间', project_id: room.project_id }); service.chat.join(other.id, member.id);

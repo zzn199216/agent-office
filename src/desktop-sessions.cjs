@@ -74,7 +74,19 @@ class DesktopSessions{
     if(!this.connecting.has(memberId))this.scheduleReconnect(memberId,{code:'desktop_connection_lost'});
     this.service.runtime.releaseWorker(`desktop:${memberId}`);this.observe(memberId,'runner_stopped');this.service.changed();
   }
+  nativeCapability(provider){
+    // A protocol implementation or an open application is not evidence that
+    // its live native adapter is usable. Injected drivers are trusted test or
+    // future verified integrations and retain the same person/session contract.
+    const available=typeof this.options.driverFactory==='function'||['qwen-desktop','doubao'].includes(provider);
+    return {available,code:available?null:'desktop_adapter_unverified',connection_method:available?'native_desktop':provider==='grok-bot'?'grok_command_bridge':'manual_mcp'};
+  }
+  requireNativeCapability(provider){
+    if(this.nativeCapability(provider).available)return;
+    throw new RoomError(provider==='grok-bot'?'当前版本尚未验证 Grok 的自动对话连接。请复制连接说明，发到已有 Grok Bot 对话，让它使用已授权的本机命令接通；不需要先创建群聊。':'这个客户端的原生对话适配器尚未完成实测，请使用兼容接入说明。',409,'desktop_adapter_unverified');
+  }
   async defaultDriver(row){
+    this.requireNativeCapability(row.provider);
     const target=await discoverDesktop(row.endpoint,row.provider,{fetchImpl:this.options.fetchImpl||this.service.fetch});
     const transport=await new DesktopTransport(target).connect();
     transport.on('disconnected',()=>this.transportDisconnected(row.member_id,transport));
@@ -109,6 +121,7 @@ class DesktopSessions{
     const old=this.row(memberId),provider=input.provider||old?.provider||member.config.launch_provider;
     if(member.config.launch_provider&&provider!==member.config.launch_provider)throw new RoomError('不能替换这位同事已经选定的客户端身份。',409,'desktop_identity_mismatch');
     if(!PORTS[provider]||old&&old.provider!==provider)throw new RoomError('不能用另一种客户端替换这位同事的原生身份。',409,'desktop_identity_mismatch');
+    this.requireNativeCapability(provider);
     if(this.closing)throw new RoomError('办公室服务正在停止。',503);
     if(this.connecting.has(memberId))return this.connecting.get(memberId);
     const credentials=this.service.resume.credentials(memberId);if(credentials.length&&credentials.every(credential=>credential.status==='revoked'))throw new RoomError('此成员的连接已撤销，未恢复桌面连接。',410,'resume_revoked');

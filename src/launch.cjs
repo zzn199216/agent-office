@@ -172,7 +172,7 @@ class LaunchManager{
       const added=chat.addMember({name:'Grok Bot',adapter:'grok-bridge'});chat.join(room.id,added.id);
       chat.store.updateMember(added.id,{status:'awaiting_handshake',config:{...chat.store.member(added.id).config,launch_provider:'grok-bot',connection_mode:'manual_cli'}});member=chat.store.member(added.id);
     }
-    this.service.entry.issue(member.id,room.id,{repair_invalid:true});return member;
+    this.service.entry.primary(member.id,room.id);return member;
   }
   grokEntryState(session){
     if(!session.selected_providers.includes('grok-bot'))return null;

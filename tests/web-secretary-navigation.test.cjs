@@ -44,6 +44,13 @@ test('automatic verification progress remains in setup and never assigns a secre
   const f=fixture();connectFlow(f,'picker',{id:'job',room_id:'room',member_id:'member',provider:'qwen-desktop',status:'running',stage:'verifying_reply',can_wake:true,ready_for_office:false});
   await f.context.returnSecretaryAfterOnboarding();assert.equal(f.calls.length,0);assert.equal(f.navigation.length,0);assert.equal(f.$('secretary-connect-dialog').open,true);
 });
+test('Grok pending and mailbox-ready picker flows open one owned guide without assigning a secretary',async()=>{
+  for(const status of ['needs_action','ready_mailbox']){
+    const f=fixture(),opened=[];f.context.showMemberSetup=async(id,flow)=>opened.push({id,flow});const flow=connectFlow(f,'picker',{id:'job',room_id:'room',member_id:'member',provider:'grok-bot',native_direct_available:false,status,can_wake:false});
+    await f.context.returnSecretaryAfterOnboarding();await f.context.returnSecretaryAfterOnboarding();assert.equal(opened.length,1);assert.equal(opened[0].id,'member');assert.equal(opened[0].flow,flow);assert.equal(f.calls.length,0);assert.equal(f.navigation.length,0);
+  }
+  const foreign=fixture();foreign.context.showMemberSetup=async()=>assert.fail('foreign room guide must stay closed');connectFlow(foreign,'picker',{id:'job',room_id:'different',member_id:'member',provider:'grok-bot',status:'needs_action',can_wake:false});await foreign.context.returnSecretaryAfterOnboarding();assert.equal(foreign.calls.length,0);
+});
 test('choosing a ready secretary closes its tutorial and owned setup without starting a goal',async()=>{
   const f=fixture();f.$('member-setup-dialog').open=true;await f.context.chooseSecretary('member');
   assert.equal(f.context.secretaryOpenRoom,null);assert.equal(f.context.secretaryNavigation,null);assert.equal(f.$('member-setup-dialog').open,false);assert.equal(f.$('recipient').value,'member');assert.deepEqual(f.navigation,[['workspace',true],['office',true]]);

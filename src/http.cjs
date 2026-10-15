@@ -188,6 +188,7 @@ function createServer(service,{token,port=47831,onShutdown}={}) {
         if(chat[1]==='rooms'&&chat[3]==='join')return json(res,service.chat.join(chat[2],input.member_id));
         if(chat[1]==='rooms'&&chat[3]==='leave')return json(res,service.chat.leave(chat[2],input.member_id));
         if(chat[1]==='members'&&chat[3]==='connect')return json(res,await service.chat.connect(chat[2],input.room_id));
+        if(chat[1]==='members'&&chat[3]==='setup')return json(res,service.chat.prepareGrokHandoff(chat[2],input.room_id));
         if(chat[1]==='members'&&chat[3]==='heartbeat')return json(res,service.chat.heartbeat(chat[2]));
         if(chat[1]==='members'&&chat[3]==='grok-configure')return json(res,await service.chat.configureGrok(chat[2],input.url,input.key));
         if(chat[1]==='messages'&&chat[3]==='cancel')return json(res,service.chat.cancel(chat[2]));

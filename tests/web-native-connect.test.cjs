@@ -5,11 +5,12 @@ function section(start,end){const first=source.indexOf(start),last=source.indexO
 function deferred(){let resolve,reject;const promise=new Promise((yes,no)=>{resolve=yes;reject=no;});return{promise,resolve,reject};}
 function plain(value){return JSON.parse(JSON.stringify(value));}
 function fixture({provider='qwen-desktop',adapter='mcp',evidence={},verifiedAt='old-protocol-proof'}={}){
-  const elements=new Map,calls=[],notices=[],copied=[],bridges=[];let refreshes=0,onboardingRefreshes=0;
-  const $=id=>{if(!elements.has(id)){const classes=new Set;elements.set(id,{innerHTML:'',textContent:'',value:'',dataset:{},open:false,disabled:false,classList:{toggle(name,value){if(value??!classes.has(name))classes.add(name);else classes.delete(name);},contains:name=>classes.has(name)},querySelector:()=>null,querySelectorAll:()=>[],cloneNode(){return{innerHTML:this.innerHTML,querySelector:()=>null,querySelectorAll:()=>[]};},showModal(){this.open=true;},close(){this.open=false;}});}return elements.get(id);};
+  const elements=new Map,calls=[],notices=[],copied=[],bridges=[],timers=new Map;let refreshes=0,onboardingRefreshes=0,timerId=0;
+  const $=id=>{if(!elements.has(id)){const classes=new Set;elements.set(id,{innerHTML:'',textContent:'',value:'',dataset:{},open:false,disabled:false,classList:{toggle(name,value){if(value??!classes.has(name))classes.add(name);else classes.delete(name);},add:name=>classes.add(name),remove:name=>classes.delete(name),contains:name=>classes.has(name)},querySelector:()=>null,querySelectorAll:()=>[],cloneNode(){return{innerHTML:this.innerHTML,querySelector:()=>null,querySelectorAll:()=>[]};},showModal(){this.open=true;},close(){this.open=false;}});}return elements.get(id);};
   const member={id:'member/native',name:'本人同事',adapter,provider,verified_at:verifiedAt,runtime_state:{connection_evidence:evidence}};
   const client={kind:'native_desktop',provider,native_state:{configured:false,can_wake:false},connection_evidence:evidence};
-  const context=vm.createContext({$,roomId:'room:one',legacyId:null,selectedSetupMember:member.id,setupData:{member,client},nativeSetupPending:null,nativeSetupFailure:null,lastSetupSignature:'',webConnected:true,
+  const context=vm.createContext({$,roomId:'room:one',legacyId:null,selectedSetupMember:member.id,setupData:{member,client},nativeSetupPending:null,nativeSetupFailure:null,lastSetupSignature:'',webConnected:true,grokSetupWatch:null,grokSetupWatchTimer:null,grokSetupWatchSequence:0,grokSetupWatchError:'',
+    setTimeout:(callback,ms)=>{timers.set(++timerId,{callback,ms});return timerId;},clearTimeout:id=>timers.delete(id),
     state:{chat:{members:[member]}},toast:value=>notices.push(value),memberStatus:()=>({tone:'online',label:'旧协议已验证'}),memberPresence:()=>({status:'unknown',label:'在线性未知',canWake:false}),time:value=>String(value),
     refresh:async()=>{refreshes++;},refreshOnboarding:async()=>{onboardingRefreshes++;},renderLaunch:()=>{},showBridge:async id=>bridges.push(id),showResume:async()=>{},
     openInspector:()=>{},runConnectionDoctor:async()=>{},clientConfigLabel:()=>'',clientImportKind:()=>'',navigator:{clipboard:{writeText:async value=>copied.push(value)}},action:async callback=>callback(),
@@ -20,7 +21,7 @@ function fixture({provider='qwen-desktop',adapter='mcp',evidence={},verifiedAt='
     section('function onboardingActions(', 'function roomUsesGrok(')+section('async function connectMember(', 'function updateRecipientNote(')+
     section("$('member-setup-content').onclick =", "$('member-grok-form').onsubmit")+
     section("$('member-connect-guide').onclick =", "$('member-copy-entry').onclick"),context);
-  return{context,$,member,client,calls,notices,copied,bridges,get refreshes(){return refreshes;},get onboardingRefreshes(){return onboardingRefreshes;}};
+  return{context,$,member,client,calls,notices,copied,bridges,timers,get refreshes(){return refreshes;},get onboardingRefreshes(){return onboardingRefreshes;}};
 }
 function click(attribute,dataset={}){const button={dataset,hasAttribute:name=>name===attribute};return{target:{closest:()=>button}};}
 
@@ -115,7 +116,7 @@ function inspectorFixture(options={}){
 }
 
 test('inspector recognizes unattached native people from public provider and opens their existing setup',async()=>{
-  for(const provider of['qwen-desktop','doubao','grok-bot']){
+  for(const provider of['qwen-desktop','doubao']){
     const f=inspectorFixture({provider,adapter:provider==='grok-bot'?'grok-bridge':'mailbox',verifiedAt:null});f.context.renderInspector();
     assert.match(f.$('inspector-selected-member').innerHTML,/独立原生对话/);assert.match(f.$('inspector-selected-member').innerHTML,/待连接验证/);assert.match(f.$('inspector-selected-member').innerHTML,/待实际任务验证/);
     assert.doesNotMatch(f.$('inspector-selected-member').innerHTML,/本人窗口领取|旧协议已验证/);assert.match(f.$('inspector-members').innerHTML,/本人对话连接待核对/);
@@ -123,6 +124,61 @@ test('inspector recognizes unattached native people from public provider and ope
     assert.match(f.$('inspector-connection-note').textContent,/会话加载与实际问题的回答分别验证/);assert.doesNotMatch(f.$('inspector-connection-note').textContent,/本人窗口领取/);
     await f.$('inspector-member-connect').onclick();assert.equal(f.$('member-setup-dialog').open,true);assert.equal(f.bridges.length,0);assert.equal(f.calls.length,1,'viewing setup does not create a native conversation or call a model');assert.ok(f.calls[0].route.includes('/setup?room_id='));
   }
+});
+
+test('Grok inspector offers a guided connection without claiming unsupported native control',async()=>{
+  const f=inspectorFixture({provider:'grok-bot',adapter:'grok-bridge',verifiedAt:null});f.client.kind='grok_guided';f.client.copy='OWNED-HANDOFF';f.context.renderInspector();
+  assert.match(f.$('inspector-selected-member').innerHTML,/Grok 本机入口 · 自动接手另行验证/);assert.doesNotMatch(f.$('inspector-selected-member').innerHTML,/独立原生对话/);
+  assert.equal(f.$('inspector-member-connect').textContent,'连接 Grok');assert.match(f.$('inspector-connection-note').textContent,/复制一次连接说明/);
+  await f.$('inspector-member-connect').onclick();assert.equal(f.$('member-setup-dialog').open,true);assert.match(f.$('member-connect-guide').innerHTML,/data-grok-copy/);assert.equal(f.bridges.length,0);
+});
+
+function guidedFixture(){
+  const f=fixture({provider:'grok-bot',adapter:'grok-bridge',verifiedAt:null});Object.assign(f.client,{kind:'grok_guided',copy:'OWNED-HANDOFF-WITH-PRIVATE-CREDENTIAL',handshake_verified:false,ready_for_office:false,can_wake:false});
+  f.context.history={room:{id:'room:one'},participants:[f.member]};f.context.secretaryNavigation={prior:'unchanged'};f.context.closeSecretaryTutorial=()=>{};f.context.setProfessionalView=()=>{};f.context.selectRoomView=value=>{f.office=value;};f.context.updateRecipientNote=()=>{};return f;
+}
+
+test('Grok guided screen exposes one clear handoff and hides configuration and old native failures',async()=>{
+  const f=guidedFixture();f.member.error='fetch failed';f.$('member-dialog').open=true;f.$('secretary-connect-dialog').open=true;f.$('bridge-dialog').open=true;
+  await f.context.showMemberSetup(f.member.id);
+  assert.equal(f.$('member-dialog').open,false);assert.equal(f.$('secretary-connect-dialog').open,false);assert.equal(f.$('bridge-dialog').open,false);assert.equal(f.$('member-setup-dialog').open,true);
+  const html=f.$('member-connect-guide').innerHTML;assert.match(html,/data-grok-copy/);assert.match(html,/粘贴到你要连接的 Grok Bot 对话/);assert.match(html,/无需先建群/);assert.match(html,/AO 自动检查连接/);
+  assert.doesNotMatch(html,/data-native-connect|19247|OWNED-HANDOFF|兼容 MCP/);assert.ok(html.indexOf('fetch failed')>html.indexOf('<details'));
+  assert.equal(f.$('member-setup-content').innerHTML,'');assert.equal(f.$('bridge-webhook-section').classList.contains('hidden'),true);assert.equal(f.calls.length,1);
+  await f.$('member-connect-guide').onclick(click('data-grok-copy'));assert.deepEqual(f.copied,['OWNED-HANDOFF-WITH-PRIVATE-CREDENTIAL']);assert.equal(f.context.grokSetupWatch.copied,true);assert.equal(f.calls.length,1,'copying an existing credential does not reissue or retry');
+});
+
+test('Grok explicit first-copy prepares once, concurrent clicks do not issue additional credentials',async()=>{
+  const f=guidedFixture();f.client.copy=null;f.client.needs_prepare=true;await f.context.showMemberSetup(f.member.id);const gate=deferred();
+  f.context.api=async(route,body)=>{f.calls.push({route,body});return body?gate.promise:{member:f.member,client:f.client};};
+  const first=f.$('member-connect-guide').onclick(click('data-grok-copy'));await f.$('member-connect-guide').onclick(click('data-grok-copy'));assert.equal(f.calls.length,2);assert.equal(f.calls[1].route,'/api/chat/members/member%2Fnative/setup');
+  const prepared={...f.client,copy:'FIRST-OWNED',needs_prepare:false};gate.resolve({member:f.member,client:prepared});await first;assert.deepEqual(f.copied,['FIRST-OWNED']);assert.equal(f.context.grokSetupWatch.copying,false);
+  await f.$('member-connect-guide').onclick(click('data-grok-copy'));assert.deepEqual(f.copied,['FIRST-OWNED','FIRST-OWNED']);assert.equal(f.calls.filter(call=>call.body).length,1);
+});
+
+test('Grok waits for actual handshake and enters office without assigning a secretary or claiming auto wake',async()=>{
+  const f=guidedFixture();await f.context.showMemberSetup(f.member.id);await f.$('member-connect-guide').onclick(click('data-grok-copy'));
+  await f.context.pollGrokSetup();assert.equal(f.office,undefined);assert.equal(f.$('member-setup-dialog').open,true);assert.equal(f.calls.filter(call=>call.body).length,0);
+  f.member.verified_at='REAL-HANDSHAKE';Object.assign(f.client,{handshake_verified:true,ready_for_office:true});await f.context.pollGrokSetup();
+  assert.equal(f.office,true);assert.equal(f.$('member-setup-dialog').open,false);assert.equal(f.context.grokSetupWatch,null);assert.equal(f.context.secretaryNavigation,null);assert.equal(f.calls.filter(call=>call.body).length,0);assert.equal(f.$('recipient').value,f.member.id);assert.match(f.notices.at(-1),/后台自动接手能力会单独核对/);
+});
+
+test('Grok readonly polling ignores late room, member and dialog results and preserves credentials',async()=>{
+  for(const change of['room','member','dialog']){
+    const f=guidedFixture();await f.context.showMemberSetup(f.member.id);const gate=deferred(),original=f.context.setupData;
+    f.context.api=async(route,body)=>{f.calls.push({route,body});return gate.promise;};const pending=f.context.pollGrokSetup();
+    if(change==='room')f.context.roomId='other-room';else if(change==='member')f.context.selectedSetupMember='other-person';else f.$('member-setup-dialog').close();
+    gate.resolve({member:f.member,client:{...f.client,copy:'LATE-SECRET',handshake_verified:true,ready_for_office:true}});await pending;
+    assert.equal(f.context.setupData,original);assert.equal(f.office,undefined);assert.equal(f.calls.filter(call=>call.body).length,0);assert.equal(f.copied.length,0);
+  }
+});
+
+test('revoked Grok guidance blocks copying, while clipboard failure exposes selectable owned instructions',async()=>{
+  const f=guidedFixture();Object.assign(f.client,{copy:null,entry_status:'revoked',needs_reauthorization:true});await f.context.showMemberSetup(f.member.id);
+  assert.match(f.$('member-connect-guide').innerHTML,/data-grok-copy disabled/);assert.match(f.$('member-connect-guide').innerHTML,/这个连接已被撤销/);await f.$('member-connect-guide').onclick(click('data-grok-copy'));assert.equal(f.calls.length,1);assert.equal(f.copied.length,0);
+  Object.assign(f.client,{copy:'<OWNED>SECRET',entry_status:'pending',needs_reauthorization:false});f.context.navigator.clipboard.writeText=async()=>{throw Error('clipboard unavailable');};
+  await f.$('member-connect-guide').onclick(click('data-grok-copy'));assert.match(f.$('member-connect-guide').innerHTML,/textarea class="grok-handoff-copy" data-grok-copy-fallback readonly/);assert.match(f.$('member-connect-guide').innerHTML,/&lt;OWNED&gt;SECRET/);assert.equal(f.context.grokSetupWatch.copied,false);assert.equal(f.office,undefined);
+  f.member.verified_at='REAL-AFTER-MANUAL-COPY';Object.assign(f.client,{handshake_verified:true,ready_for_office:true});await f.context.pollGrokSetup();assert.equal(f.office,true,'a real pending-to-verified transition enters office even after manual copying');
 });
 
 test('inspector keeps actual native model evidence separate and preserves manual client guidance',()=>{

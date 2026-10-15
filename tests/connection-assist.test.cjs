@@ -83,7 +83,7 @@ test('Grok fallback returns a copy sentence and owned document while bot-visible
   assert.equal(state.status,'needs_action');assert.equal(state.can_wake,false);assert.equal(state.local_verified,false);assert.ok(state.document_path);assert.match(state.copy_sentence,/请读取这台电脑上的接入文档/);assert.match(state.document_url,new RegExp('/api/connection-assists/'+state.id+'/document'));
   const document=v.manager.document(state.id,v.room.id);assert.match(document.filename,/grok-bot/);assert.match(document.text,/长期恢复入口/);assert.match(document.text,/不自动创建群聊/);assert.ok(!document.text.includes('fixture-private-token'));
   const context=await v.manager.prepareContext(message.id);assert.match(context,/逐字给用户/);assert.match(context,/copy_sentence/);assert.doesNotMatch(context,/fixture-private-token|\/mcp\/private-token|secret/);
-  assert.equal(v.calls.native.length+v.calls.install,0);assert.equal(v.calls.desktop.length,1);
+  assert.equal(v.calls.native.length+v.calls.install,0);assert.equal(v.calls.desktop.length,0,'unverified Grok native adapter must not be contacted');
 });
 test('mailbox document is private and read-only polling never scans, issues credentials or generates templates again',async t=>{
   const v=setup(t),message=v.message('那拉个豆包进来');v.manager.begin(message);const [state]=await v.finish(),before=counts(v),scans=v.calls.scans,revision=v.service.revision;
