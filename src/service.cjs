@@ -30,12 +30,13 @@ class RoomService extends EventEmitter {
     const {RuntimeInstaller}=require('./runtime-installer.cjs');this.runtimeInstaller=new RuntimeInstaller(this,options.runtimeInstaller||{});
     const {OnboardingManager}=require('./onboarding.cjs');this.onboarding=new OnboardingManager(this,{runtimeInstaller:input=>this.runtimeInstaller.install(input),desktopConnector:input=>this.desktop.connect(input),...options.onboarding});
     const {OnboardingActions}=require('./onboarding-actions.cjs');this.onboardingActions=new OnboardingActions(this,options.onboardingActions||{});
+    const {ConnectionAssist}=require('./connection-assist.cjs');this.connectionAssist=new ConnectionAssist(this,options.connectionAssist||{});
     this.exportTimer = setInterval(() => this.flushExports(), 2000); this.exportTimer.unref();
   }
   changed() { this.revision++; this.emit('change', this.revision); }
   flushExports() { try { this.store.exportPending(); this.exportError = null; } catch { this.exportError = '部分 Markdown 记录暂未写入，后台会继续补写。'; } }
   snapshot() {
-    return { version: require('./util.cjs').VERSION, instance_id:this.runtime.instanceId,runtime:this.runtime.offlineSnapshot(),chat:this.chat.snapshot(),office:this.office.snapshot(),secretaries:this.secretary.snapshot(),activeSetup:{onboarding:this.onboarding.jobs.size,runtime_installs:this.runtimeInstaller.jobs.size,launch:this.launch.jobs.size}, projects: this.store.projects(), discussions: this.store.discussions(), activeRequest: this.active?.requestId || null, approvals: [...this.approvals.values()].map(a => a.public), approval_reviews:this.liveApprovalReviews(), grok: this.vault.status(), codex: this.codexHealth || { connected: false, executable: this.codex.executable || null }, revision: this.revision, exportError: this.exportError, dataDirectory: this.store.dir };
+    return { version: require('./util.cjs').VERSION, instance_id:this.runtime.instanceId,runtime:this.runtime.offlineSnapshot(),chat:this.chat.snapshot(),office:this.office.snapshot(),secretaries:this.secretary.snapshot(),activeSetup:{onboarding:this.onboarding.jobs.size,runtime_installs:this.runtimeInstaller.jobs.size,launch:this.launch.jobs.size,connection_assists:this.connectionAssist?.jobs.size||0}, projects: this.store.projects(), discussions: this.store.discussions(), activeRequest: this.active?.requestId || null, approvals: [...this.approvals.values()].map(a => a.public), approval_reviews:this.liveApprovalReviews(), grok: this.vault.status(), codex: this.codexHealth || { connected: false, executable: this.codex.executable || null }, revision: this.revision, exportError: this.exportError, dataDirectory: this.store.dir };
   }
   history(discussionId) { return { discussion: this.store.discussion(discussionId), requests: this.store.history(discussionId).map(r => ({ ...publicRequest(r), delivery: this.store.deliveryFor(r.id) })) }; }
   async health() {
@@ -294,7 +295,7 @@ class RoomService extends EventEmitter {
     await this.codex.close(); this.store.setting('codex_path', executable); this.codex = new CodexClient({ executable,dataDir:this.store.dir }); this.codexHealth = null; return this.health();
   }
   async close() {
-    this.closing = true; this.team.close(); clearInterval(this.exportTimer);clearInterval(this.runtimeTimer);this.runtime.releaseWorker(this.runtimeRef); this.active?.abort.abort();await this.onboarding.close();await this.runtimeInstaller.close();await this.launch.close();await this.bridge.close();await this.desktop.close();await this.chat.close(); await this.codex.close();
+    this.closing = true; this.team.close();this.connectionAssist?.stop?.(); clearInterval(this.exportTimer);clearInterval(this.runtimeTimer);this.runtime.releaseWorker(this.runtimeRef); this.active?.abort.abort();await this.onboarding.close();await this.connectionAssist?.close?.();await this.runtimeInstaller.close();await this.launch.close();await this.bridge.close();await this.desktop.close();await this.chat.close(); await this.codex.close();
     for (let i=0; this.pumping && i<40; i++) await sleep(100);
     this.flushExports(); this.store.close();
   }

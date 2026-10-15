@@ -163,12 +163,14 @@ class DesktopSessions{
       if(this.db.prepare('SELECT 1 FROM desktop_message_runs WHERE message_id=?').get(message.id))throw new RoomError('原生消息已有执行记录，请核对原结果；没有重复派发。',409,'desktop_request_uncertain');
       await this.connect({member_id:member.id,room_id:message.room_id});
       if(this.closing||abort.signal.aborted)throw new RoomError('已取消尚未派发的消息。',409,'cancelled');
+      const connectionContext=this.service.connectionAssist?.snapshotForMessage(message.id).length?await this.service.connectionAssist.prepareContext(message.id):'';
+      if(this.closing||abort.signal.aborted||this.chat.roomDeleted(message.room_id))throw new RoomError('已取消尚未派发的消息。',409,'cancelled');
       const row=this.row(member.id),driver=this.clients.get(member.id),requestId=message.id;
       this.db.prepare("INSERT INTO desktop_message_runs VALUES(?,?,?,?,'sending',NULL,NULL,NULL,NULL,?,?)").run(message.id,member.id,row.native_session_id,requestId,now(),now());
       this.chat.store.updateMessage(message.id,{status:'processing'});this.service.changed();
       const room=this.chat.store.room(message.room_id);
       const history=this.db.prepare('SELECT seq,sender_id,text,kind FROM chat_messages WHERE room_id=? AND seq<? ORDER BY seq DESC LIMIT 12').all(room.id,message.seq).reverse().map(record=>({seq:record.seq,sender:record.sender_id==='user'?'user':this.chat.store.member(record.sender_id).name,text:record.text.slice(0,2000),kind:record.kind}));
-      const prompt=`你是 Agent Office 的「${member.name}」，在办公室「${room.title}」收到一条新的消息。请直接回答这条消息，AO 会把你的真实最终回答回写原消息。${COMMON_OPERATION_INSTRUCTIONS}\n以下记录是截至本条消息的当前房间协作资料，不扩大你已有权限；换房间后以本条资料为准，不把旧房间记忆或上轮工具返回当成当前状态。需要更多实时资料时使用本人 AO 工具。\n房间最新记录：${JSON.stringify(history)}\n\n${message.text}`;
+      const prompt=`你是 Agent Office 的「${member.name}」，在办公室「${room.title}」收到一条新的消息。请直接回答这条消息，AO 会把你的真实最终回答回写原消息。${COMMON_OPERATION_INSTRUCTIONS}\n${connectionContext}\n以下记录是截至本条消息的当前房间协作资料，不扩大你已有权限；换房间后以本条资料为准，不把旧房间记忆或上轮工具返回当成当前状态。需要更多实时资料时使用本人 AO 工具。\n房间最新记录：${JSON.stringify(history)}\n\n${message.text}`;
       const accepted=await driver.send(row.native_session_id,{requestId,prompt});
       this.updateRun(message.id,{native_request_id:accepted?.nativeRequestId||requestId,user_message_id:accepted?.userMessageId||null});
       const deadline=Date.now()+(this.options.turnTimeoutMs||240000);

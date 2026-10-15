@@ -19,7 +19,7 @@ function activity(state){
 function emptySnapshot(){return {version:VERSION,instance_id:null,runtime:{durable:true,service:{online:false,state:'not_initialized'},rooms:[],members:[]},chat:{rooms:[],members:[],activeMessages:[]},office:{},secretaries:{},activeSetup:{onboarding:0,runtime_installs:0,launch:0},projects:[],discussions:[],activeRequest:null,approvals:[],grok:{configured:false},codex:{connected:false},revision:0,exportError:null};}
 function offlineState(dir,roomId){
   roomId=roomInput(roomId);
-  if(!fs.existsSync(path.join(dir,'room.sqlite')))return {running:false,url:null,initialized:false,busy:activity({}),snapshot:emptySnapshot(),history:null,team:null,selected_room_id:null};
+  if(!fs.existsSync(path.join(dir,'room.sqlite')))return {running:false,url:null,initialized:false,client_version:VERSION,busy:activity({}),snapshot:emptySnapshot(),history:null,team:null,selected_room_id:null};
   const disk=openDisk(dir,{readOnly:true});
   try{
     const runtime=disk.runtime.offlineSnapshot(),rooms=disk.chat.rooms(),members=disk.chat.members();
@@ -31,7 +31,7 @@ function offlineState(dir,roomId){
     let history=null;
     if(selected){const room=disk.chat.room(selected),participants=disk.chat.participants(selected).map(member=>({...publicMember(member),native_thread_id:disk.chat.binding(selected,member.id).thread_id})),messages=disk.store.db.prepare('SELECT * FROM chat_messages WHERE room_id=? ORDER BY seq DESC LIMIT 200').all(selected).reverse().map(row=>disk.chat.publicMessage(row));history={room,participants,messages,approvals:[]};}
     const snapshot={...emptySnapshot(),instance_id:runtime.instance_id,runtime,chat:{rooms,members:members.map(publicMember),activeMessages:[]},office:require('./office-settings.cjs').officeSnapshot(disk.store,rooms),secretaries:require('./secretary.cjs').secretarySnapshot(disk.store,disk.chat,disk.runtime,rooms,{offline:true}),projects:disk.store.projects(),discussions:disk.store.discussions(),dataDirectory:dir};
-    return {running:false,url:null,initialized:true,busy:activity({}),snapshot,history,team:selected?readTeamSnapshot(disk,selected):null,selected_room_id:selected};
+    return {running:false,url:null,initialized:true,client_version:VERSION,busy:activity({}),snapshot,history,team:selected?readTeamSnapshot(disk,selected):null,selected_room_id:selected};
   }finally{disk.close();}
 }
 async function desktopState(dir,input={},options={}){

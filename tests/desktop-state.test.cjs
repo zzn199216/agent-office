@@ -9,7 +9,7 @@ const {createServer}=require('../src/http.cjs');
 const {offlineState,desktopState,desktopStart,desktopStop,activity}=require('../src/desktop-state.cjs');
 const {apiCall,readControl}=require('../src/main.cjs');
 const {fixture,FakeCodex,FakeVault}=require('./helpers.cjs');
-const {id,sleep}=require('../src/util.cjs');
+const {id,sleep,VERSION}=require('../src/util.cjs');
 test('preview upgrades preserve stable precedence and numeric preview ordering',()=>{const {olderVersion}=require('../src/desktop-state.cjs');assert.equal(olderVersion('0.14.16','0.15.0-preview.1'),true);assert.equal(olderVersion('0.15.0','0.15.0-preview.1'),false);assert.equal(olderVersion('0.15.0-preview.9','0.15.0-preview.10'),true);assert.equal(olderVersion('0.15.0-preview.1','0.15.0'),true);assert.equal(olderVersion('bad','0.15.0-preview.1'),false);});
 
 test('starting a newer desktop replaces only an idle older service and preserves room identity',async t=>{
@@ -69,7 +69,7 @@ test('first desktop read and stopped control never create a DB, ensure a server,
   const main={readControl(){controls++;return null;},ensureServer(){ensures++;throw new Error('An implicit start is forbidden.');},apiCall(){api++;throw new Error('No service exists.');}};
   const before=filesState(files.root);
   for(let n=0;n<3;n++){
-    const state=await desktopState(files.data,{}, {main});assert.equal(state.running,false);assert.equal(state.initialized,false);assert.equal(state.snapshot.instance_id,null);assert.deepEqual(state.snapshot.chat.rooms,[]);assert.equal(state.history,null);assert.equal(state.team,null);
+    const state=await desktopState(files.data,{}, {main});assert.equal(state.running,false);assert.equal(state.initialized,false);assert.equal(state.client_version,VERSION);assert.equal(state.snapshot.instance_id,null);assert.deepEqual(state.snapshot.chat.rooms,[]);assert.equal(state.history,null);assert.equal(state.team,null);
   }
   const stopped=await desktopStop(files.data,{}, {main});assert.equal(stopped.running,false);assert.equal(stopped.busy.is_busy,false);
   assert.equal(controls,4);assert.equal(ensures,0);assert.equal(api,0);assert.deepEqual(filesState(files.root),before);assert.equal(fs.existsSync(files.data),false);
@@ -79,7 +79,7 @@ test('offline history is room-specific, read-only, and excludes controller token
   const files=fixture();t.after(()=>cleanup(files));const v=await seed(files),beforeDatabase=databaseState(files.data),beforeFiles=filesState(files.data);
   const main={readControl:()=>null,ensureServer:()=>{throw new Error('read must not start');},apiCall:()=>{throw new Error('read must not call models');}};
   for(let n=0;n<3;n++){
-    const state=await desktopState(files.data,{room_id:v.first.id},{main});assert.equal(state.running,false);assert.equal(state.snapshot.instance_id,v.instance);assert.equal(state.history.room.id,v.first.id);
+    const state=await desktopState(files.data,{room_id:v.first.id},{main});assert.equal(state.running,false);assert.equal(state.client_version,VERSION);assert.equal(state.snapshot.instance_id,v.instance);assert.equal(state.history.room.id,v.first.id);
     assert.deepEqual(state.history.messages.map(message=>message.id),[v.question.id]);assert.deepEqual(state.history.participants.map(member=>member.id).sort(),[v.a.id,v.backend.id].sort());
     assert.equal(state.history.participants.find(member=>member.id===v.backend.id).native_thread_id,v.thread);
     const text=JSON.stringify(state);for(const secret of [v.card.secret,'fixture-private-controller-token','fixture-private-member-config'])assert.equal(text.includes(secret),false);

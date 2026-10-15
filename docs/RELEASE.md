@@ -29,7 +29,7 @@ node scripts/release.cjs --json
 `node scripts/release-runner.cjs --once` 读取 `output/release-requests/` 中的请求并按时间顺序处理。写入前先保存临时文件，再原子重命名为 `<id>.json`：
 
 ```json
-{"id":"release-example-001","created":"2026-10-15T01:00:00.000Z","steps":["release"],"expected_version":"0.15.0-preview.5","expected_head":"填写提交后的完整 Git HEAD"}
+{"id":"release-example-001","created":"2026-10-15T01:00:00.000Z","steps":["release"],"expected_version":"0.15.0-preview.6","expected_head":"填写提交后的完整 Git HEAD"}
 ```
 
 时间必须更新为实际 UTC 时间。只接受 `steps: ["check"]`（仅语法检查）或 `["release"]`（完整构建验收）；不接收命令、参数或输出路径。ID 只用小写字母、数字和连字符，最多 64 字符。要求工作区干净、预期版本及完整提交都匹配，超过 10 分钟或明显来自未来的请求拒绝。

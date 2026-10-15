@@ -60,6 +60,8 @@ function createServer(service,{token,port=47831,onShutdown}={}) {
     try {
       if(service.closing&&req.method==='POST'&&pathname!=='/api/shutdown')throw new RoomError('服务正在停止，新的操作尚未开始。',503,'service_stopping');
       if(req.method==='GET' && pathname==='/api/state')return json(res,service.snapshot());
+      const assistDocument=pathname.match(/^\/api\/connection-assists\/([a-f0-9-]{36})\/document$/i);
+      if(req.method==='GET'&&assistDocument){const q=new URL(req.url,'http://127.0.0.1').searchParams;return json(res,service.connectionAssist.document(assistDocument[1],q.get('room_id')));}
       if(req.method==='GET'&&pathname==='/api/work-record'){const q=new URL(req.url,'http://127.0.0.1').searchParams;if([...q.keys()].some(k=>!['room_id','member_id','discussion_id'].includes(k)))throw new RoomError('工作记录查询范围无效。');const input={room_id:q.get('room_id'),member_id:q.get('member_id'),discussion_id:q.get('discussion_id')};let client=service.codex;if(input.member_id){service.chat.store.requireParticipant(input.room_id,input.member_id);const member=service.chat.store.member(input.member_id);if(member.adapter==='codex')client=service.chat.nativeClient(member);}return json(res,await require('./work-records.cjs').exportWorkRecord(service.store,service.chat.store,input,{client}));}
       if(req.method==='GET' && pathname==='/api/team')return json(res,service.team.snapshot(new URL(req.url,'http://127.0.0.1').searchParams.get('room_id')));
       if(req.method==='GET'&&pathname==='/api/connection/doctor'){const q=new URL(req.url,'http://127.0.0.1').searchParams;return json(res,require('./connection-doctor.cjs').connectionDoctor(service,{room_id:q.get('room_id'),member_id:q.get('member_id')},{online:true}));}
@@ -180,7 +182,7 @@ function createServer(service,{token,port=47831,onShutdown}={}) {
       if(pathname==='/api/chat/rooms')return json(res,service.chat.addRoom(input),201);
       if(pathname==='/api/chat/members/cleanup')return json(res,service.chat.cleanupStale());
       if(pathname==='/api/chat/members')return json(res,service.chat.addMember(input),201);
-      if(pathname==='/api/chat/messages')return json(res,service.chat.post(input),202);
+      if(pathname==='/api/chat/messages')return json(res,service.chat.post(input,{human:true}),202);
       if(pathname==='/api/chat/join')return json(res,service.chat.completeInvite(input.invite_id,input.nonce,input.member_id));
       if(chat){
         if(chat[1]==='rooms'&&chat[3]==='join')return json(res,service.chat.join(chat[2],input.member_id));

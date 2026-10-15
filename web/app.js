@@ -556,7 +556,7 @@ function renderRoom(project) {
   $('empty-room').classList.toggle('hidden', messages.length > 0); $('empty-heading').textContent = participants.length ? '把一个问题带到房间里' : '邀请第一个成员';
   $('empty-description').textContent = participants.length ? '选择一位成员，或在消息里 @它。\n成员的提问与回复会留在同一条时间线上。' : '添加成员，完成握手后，就可以在这里把问题交给它。\n每个成员拥有自己的身份和工作会话。';
   $('empty-add-member').classList.toggle('hidden', participants.length > 0); $('suggestions').classList.toggle('hidden', !participants.length);
-  const approvals=roomApprovals(messages),reviews=roomApprovalReviews(messages),typing = renderTyping(messages), signature = JSON.stringify([room.id,messages,participants.map(member=>[member.id,member.name,member.appearance]),state.chat?.activeMessages || [],typing,approvals,reviews]);
+  const approvals=roomApprovals(messages),reviews=roomApprovalReviews(messages),typing = renderTyping(messages), signature = JSON.stringify([room.id,messages,participants.map(member=>[member.id,member.name,member.appearance]),state.chat?.activeMessages || [],typing,approvals,reviews,history.connection_assists||[]]);
   $('empty-room').classList.toggle('hidden',messages.length>0 || approvals.length>0 || reviews.length>0);
   if (signature !== lastTimeline) { const stream = $('chat-stream'), cached = textScroll.get(room.id), nearEnd = officeView ? cached?.atEnd !== false : stream.scrollHeight - stream.scrollTop - stream.clientHeight < 110, changedRoom = !lastTimeline.startsWith(`["${room.id}"`); setRoomTimeline(messages.map(message => renderMessage(message, messages)).join('') + typing + approvalTimelineMarkup(approvals,messages,reviews),approvals); lastTimeline = signature; if(!officeView){if(nearEnd||changedRoom)stream.scrollTop=messages.length||approvals.length||reviews.length?stream.scrollHeight:0;rememberTextScroll();}else if(changedRoom)textScroll.set(room.id,{top:0,atEnd:true}); }
   renderApprovals([]);updateOfficeApprovalAlert();
@@ -566,7 +566,29 @@ function renderMessage(message, messages) {
   const name = message.coordination ? '办公室安排' : senderName(message.sender_id), member = memberById(message.sender_id), target = message.to_member_id ? senderName(message.to_member_id) : '', quoted = message.reply_to && messages.find(item => item.id === message.reply_to);
   if (['system','event'].includes(message.kind) || message.sender_id === 'system') return `<div class="system-message"><span>${escape(message.text)}</span><time>${time(message.created || message.created_at)}</time></div>`;
   const running = ['queued','creating','running','processing','waiting_input','pending','delivered'].includes(message.status);
-  return `<article class="chat-message ${message.sender_id === 'user' && !message.coordination ? 'own-message' : ''}" id="message-${escape(message.id)}"><div class="message-header">${avatar(name, member?.adapter,member?.appearance)}<button type="button" class="message-sender" ${member ? `data-open-member="${escape(member.id)}"` : 'disabled'}>${escape(name)}</button>${target ? `<span class="message-target">→ ${escape(target)}</span>` : ''}<time>${time(message.created || message.created_at)}</time></div><div class="message-body">${quoted ? `<div class="quoted-message"><strong>${escape(senderName(quoted.sender_id))}</strong><span>${escape(quoted.coordination?.title || plainMarkdown(quoted.text))}</span></div>` : ''}${messageContent(message)}<div class="message-images">${messageImages(message)}</div>${message.progress ? `<div class="progress-note">${escape(message.progress)}</div>` : ''}${message.error ? `<div class="error-note">${escape(message.error)}</div>` : ''}<div class="message-footer">${message.status && !['posted','completed','answered'].includes(message.status) ? pill(message.status) : ''}${desktop?.offline ? '' : `${messageCanReconcile(message) ? `<button class="text-button" data-reconcile-message="${escape(message.id)}">核实结果并结案</button>` : ''}<button class="text-button reply-button" data-reply="${escape(message.id)}">回复</button>${running ? `<button class="text-button danger" data-cancel-message="${escape(message.id)}">停止等待</button>` : ''}`}</div></div></article>`;
+  return `<article class="chat-message ${message.sender_id === 'user' && !message.coordination ? 'own-message' : ''}" id="message-${escape(message.id)}"><div class="message-header">${avatar(name, member?.adapter,member?.appearance)}<button type="button" class="message-sender" ${member ? `data-open-member="${escape(member.id)}"` : 'disabled'}>${escape(name)}</button>${target ? `<span class="message-target">→ ${escape(target)}</span>` : ''}<time>${time(message.created || message.created_at)}</time></div><div class="message-body">${quoted ? `<div class="quoted-message"><strong>${escape(senderName(quoted.sender_id))}</strong><span>${escape(quoted.coordination?.title || plainMarkdown(quoted.text))}</span></div>` : ''}${messageContent(message)}<div class="message-images">${messageImages(message)}</div>${message.progress ? `<div class="progress-note">${escape(message.progress)}</div>` : ''}${message.error ? `<div class="error-note">${escape(message.error)}</div>` : ''}<div class="message-footer">${message.status && !['posted','completed','answered'].includes(message.status) ? pill(message.status) : ''}${desktop?.offline ? '' : `${messageCanReconcile(message) ? `<button class="text-button" data-reconcile-message="${escape(message.id)}">核实结果并结案</button>` : ''}<button class="text-button reply-button" data-reply="${escape(message.id)}">回复</button>${running ? `<button class="text-button danger" data-cancel-message="${escape(message.id)}">停止等待</button>` : ''}`}</div></div></article>${renderConnectionAssists(message)}`;
+}
+function renderConnectionAssists(message) {
+  if(message.room_id!==roomId||message.sender_id!=='user'||message.kind!=='message'||message.coordination)return '';
+  const actor=memberById(message.to_member_id),actorName=actor?.name||'接入助手';
+  return (history.connection_assists||[]).filter(item=>item.message_id===message.id&&item.room_id===roomId&&item.member_id===message.to_member_id).map(item=>{
+    const ready=item.status==='ready',automatic=ready&&item.can_wake===true,pending=['running','starting','prepared','preparing_document'].includes(item.status)&&!item.error;
+    const title=automatic?'已自动接通':ready?'本人入口已接通':pending?'正在连接':item.status==='interrupted'?'接入已中断':['error','failed'].includes(item.status)?'接入未完成':'需要在本人窗口完成连接';
+    const handoff=!ready&&item.copy_sentence?`<p>把下面这句话发给 <strong>${escape(item.name||item.provider)}</strong> 自己的窗口：</p><pre class="connection-assist-sentence">${escape(item.copy_sentence)}</pre><div class="actions"><button type="button" class="primary" data-assist-copy="${escape(item.id)}">复制给 ${escape(item.name||item.provider)}</button><button type="button" class="secondary" data-assist-document="${escape(item.id)}">保存接入文档</button><button type="button" class="secondary" data-assist-check="${escape(item.id)}">检查连接</button></div><details><summary>接入文档已保存在本机</summary><code>${escape(item.document_path||'')}</code><p class="small-note">同一台电脑上的 AI 可按这句话读取文档；换房间和升级沿用原人物连接。</p></details>`:ready?`<p class="small-note">${automatic?'可直接在 AO 给它发消息。':'当前是本人窗口信箱，需由该窗口处理消息。'}</p>`:pending?'<p class="small-note">有需要你完成的步骤时，会在这里给出文档与复制句。</p>':`<p class="small-note">原进度保留，请查看所需步骤后明确继续；没有自动重连。</p><div class="actions"><button type="button" class="secondary" data-assist-open="${escape(item.id)}">查看接入步骤</button><button type="button" class="secondary" data-assist-check="${escape(item.id)}">检查连接</button></div>`;
+    return `<article class="chat-message connection-assist-message" data-connection-assist="${escape(item.id)}"><div class="message-header">${avatar(actorName,actor?.adapter,actor?.appearance,actor?.id)}<strong>${escape(actorName)}</strong><span class="message-target">接入进度 · AO 核对</span><time>${time(item.updated||item.created)}</time></div><div class="message-body"><h3>${escape(item.name||item.provider)} · ${title}</h3><p>${escape(item.summary||'正在核对接入状态。')}</p>${item.error?`<p class="small-note">${escape(item.error)}</p>`:''}${handoff}</div></article>`;
+  }).join('');
+}
+async function connectionAssistAction(button) {
+  if(!button||button.disabled)return;
+  const selected=button.dataset.assistCopy||button.dataset.assistDocument||button.dataset.assistCheck||button.dataset.assistOpen;
+  const item=(history.connection_assists||[]).find(value=>value.id===selected&&value.room_id===roomId);
+  if(!item)return;
+  const source=(history.messages||[]).find(message=>message.id===item.message_id&&message.room_id===roomId&&message.sender_id==='user'&&message.kind==='message'&&!message.coordination&&message.to_member_id===item.member_id);
+  if(!source)return;
+  if(button.dataset.assistCopy){await navigator.clipboard.writeText(item.copy_sentence);toast(`已复制，请发给 ${item.name||item.provider} 自己的窗口。`);}
+  else if(button.dataset.assistCheck){await refresh();toast('已核对实际连接状态，没有重新发起接入。');}
+  else if(button.dataset.assistOpen){if(item.run_id){const job=onboardingView(await api(`/api/onboarding/jobs/${encodeURIComponent(item.run_id)}`));if(job?.id)onboardingJobs.set(job.id,job);}setProfessionalView(false);renderLaunch();$('onboarding-progress').scrollIntoView({block:'nearest',behavior:'smooth'});}
+  else{const file=await api(`/api/connection-assists/${encodeURIComponent(item.id)}/document?room_id=${encodeURIComponent(roomId)}`),url=URL.createObjectURL(new Blob([file.text],{type:'text/markdown;charset=utf-8'})),link=document.createElement('a');try{link.href=url;link.download=file.filename;document.body.append(link);link.click();link.remove();}finally{URL.revokeObjectURL(url);}}
 }
 function renderTyping(messages) {
   const states = {queued:'已排队，等待接手',pending:'等待接手',delivered:'已送达，等待接手',consumed:'已读取，等待回复',creating:'正在打开工作会话',running:'正在思考',processing:'正在思考',waiting_input:'在等你确认'};
@@ -870,7 +892,18 @@ function currentServiceBusy() {
   const details = desktopState?.busy || {};
   return details.is_busy === true || !!state?.activeRequest || !!state?.chat?.activeMessages?.length || !!state?.approvals?.length || Object.values(state?.activeSetup || {}).some(Number) || (state?.chat?.members || []).some(member => member.status === 'connecting');
 }
+function renderVersion() {
+  const label=$('app-version');if(!label)return;
+  const version=value=>typeof value==='string'&&value.trim()?value.trim():null;
+  const server=webConnected?version(state?.version):null,client=version(desktopState?.client_version);
+  const parts=[server?`服务 v${server}`:webConnected?'服务版本未知':'服务未连接'];
+  if(client&&client!==server)parts.push(`软件 v${client}`);
+  label.textContent=parts.join(' · ');
+  label.title=server&&client&&server!==client?'服务与软件版本不同。'+parts.join(' · '):label.textContent;
+  label.dataset.mismatch=String(!!(server&&client&&server!==client));
+}
 function renderService() {
+  renderVersion();
   const readOnly = !webConnected;
   renderRoomActions();
   document.querySelectorAll('[data-delete-room]').forEach(button=>{button.disabled=readOnly;});
@@ -1474,6 +1507,7 @@ $('inspector-member-connect').onclick=()=>inspectorMemberId&&action(()=>showMemb
 $('connection-doctor-run').onclick=()=>action(runConnectionDoctor);
 $('connection-doctor-member').onchange=()=>{$('connection-doctor-old-member').value='';connectionDoctor=null;connectionDoctorError='';renderConnectionDoctor();};
 $('connection-doctor-old-member').oninput=()=>{connectionDoctor=null;connectionDoctorError='';renderConnectionDoctor();};
+document.addEventListener('click',event=>{const button=event.target.closest('[data-assist-copy],[data-assist-document],[data-assist-check],[data-assist-open]');if(button)action(()=>connectionAssistAction(button));});
 $('connection-doctor-copy').onclick=()=>action(async()=>{await navigator.clipboard.writeText(doctorSummary());toast('诊断摘要已复制，不含入口凭据。');});
 $('connection-doctor-select').onclick=()=>{$('connection-doctor-old-member').value='';$('connection-doctor-member').value='';connectionDoctor=null;connectionDoctorError='';renderConnectionDoctor();$('connection-doctor-member').focus();};
 $('connection-doctor-resume').onclick=()=>{const member=doctorMember();if(member)showResume(member.id);};
