@@ -2,9 +2,11 @@
 const {spawn}=require('node:child_process');
 const fs=require('node:fs'),path=require('node:path'),os=require('node:os');
 async function main(){
+  const option=name=>{const index=process.argv.indexOf(name);if(index<0)return null;if(!process.argv[index+1]||process.argv[index+1].startsWith('--'))throw new Error(name+' needs a value');return path.resolve(process.argv[index+1]);};
+  const executable=option('--executable')||path.resolve(__dirname,'../dist/AgentRoom.exe'),output=option('--output')||path.resolve(__dirname,'../output/validation/packaged-mcp.json');
   const dir=fs.mkdtempSync(path.join(os.tmpdir(),'agentroom-packaged-mcp-'));
   const result=await new Promise((resolve,reject)=>{
-    const child=spawn(path.resolve(__dirname,'../dist/AgentRoom.exe'),['mcp','--setup','--data-dir',dir],{windowsHide:true,env:{...process.env,AGENTROOM_MEMBER_ID:'',AGENTROOM_ROOM_ID:'',AGENTROOM_CALLER:'',AGENTROOM_SETUP_MODE:'1'},stdio:['pipe','pipe','pipe']});
+    const child=spawn(executable,['mcp','--setup','--data-dir',dir],{windowsHide:true,env:{...process.env,AGENTROOM_MEMBER_ID:'',AGENTROOM_ROOM_ID:'',AGENTROOM_CALLER:'',AGENTROOM_SETUP_MODE:'1'},stdio:['pipe','pipe','pipe']});
     let pending='',errorText='',settled=false;
     const done=(error,value)=>{if(settled)return;settled=true;clearTimeout(timer);child.kill();error?reject(error):resolve(value);};
     const timer=setTimeout(()=>done(new Error('Packaged MCP metadata timed out')),10000);
@@ -22,6 +24,6 @@ async function main(){
     send({jsonrpc:'2.0',id:1,method:'initialize',params:{protocolVersion:'2025-06-18',capabilities:{},clientInfo:{name:'isolated-package-metadata',version:'1'}}});
   });
   if(result.daemon_started)throw new Error('Listing tools unexpectedly started a daemon');
-  fs.writeFileSync(path.resolve(__dirname,'../output/validation/packaged-mcp.json'),JSON.stringify(result,null,2));console.log(JSON.stringify(result));
+  fs.mkdirSync(path.dirname(output),{recursive:true});fs.writeFileSync(output,JSON.stringify(result,null,2));console.log(JSON.stringify(result));
 }
 main().catch(error=>{console.error(error.message);process.exitCode=1;});

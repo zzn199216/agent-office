@@ -1,7 +1,8 @@
 'use strict';
 const fs=require('node:fs'),path=require('node:path'),{spawnSync}=require('node:child_process');
 const {buildSync}=require('esbuild');const{inject}=require('postject');
-const root=path.resolve(__dirname,'..'),dist=path.join(root,'dist'),expectedVersion=require('../package.json').version;
+const root=path.resolve(__dirname,'..'),outputOption=process.argv.indexOf('--output-root'),outputRoot=outputOption<0?root:path.resolve(process.argv[outputOption+1]||(()=>{throw new Error('--output-root requires a directory');})()),dist=path.join(outputRoot,'dist'),expectedVersion=require('../package.json').version;
+const {sourceState,sha,atomicJson}=require('./release-common.cjs');
 function run(command,args){const r=spawnSync(command,args,{cwd:root,encoding:'utf8',windowsHide:true});if(r.status!==0)throw new Error((r.stderr || r.stdout || 'Build command failed').slice(0,2000));return r.stdout;}
 function copyReferences(source,destination){
   const sourceRoot=fs.realpathSync.native(source),files=[];
@@ -18,6 +19,7 @@ function copyReferences(source,destination){
 }
 async function main(){
   if(process.platform!=='win32'||process.arch!=='x64')throw new Error('Windows x64 release must be built on Windows x64.');
+  const source=sourceState(root);
   fs.mkdirSync(dist,{recursive:true});const bundle=path.join(dist,'bundle.cjs');
   buildSync({entryPoints:[path.join(root,'src/main.cjs')],bundle:true,platform:'node',target:'node22',format:'cjs',outfile:bundle,minify:false});
   const blob=path.join(dist,'sea-prep.blob');const config={main:bundle,output:blob,disableExperimentalSEAWarning:true,useSnapshot:false,useCodeCache:false,assets:{'index.html':path.join(root,'web/index.html'),'app.js':path.join(root,'web/app.js'),'desktop.js':path.join(root,'web/desktop.js'),'style.css':path.join(root,'web/style.css'),'skill/SKILL.md':path.join(root,'integrations/agentroom/SKILL.md'),'skill/GROK_SKILL.md':path.join(root,'integrations/agentroom/GROK_SKILL.md')}};
@@ -31,9 +33,9 @@ async function main(){
   image=fs.readFileSync(executable);const optional=image.readUInt32LE(0x3c)+24;image.writeUInt16LE(2,optional+68);image.writeUInt32LE(0,optional+64);fs.writeFileSync(executable,image);
   const version=run(executable,['--version']).trim();if(version!==expectedVersion)throw new Error('Packaged executable version check failed: '+version);
   fs.copyFileSync(executable,path.join(dist,'AgentOffice.exe'));
-  const release=path.join(root,'release',`AgentOffice-${expectedVersion}-windows-x64`);fs.mkdirSync(release,{recursive:true});fs.copyFileSync(executable,path.join(release,'AgentOffice.exe'));fs.copyFileSync(path.join(root,'LICENSE'),path.join(release,'LICENSE'));
+  const release=path.join(outputRoot,'release',`AgentOffice-${expectedVersion}-windows-x64`);fs.mkdirSync(release,{recursive:true});fs.copyFileSync(executable,path.join(release,'AgentOffice.exe'));fs.copyFileSync(path.join(root,'LICENSE'),path.join(release,'LICENSE'));
   fs.writeFileSync(path.join(release,'OPEN_TEST.cmd'),'@echo off\r\nstart "" "%~dp0AgentOffice.exe"\r\n');
-  const desktop=await require('./build-desktop.cjs').buildDesktop({version:expectedVersion}),desktopPublic={schema:'agentroom.desktop-bundle',version:desktop.version,sdk_version:desktop.sdk_version,sdk_sha256:desktop.sdk_sha256,files:desktop.files};
+  const desktop=await require('./build-desktop.cjs').buildDesktop({outputDir:path.join(dist,'desktop'),version:expectedVersion}),desktopPublic={schema:'agentroom.desktop-bundle',version:desktop.version,sdk_version:desktop.sdk_version,sdk_sha256:desktop.sdk_sha256,files:desktop.files};
   fs.writeFileSync(path.join(desktop.directory,'desktop-manifest.json'),JSON.stringify(desktopPublic,null,2));
   for(const item of [...desktop.files.map(file=>file.path),'desktop-manifest.json']){const target=path.join(release,'desktop',...item.split('/'));fs.mkdirSync(path.dirname(target),{recursive:true});fs.copyFileSync(path.join(desktop.directory,...item.split('/')),target);}
   fs.copyFileSync(path.join(root,'docs','USER_GUIDE.md'),path.join(release,'USER_GUIDE.md'));fs.copyFileSync(path.join(root,'docs','GROK_GROUP_BRIDGE.md'),path.join(release,'GROK_GROUP_BRIDGE.md'));
@@ -78,13 +80,17 @@ Grok 可先连接一个 Bot，直接在当前对话桥接外部成员；群聊�
 这是未签名的本地预览版，尚未公开发布。
 `);
   const licenseCandidates=[path.join(path.dirname(process.execPath),'LICENSE'),path.join(path.dirname(process.execPath),'LICENSE.txt')];const license=licenseCandidates.find(p=>fs.existsSync(p));if(!license)throw new Error('Node.js license file is required for the runtime package.');fs.copyFileSync(license,path.join(release,'NODE_LICENSE.txt'));
-  const zip=path.join(root,'release',`AgentOffice-${expectedVersion}-windows-x64.zip`);
-  if(process.argv.includes('--local-only')){console.log(JSON.stringify({executable:path.join(release,'AgentOffice.exe'),release,version,bytes:fs.statSync(executable).size},null,2));return;}
+  const zip=path.join(outputRoot,'release',`AgentOffice-${expectedVersion}-windows-x64.zip`);
   // ZIP uses a fresh stage and this explicit public-file manifest. Runtime DBs,
   // entry cards, provider configuration, .local and validation outputs never
   // enter it, even if an older release directory contains additional files.
   const names=['AgentOffice.exe','OPEN_TEST.cmd','README.md','USER_GUIDE.md','OPERATION_POLICY.md','GROK_GROUP_BRIDGE.md','BRIDGE_SETUP.md','DURABLE_ROOM.md','ZERO_TOUCH_RESEARCH.md','QWEN_DESKTOP_RESEARCH.md','DOUBAO_DESKTOP_RESEARCH.md','NATIVE_DESKTOP.md','GEMINI_CLI_RESEARCH.md','DOUBAO_CONNECTOR_GUIDE.md','ADDITIONAL_AGENTS_RESEARCH.md','GROK_CONNECTION_TROUBLESHOOTING.md','OFFICE_APPEARANCE.md','OFFICE_RESEARCH.md','OFFICE_MASCOT_SOURCES.md','SECRETARY_GUIDE.md','TEAM_COLLABORATION.md','SKILL.md','GROK_SKILL.md','LICENSE','NODE_LICENSE.txt'],stage=fs.mkdtempSync(path.join(dist,'zip-stage-'));
+  names.push('AGENT_INSTALLATION.md');
+  const publicFiles=[...names,...referenceFiles.map(name=>'references/'+name.replaceAll('\\','/')),...desktop.files.map(file=>'desktop/'+file.path.replaceAll('\\','/')),'desktop/desktop-manifest.json'];
+  if(sourceState(root).fingerprint!==source.fingerprint)throw new Error('Source changed during the build; the package was not accepted.');
+  atomicJson(path.join(release,'release-manifest.json'),{schema:'agentoffice.release',version:expectedVersion,source,files:publicFiles.map(name=>({path:name,sha256:sha(path.join(release,...name.split('/'))),bytes:fs.statSync(path.join(release,...name.split('/'))).size}))});names.push('release-manifest.json');
   try{
+    if(process.argv.includes('--local-only')){console.log(JSON.stringify({executable:path.join(release,'AgentOffice.exe'),release,version,bytes:fs.statSync(executable).size},null,2));return;}
     for(const name of names)fs.copyFileSync(path.join(release,name),path.join(stage,name));
     copyReferences(referenceSource,path.join(stage,'references'));
     for(const item of [...desktop.files.map(file=>file.path),'desktop-manifest.json']){const target=path.join(stage,'desktop',...item.split('/'));fs.mkdirSync(path.dirname(target),{recursive:true});fs.copyFileSync(path.join(desktop.directory,...item.split('/')),target);}

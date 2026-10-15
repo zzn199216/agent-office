@@ -2,7 +2,8 @@
 const fs=require('node:fs'),path=require('node:path'),os=require('node:os'),crypto=require('node:crypto');const{spawn}=require('node:child_process');
 async function run(executable,args){return new Promise((resolve,reject)=>{const p=spawn(executable,args,{windowsHide:true,stdio:['ignore','pipe','pipe']});let stdout='',stderr='';p.stdout.setEncoding('utf8');p.stdout.on('data',d=>stdout+=d);p.stderr.setEncoding('utf8');p.stderr.on('data',d=>stderr+=d);p.on('error',reject);p.on('exit',code=>code===0?resolve(stdout):reject(new Error(stderr || `Exit ${code}`)));});}
 async function main(){
-  const root=path.resolve(__dirname,'..'),exe=path.join(root,'dist','AgentRoom.exe'),base=fs.mkdtempSync(path.join(os.tmpdir(),'agentroom-package-')),infoDir=path.join(base,'version-only'),data=path.join(base,'runtime');
+  const option=name=>{const index=process.argv.indexOf(name);if(index<0)return null;if(!process.argv[index+1]||process.argv[index+1].startsWith('--'))throw new Error(name+' needs a value');return path.resolve(process.argv[index+1]);};
+  const root=path.resolve(__dirname,'..'),exe=option('--executable')||path.join(root,'dist','AgentRoom.exe'),base=fs.mkdtempSync(path.join(os.tmpdir(),'agentroom-package-')),infoDir=path.join(base,'version-only'),data=path.join(base,'runtime'),output=option('--output')||path.join(root,'output','validation',process.argv.includes('--chat-live')?'packaged-chat-runtime.json':'packaged-runtime.json');
   const version=(await run(exe,['--version','--data-dir',infoDir])).trim();if(version!==require('../package.json').version||fs.existsSync(infoDir))throw new Error('Version check unexpectedly installed or started the application.');
   const start=JSON.parse(await run(exe,['start','--data-dir',data,'--project',root,'--name','打包验收']));
   try{
@@ -62,7 +63,7 @@ async function main(){
       }finally{await client.close();}
       evidence.real_codex_mcp_verified=true;evidence.native_mcp_trace_verified=true;evidence.request_id=request.request_id;evidence.answer=request.answer;
     }
-    fs.mkdirSync(path.join(root,'output','validation'),{recursive:true});fs.writeFileSync(path.join(root,'output','validation',process.argv.includes('--chat-live')?'packaged-chat-runtime.json':'packaged-runtime.json'),JSON.stringify(evidence,null,2));console.log(JSON.stringify(evidence));
+    fs.mkdirSync(path.dirname(output),{recursive:true});fs.writeFileSync(output,JSON.stringify(evidence,null,2));console.log(JSON.stringify(evidence));
   }finally{await run(exe,['stop','--data-dir',data]);}
 }
 main().catch(e=>{console.error(e.message);process.exitCode=1;});
