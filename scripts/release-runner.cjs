@@ -1,6 +1,6 @@
 'use strict';
 const fs=require('node:fs'),path=require('node:path'),os=require('node:os'),crypto=require('node:crypto');
-const {atomicJson,sourceState,acquireLock,execute,regularFile}=require('./release-common.cjs'),{verifyArtifacts,publishArtifacts}=require('./release-artifacts.cjs');
+const {atomicJson,sourceState,acquireLock,execute,regularFile,sha}=require('./release-common.cjs'),{verifyArtifacts,publishArtifacts}=require('./release-artifacts.cjs');
 const ID=/^[a-z0-9][a-z0-9-]{0,63}$/;
 const validId=value=>typeof value==='string'&&ID.test(value)&&!/^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(value);
 function validateRequest(value,fileId,context){
@@ -25,6 +25,10 @@ function copyDependencies(root,snapshot){
     const destination=path.join(snapshot,...name.split('/'));fs.mkdirSync(path.dirname(destination),{recursive:true});fs.cpSync(source,destination,{recursive:true,errorOnExist:true,force:false,filter:file=>{if(fs.lstatSync(file).isSymbolicLink())throw new Error('Dependency links are not accepted.');return true;}});
   }
 }
+function copySdkCache(root,snapshot){
+  const {SDK_VERSION,SDK_SHA256}=require(path.join(snapshot,'scripts','build-desktop.cjs')),relative=path.join('dist','webview2-sdk',SDK_VERSION,'webview2.nupkg'),cached=path.join(root,relative);
+  if(fs.existsSync(cached)&&!fs.lstatSync(cached).isSymbolicLink()&&sha(cached)===SDK_SHA256){const target=path.join(snapshot,relative);fs.mkdirSync(path.dirname(target),{recursive:true});fs.copyFileSync(cached,target);}
+}
 async function executeRequest(request,{root,signal,statusDirectory,logDirectory}){
   const temporary=fs.mkdtempSync(path.join(os.tmpdir(),'agentoffice-runner-')),snapshot=path.join(temporary,'source'),before=sourceState(root);let unlock;
   const command=async(name,command,args,cwd=root)=>{const result=await execute(command,args,{cwd,signal,log:path.join(logDirectory,name+'.log')});if(result.exit_code!==0||result.aborted||result.timed_out)throw new Error(name+' failed; see the runner log.');};
@@ -39,7 +43,7 @@ async function executeRequest(request,{root,signal,statusDirectory,logDirectory}
       if(sourceState(root).fingerprint!==before.fingerprint)throw new Error('Shared source changed while checking the pinned snapshot.');
       const resultPath=path.join(statusDirectory,request.id+'-result.json');atomicJson(resultPath,{status:'ok',steps:['check'],source:pinned,models_called:false});return {result_path:resultPath,source:pinned};
     }
-    copyDependencies(root,snapshot);
+    copyDependencies(root,snapshot);copySdkCache(root,snapshot);
     await command('release',process.execPath,['scripts/release.cjs','--json'],snapshot);
     const result=JSON.parse(fs.readFileSync(path.join(snapshot,'output',`release-${request.expected_version}.json`),'utf8'));
     if(result.status!=='ok'||!result.fully_verified||sourceState(root).fingerprint!==before.fingerprint)throw new Error('Release failed or the shared source changed; no delivery was published.');

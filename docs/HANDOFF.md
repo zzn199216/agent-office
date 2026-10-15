@@ -5,6 +5,7 @@
 ## 最新续修（0.15.0-preview.5，审计修复）
 
 - 第 2 步新增 release-runner 固定动作队列与当前用户隐藏计划任务安装/卸载脚本。请求绑定 expected_head、版本与 10 分钟时效；在本地提交快照执行，终态不重跑，超时取消子进程树，崩溃残留明确失败。队列与发布锁、来源核对、快照交付复制均有独立边界；不会启动用户 AO 或模型。FIFO、并发、拒绝、超时和恢复测试覆盖，真实主机请求状态以 output/release-status 为准。安装说明见 RELEASE.md。
+- 真实主机快照检查 host-check-1792023930709 已成功。NAS 未签名 PowerShell 入口受 RemoteSigned 限制，因此改用 Node 安装入口及本地隐藏宿主，不修改执行策略；同时修复 Store 应用 LOCALAPPDATA 虚拟化和 nvm 链接路径：任务登记真实 native 文件路径。当前用户 AgentOfficeReleaseRunner 已安装，Interactive/Limited、每分钟检查、无窗口，真实启动退出码为 0。WebView2 SDK 缓存按固定 SHA 复用；具体可用性见 `node scripts/release-task.cjs status`。
 
 - 第 1 步发布自动化新增 `scripts/release.cjs`；使用本地临时构建、独立运行报告和发布锁，验收最终文件夹、桌面清单和 ZIP 的逐文件字节，并绑定源码 HEAD 与内容指纹。跳过测试或构建明确为 partial；历史交付包不会覆盖。命令与报告位置见 RELEASE.md。新增解析、故障中止、来源变更、锁、ZIP 差异、历史包保留与子进程超时测试；Windows 真实完整运行成功，840 项测试通过，结果为 output/releases/20261015002046860-6a0bee69/result.json（当时工作区尚未提交，clean=false；报告绑定精确内容指纹）。只生成本机交付文件，用户 AO 与个人数据未启动或修改。
 

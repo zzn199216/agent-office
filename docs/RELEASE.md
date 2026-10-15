@@ -33,18 +33,18 @@ node scripts/release.cjs --json
 安装当前用户的隐藏入口（无需管理员，每分钟检查一次）：
 
 ```powershell
-.\scripts\install-release-runner.ps1
+node scripts/release-task.cjs install
 Get-ScheduledTask -TaskName AgentOfficeReleaseRunner
 Start-ScheduledTask -TaskName AgentOfficeReleaseRunner
 ```
 
-安装脚本将映射盘转换为 UNC，计划任务使用明确的 Node 可执行路径，按当前已登录用户、普通权限执行，忽略重叠启动，不出现交互窗口。使用 `-NodePath` 可指定稳定的 Node 安装；不依赖任务环境的 PATH 或 Y: 映射。可先创建一个 `steps: ["check"]` 的请求，然后查看状态及日志，确认主机读写链路。
+安装器将映射盘转换为 UNC，启动脚本保存到当前用户 LOCALAPPDATA/AgentOfficeReleaseRunner，计划任务使用执行安装器的 Node 路径，按当前已登录用户、普通权限执行，忽略重叠启动，不出现交互窗口。NAS 上未签名 PowerShell 脚本可能受 RemoteSigned 限制，因此首选 Node 安装入口，无需修改执行策略。使用稳定的 Node 安装执行安装器，不依赖任务环境的 PATH 或 Y: 映射。可先创建一个 `steps: ["check"]` 的请求，然后查看状态及日志，确认主机读写链路。`node scripts/release-task.cjs status` 查看实际任务配置及最后退出码。
 
 停用或卸载：
 
 ```powershell
 Disable-ScheduledTask -TaskName AgentOfficeReleaseRunner
-.\scripts\uninstall-release-runner.ps1
+node scripts/release-task.cjs uninstall
 ```
 
 正在构建时卸载脚本会要求等待完成，不删除请求、报告或交付包。账号未登录、NAS 不可访问或 Node 路径失效时，任务不能接单；这不代表构建已完成，必须以请求状态中的 ok 和完整发布报告为准。
