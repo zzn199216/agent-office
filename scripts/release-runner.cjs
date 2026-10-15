@@ -28,6 +28,8 @@ function copyDependencies(root,snapshot){
 function copySdkCache(root,snapshot){
   const {SDK_VERSION,SDK_SHA256}=require(path.join(snapshot,'scripts','build-desktop.cjs')),relative=path.join('dist','webview2-sdk',SDK_VERSION,'webview2.nupkg'),cached=path.join(root,relative);
   if(fs.existsSync(cached)&&!fs.lstatSync(cached).isSymbolicLink()&&sha(cached)===SDK_SHA256){const target=path.join(snapshot,relative);fs.mkdirSync(path.dirname(target),{recursive:true});fs.copyFileSync(cached,target);}
+  const desktop=path.join(root,'dist','desktop'),manifest=path.join(desktop,'desktop-build.json');
+  if(fs.existsSync(manifest)){const info=JSON.parse(fs.readFileSync(manifest,'utf8'));if(info.sdk_version===SDK_VERSION&&info.sdk_sha256===SDK_SHA256)for(const name of ['Microsoft.Web.WebView2.Core.dll','Microsoft.Web.WebView2.WinForms.dll']){const item=info.files.find(file=>file.path===name),file=regularFile(desktop,name);if(!item||sha(file)!==item.sha256)throw new Error('Cached desktop test SDK checksum mismatch.');const target=path.join(snapshot,'dist','desktop',name);fs.mkdirSync(path.dirname(target),{recursive:true});fs.copyFileSync(file,target);}}
 }
 function importReport(result,root,requestId,overrides={}){
   const directory=path.join(root,'output','release-runs',requestId),original=path.dirname(result.result_path);fs.mkdirSync(directory,{recursive:true});

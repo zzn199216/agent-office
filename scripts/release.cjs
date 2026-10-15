@@ -15,7 +15,7 @@ async function runRelease(options={},dependencies={}){
     temporary=fs.mkdtempSync(path.join(os.tmpdir(),'agentoffice-release-'));let directory=path.join(temporary,'release',`AgentOffice-${version}-windows-x64`),zip=directory+'.zip';
     if(options.skipBuild){const latest=JSON.parse(fs.readFileSync(path.join(root,'output',`release-${version}.json`),'utf8'));if(latest.version!==version||latest.source?.fingerprint!==result.source.fingerprint||!['ok','partial'].includes(latest.status)||!latest.package_directory||!latest.zip_path)throw new Error('No matching package for the current source; build first.');directory=latest.package_directory;zip=latest.zip_path;const releaseRoot=path.resolve(root,'release')+path.sep;if(!path.resolve(directory).startsWith(releaseRoot)||!path.resolve(zip).startsWith(releaseRoot))throw new Error('Saved package paths are outside release/.');}
     await step('check',row=>command(row,['scripts/check.cjs']));
-    await step('tests',row=>command(row,['--test','tests/*.test.cjs']),options.skipTests||options.skipBuild);
+    await step('tests',row=>command(row,['--test','--test-concurrency=4','tests/*.test.cjs']),options.skipTests||options.skipBuild);
     await step('build',row=>command(row,['scripts/build.cjs','--output-root',temporary]),options.skipBuild);
     const executable=path.join(directory,'AgentOffice.exe');
     await step('packaged-mcp',row=>command(row,['scripts/validate-packaged-mcp.cjs','--executable',executable,'--output',path.join(output,'mcp.json')]));

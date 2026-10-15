@@ -9,6 +9,9 @@ const {id,now}=require('../src/util.cjs');
 async function setup(t){
   const files=fixture(),model=new FakeCodex(),vault=new FakeVault();
   const service=new RoomService(files.data,{codex:model,vault,fetch:async()=>{throw new Error('diagnostic must not contact a provider');}});clearInterval(service.exportTimer);
+  // Byte-for-byte assertions isolate the GET from both independent exporters,
+  // including on hosts where an HTTP round trip lasts longer than three seconds.
+  clearInterval(service.chat.exportTimer);
   const project=service.addProject({name:'Connection doctor fixture',path:files.project}),room=service.chat.addRoom({title:'选定房间',project_id:project.id}),other=service.chat.addRoom({title:'PRIVATE-OTHER-ROOM',project_id:project.id});
   const member=service.chat.addMember({name:'当前成员',adapter:'mailbox',config:{key:'PRIVATE-MEMBER-CONFIG'}}),hidden=service.chat.addMember({name:'PRIVATE-OTHER-MEMBER',adapter:'mailbox',config:{key:'PRIVATE-OTHER-CONFIG'}});
   service.chat.join(room.id,member.id);service.chat.join(other.id,hidden.id);service.chat.store.post({room_id:room.id,sender_id:'user',text:'PRIVATE-MESSAGE-BODY',idempotency_key:id()});
