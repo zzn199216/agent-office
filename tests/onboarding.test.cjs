@@ -186,7 +186,7 @@ test('revoked native credentials prevent readiness without progress reads issuin
   const v=setup(t),first=await completed(v),cards=v.db.prepare('SELECT count(*) AS n FROM chat_resume_credentials').get().n,changes=v.changes;
   v.db.prepare("UPDATE chat_resume_credentials SET status='revoked' WHERE member_id=?").run(first.member_id);
   for(let i=0;i<5;i++){
-    const state=v.manager.state({run_id:first.id});assert.equal(state.stage,'awaiting_credential');assert.equal(state.credential_status,'revoked');assert.equal(state.local_verified,false);assert.equal(state.next_actions[0].operation,'retry');
+    const state=v.manager.state({run_id:first.id});assert.equal(state.stage,'awaiting_credential');assert.equal(state.credential_status,'revoked');assert.equal(state.local_verified,false);assert.equal(state.next_actions[0].operation,'reauthorize');assert.equal(state.next_actions[0].target_member_id,first.member_id);
   }
   assert.equal(v.db.prepare('SELECT count(*) AS n FROM chat_resume_credentials').get().n,cards);assert.equal(v.calls.length,1);assert.equal(v.changes,changes);
   const restarted=v.manager.retry({run_id:first.id});assert.notEqual(restarted.id,first.id);await Promise.all([...v.manager.jobs.values()]);
@@ -198,7 +198,7 @@ test('a desktop historical handshake needs an active current credential and a mi
   const pending=v.manager.state({run_id:first.id});assert.equal(pending.local_verified,false);assert.equal(pending.credential_status,'pending');assert.notEqual(pending.stage,'ready_mailbox');
   verifyDesktop(v,first);assert.equal(v.manager.state({run_id:first.id}).stage,'ready_mailbox');
   fs.unlinkSync(path.join(v.data,'entries',`${first.member_id}-${first.room_id}.json`));
-  const missing=v.manager.state({run_id:first.id});assert.equal(missing.stage,'awaiting_credential');assert.equal(missing.local_verified,false);assert.equal(missing.next_actions[0].operation,'retry');assert.equal(v.calls.length,1);
+  const missing=v.manager.state({run_id:first.id});assert.equal(missing.stage,'awaiting_credential');assert.equal(missing.local_verified,false);assert.equal(missing.next_actions[0].operation,'reauthorize');assert.equal(missing.next_actions[0].target_member_id,first.member_id);assert.equal(v.calls.length,1);
 });
 test('explicit retry creates a scoped new attempt without executing business prompts',async t=>{
   const v=setup(t,{nativeError:'transport closed'}),first=await completed(v);

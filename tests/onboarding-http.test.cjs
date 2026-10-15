@@ -106,7 +106,8 @@ test('HTTP revoked backend is shown unavailable and only explicit retry can issu
   const entry=v.service.entry.issue(ready.member_id,v.room.id),cards=v.service.store.db.prepare('SELECT count(*) AS n FROM chat_resume_credentials').get().n;v.service.resume.revoke(entry.credential_id);
   for(let i=0;i<3;i++){const state=await v.api(`/api/onboarding/jobs/${start.id}`);assert.equal(state.stage,'awaiting_credential');assert.equal(state.local_verified,false);}
   assert.equal(v.service.store.db.prepare('SELECT count(*) AS n FROM chat_resume_credentials').get().n,cards);assert.equal(v.clients.length,1);
-  const retried=await v.api(`/api/onboarding/jobs/${start.id}/retry`,{});assert.notEqual(retried.id,start.id);const second=await v.finish(retried);
+  const blockedRetry=await v.api(`/api/onboarding/jobs/${start.id}/retry`,{});assert.equal((await v.finish(blockedRetry)).stage,'awaiting_credential');assert.equal(v.service.store.db.prepare('SELECT count(*) AS n FROM chat_resume_credentials').get().n,cards);
+  const retried=await v.api('/api/onboarding/start',{room_id:v.room.id,provider:'codex',target_member_id:ready.member_id,reauthorize:true});assert.notEqual(retried.id,start.id);const second=await v.finish(retried);
   assert.equal(second.stage,'ready_automatic');assert.equal(v.service.store.db.prepare('SELECT count(*) AS n FROM chat_resume_credentials').get().n,cards+1);
 });
 test('HTTP explicit login action uses only the selected trusted CLI and ignores browser executable fields',async t=>{

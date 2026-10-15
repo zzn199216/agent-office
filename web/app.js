@@ -259,6 +259,7 @@ function onboardingActionMarkup(job) {
     const id = escape(job.id), operation = value.operation || value.kind || value.type;
     if (value.url && /^https?:\/\//i.test(value.url)) return `<a class="primary" href="${escape(value.url)}" target="_blank" rel="noopener noreferrer">${escape(value.button_label || value.label || '打开授权页面')} ↗</a>`;
     if (operation === 'native_desktop_connect') return `<button type="button" class="primary" data-onboarding-operation="native_desktop_connect" data-onboarding-action-job="${id}">连接本人对话</button>`;
+    if(operation==='reauthorize'&&value.target_member_id===job.member_id)return `<button type="button" class="primary" data-onboarding-operation="reauthorize" data-onboarding-action-job="${id}">重新授权这位成员</button>`;
     if (['import_client_config','import_mcp','desktop_import','configure_connector','import_connector'].includes(operation)) return `<button type="button" class="primary" data-onboarding-config="${id}">${escape(clientConfigLabel(job))}</button>`;
     if (operation === 'copy_handshake_prompt' || value.kind === 'self_handshake') return `<button type="button" class="secondary" data-onboarding-copy="${id}" data-onboarding-copy-kind="handshake">复制本人接入说明</button>`;
     if (operation === 'native_group_handoff') return `<button type="button" class="secondary" data-onboarding-copy="${id}" data-onboarding-copy-kind="group">复制 Grok 加群说明</button>`;
@@ -271,6 +272,14 @@ function onboardingActionMarkup(job) {
   const fallback = first.operation==='native_desktop_connect'?nativeConnectNextStep(job.provider,{code:job.error_code}):first.kind === 'reload_client' ? '请从客户端菜单退出后重新打开，再将本人接入说明交给它。' : first.kind === 'import_mcp' ? clientImportKind(job) === 'form' ? '在本人设置中新建自定义连接器，分别填写字段；启用后，再完成真实工具握手。' : '配置贴到这个客户端的 MCP 设置；启用后，再完成本人的工具握手。' : first.kind === 'self_handshake' ? '将下面的接入说明交给本人窗口，实际调用工具后会显示接通。' : first.kind === 'login' ? job.configuration?.api_mode ? '此成员使用本机 Claude API 配置。密钥只需保存一次；保存后继续接入，无需重新登录订阅账号。' : job.provider === 'qwen-code' ? '在官方命令窗口通过 /auth 配置 API 或计划凭据；完成后继续接入。此入口不复用 Qwen 桌面登录。' : job.provider === 'gemini-cli' ? '请在 Gemini CLI 中完成 Google 登录或 API 配置。它使用自己的认证，不代替你当前网页中的聊天。' : '首次登录或授权需要你本人完成，后续接入会复用账号。' : '';
   const title = first.kind === 'login' && job.provider === 'qwen-code' ? '配置 Qwen Code 提供商' : first.label || first.title || '需要完成一次操作';
   return `<div class="onboarding-action"><strong>${escape(title)}</strong>${first.detail || first.description || fallback ? `<p>${escape(first.detail || first.description || fallback)}</p>` : ''}<div class="onboarding-action-buttons">${buttons.join('')}</div></div>`;
+}
+async function reauthorizeOnboarding(job){
+  const step=onboardingActions(job).find(value=>value.operation==='reauthorize'&&value.target_member_id===job.member_id),selectedRoom=roomId;
+  if(!step||!job.member_id||job.room_id!==selectedRoom||legacyId)throw Error('这位成员的授权步骤已变化，请查看当前接入进度。');
+  const updated=onboardingView(await api('/api/onboarding/start',{room_id:selectedRoom,provider:job.provider,target_member_id:job.member_id,reauthorize:true}));
+  if(roomId!==selectedRoom)return null;
+  if(updated?.member_id&&updated.member_id!==job.member_id)throw Error('返回的接入人物不匹配，原人物和连接保留。');
+  return updated;
 }
 function roomUsesGrok() { return (history?.participants || []).some(member => member.adapter === 'grok-bridge' && member.verified_at); }
 // A connection that waits for the user's approval must ask right here, where
@@ -309,7 +318,7 @@ async function refreshOnboarding() {
 }
 async function checkOnboarding(jobId) {
   let job = onboardingView(await api(`/api/onboarding/jobs/${encodeURIComponent(jobId)}`));
-  if(job && !onboardingReady(job) && !onboardingRunning(job) && ['codex','claude-code','qwen-code','gemini-cli'].includes(job.provider)) job=onboardingView(await api(`/api/onboarding/jobs/${encodeURIComponent(jobId)}/retry`,{}));
+  if(job && job.stage!=='awaiting_credential'&&!onboardingActions(job).some(value=>value.operation==='reauthorize')&&!onboardingReady(job) && !onboardingRunning(job) && ['codex','claude-code','qwen-code','gemini-cli'].includes(job.provider)) job=onboardingView(await api(`/api/onboarding/jobs/${encodeURIComponent(jobId)}/retry`,{}));
   if (job?.id) onboardingJobs.set(job.id,job);
   renderLaunch(); await refreshLaunch(); returnSecretaryAfterOnboarding(); if (onboardingRunning(job)) onboardingTimer = setTimeout(() => action(refreshOnboarding),2000);
 }
@@ -319,7 +328,12 @@ function returnSecretaryAfterOnboarding() {
   if(secretaryFinishing || !secretaryNavigationCurrent(flow))return;
   if(flow.source==='selection'){if(flow.accepted)finishSecretaryNavigation(flow,flow.accepted);return;}
   const job=onboardingJobs.get(flow.jobId);
-  if(job?.provider==='grok-bot'&&job.member_id&&(!job.room_id||job.room_id===flow.roomId)&&job.native_direct_available!==true&&(job.status==='needs_action'||onboardingReady(job)==='ready_mailbox')&&!flow.grokGuideOpened){flow.grokGuideOpened=true;return action(()=>showMemberSetup(job.member_id,flow));}
+  const reusedConnection=job?.reused_connection===true||job?.connection_reused===true;
+  if(job?.provider==='grok-bot'&&job.member_id&&(!job.room_id||job.room_id===flow.roomId)&&reusedConnection&&onboardingReady(job)==='ready_mailbox'){
+    flow.source='member';flow.memberId=job.member_id;if(secretaryConnectRoom===flow.roomId&&$('secretary-connect-dialog').open)$('secretary-connect-dialog').close();
+  }
+  const grokHandoff=job?.stage==='awaiting_bridge_handshake'||job?.next_actions?.some(value=>value.operation==='copy_handshake_prompt')||onboardingReady(job)==='ready_mailbox';
+  if(job?.provider==='grok-bot'&&job.member_id&&(!job.room_id||job.room_id===flow.roomId)&&job.native_direct_available!==true&&!reusedConnection&&grokHandoff&&!flow.grokGuideOpened){flow.grokGuideOpened=true;return action(()=>showMemberSetup(job.member_id,flow));}
   if(!job || !onboardingReady(job) || !job.member_id || (job.room_id && job.room_id!==flow.roomId))return;
   const selected=currentSecretary(),assign=flow.source!=='member'&&(!selected.member_id||selected.status!=='ready');
   if(flow.source!=='member'&&!sameSecretaryAssignment(flow.accepted||flow.assignment,selected)){secretaryNavigation=null;secretaryError='秘书设置已在其他窗口变更，已显示最新角色。请重新确认。';renderSecretary();return;}
@@ -584,36 +598,64 @@ function renderConnectionAssists(message) {
   if(message.room_id!==roomId||message.sender_id!=='user'||message.kind!=='message'||message.coordination)return '';
   const actor=memberById(message.to_member_id),actorName=actor?.name||'接入助手';
   return (history.connection_assists||[]).filter(item=>item.message_id===message.id&&item.room_id===roomId&&item.member_id===message.to_member_id).map(item=>{
-    const ready=item.status==='ready',automatic=ready&&item.can_wake===true,pending=['running','starting','prepared','preparing_document'].includes(item.status)&&!item.error;
+    const kind=connectionAssistKind(item),ready=kind==='ready'&&item.status==='ready',automatic=ready&&item.can_wake===true,pending=kind==='wait'&&['running','starting','prepared','preparing_document'].includes(item.status)&&!item.error,reused=item.reused_connection===true||item.connection_reused===true;
     const name=item.name||item.provider,target=connectionAssistTarget(item),grok=item.provider==='grok-bot',windowName=item.target_window||(grok?'已有 Grok Bot 对话':`${name} 自己的窗口`);
-    const title=automatic?'已自动接通':ready?'本人入口已接通':pending?'正在连接':item.status==='interrupted'?'接入已中断':['error','failed'].includes(item.status)?'接入未完成':`还差一步，让${grok?' Grok ':` ${name} `}确认连接`;
-    const open=target?`<button type="button" class="secondary" data-assist-open="${escape(item.id)}">查看连接步骤</button>`:'';
-    const handoff=!ready&&item.copy_sentence?`<p>点击复制，把接入说明发给 <strong>${escape(windowName)}</strong>。${grok?'在 Grok 中确认它提示的电脑授权；AO 会自动检查新的连接。':'按该窗口提示完成一次连接，AO 会核对实际结果。'}</p><div class="actions"><button type="button" class="primary" data-assist-copy="${escape(item.id)}">复制给 ${escape(name)}</button>${open}<button type="button" class="secondary" data-assist-check="${escape(item.id)}">检查连接</button></div>`:ready?`<p class="small-note">${automatic?'可直接在 AO 给它发消息。':'当前是本人窗口信箱，需由该窗口处理消息。'}</p>${open?`<div class="actions">${open}</div>`:''}`:pending?`<p class="small-note">有需要你完成的步骤时，会在这里给出文档与复制句。</p>${open?`<div class="actions">${open}</div>`:''}`:`<p class="small-note">原进度保留，请查看所需步骤后明确继续；没有自动重连。</p><div class="actions">${open||`<button type="button" class="secondary" data-assist-open="${escape(item.id)}">查看接入步骤</button>`}<button type="button" class="secondary" data-assist-check="${escape(item.id)}">检查连接</button></div>`;
-    const diagnostics=item.error||item.document_path||item.copy_sentence?`<details class="connection-assist-diagnostics"><summary>查看诊断</summary>${item.error?`<p class="small-note">${escape(item.error)}</p>`:''}${item.copy_sentence?`<pre class="connection-assist-sentence">${escape(item.copy_sentence)}</pre>`:''}${item.document_path?`<code>${escape(item.document_path)}</code><p class="small-note">同一台电脑上的 AI 可读取接入文档；换房间和升级沿用原人物连接。</p><button type="button" class="secondary" data-assist-document="${escape(item.id)}">保存接入文档</button>`:''}</details>`:'';
-    return `<article class="chat-message connection-assist-message" data-connection-assist="${escape(item.id)}"><div class="message-header">${avatar(actorName,actor?.adapter,actor?.appearance,actor?.id)}<strong>${escape(actorName)}</strong><span class="message-target">接入进度 · AO 核对</span><time>${time(item.updated||item.created)}</time></div><div class="message-body"><h3>${escape(target?.name||name)} · ${escape(title)}</h3><p>${escape(item.next_step||item.summary||'正在核对接入状态。')}</p>${handoff}${diagnostics}</div></article>`;
+    const manual=connectionAssistCanHandoff(item),reauthorize=kind==='reauthorize'&&connectionAssistReauthorization(item);
+    const title=ready&&reused?'已加入办公室，沿用已有连接':automatic?'已自动接通':ready?'本人入口已接通':kind==='reauthorize'?'需要你重新授权这位成员':kind==='managed'?'由 AO 自动接入':kind==='native_connect'?'继续连接本人对话':kind==='unsupported'?'暂未发现可用的接入方式':pending?'正在连接':item.status==='interrupted'?'接入已中断':['error','failed'].includes(item.status)?'接入未完成':manual?`还差一步，让${grok?' Grok ':` ${name} `}确认连接`:'查看原有接入进度';
+    const open=`<button type="button" class="secondary" data-assist-open="${escape(item.id)}">${kind==='managed'?'查看自动接入进度':kind==='unsupported'?'查看支持情况':kind==='reauthorize'?'查看授权步骤':target?'查看连接步骤':'查看接入步骤'}</button>`;
+    let handoff;
+    if(manual)handoff=`<p>点击复制，把接入说明发给 <strong>${escape(windowName)}</strong>。${grok?'在 Grok 中确认它提示的电脑授权；AO 会自动检查新的连接。':'按该窗口提示完成一次连接，AO 会核对实际结果。'}</p><div class="actions"><button type="button" class="primary" data-assist-copy="${escape(item.id)}">复制给 ${escape(name)}</button>${open}<button type="button" class="secondary" data-assist-check="${escape(item.id)}">检查连接</button></div>`;
+    else if(ready)handoff=`<p class="small-note">${automatic?'可以直接在 AO 给它发消息。':item.can_notify===true||target?.can_notify===true?'发消息时会通知原来的 Bot，由它在本人窗口处理。':'消息会保留，由它在本人窗口处理。'}</p><div class="actions">${open}</div>`;
+    else if(kind==='reauthorize')handoff=`<p>原人物和消息保留。只有你明确重新授权后，AO 才会恢复这位成员的接入。</p><div class="actions">${reauthorize?`<button type="button" class="primary" data-assist-reauthorize="${escape(item.id)}">重新授权这位成员</button>`:''}${open}</div>`;
+    else if(kind==='managed')handoff=`<p>AO 会在后台接入这类成员。需要登录或安装时，在原接入进度完成；无需把说明粘贴到 AI 窗口。</p><div class="actions">${item.run_id&&item.recovery_action?.operation==='retry'?`<button type="button" class="primary" data-assist-continue="${escape(item.id)}">继续自动接入</button>`:''}${open}<button type="button" class="secondary" data-assist-check="${escape(item.id)}">检查连接</button></div>`;
+    else if(kind==='native_connect')handoff=`<p>继续使用这位成员的本人对话和原有配置。</p><div class="actions">${open}</div>`;
+    else if(kind==='unsupported')handoff=`<p>请查看这个客户端的接入要求或选择已有适配的成员。不会生成一份无法执行的复制说明。</p><div class="actions">${open}</div>`;
+    else handoff=pending?`<p class="small-note">正在核对原有连接；需要你完成的步骤会在这里显示。</p><div class="actions">${open}</div>`:`<p class="small-note">原进度保留，请查看所需步骤后明确继续；没有自动重连。</p><div class="actions">${open}<button type="button" class="secondary" data-assist-check="${escape(item.id)}">检查连接</button></div>`;
+    const diagnostics=reused||item.error||manual&&(item.document_path||item.copy_sentence)?`<details class="connection-assist-diagnostics"><summary>查看诊断</summary>${reused?'<p class="small-note">沿用已有连接，本次没有重新验证。</p>':''}${item.error?`<p class="small-note">${escape(item.error)}</p>`:''}${manual&&item.copy_sentence?`<pre class="connection-assist-sentence">${escape(item.copy_sentence)}</pre>`:''}${manual&&item.document_path?`<code>${escape(item.document_path)}</code><p class="small-note">同一台电脑上的 AI 可读取接入文档；换房间和升级沿用原人物连接。</p><button type="button" class="secondary" data-assist-document="${escape(item.id)}">保存接入文档</button>`:''}</details>`:'';
+    return `<article class="chat-message connection-assist-message" data-connection-assist="${escape(item.id)}"><div class="message-header">${avatar(actorName,actor?.adapter,actor?.appearance,actor?.id)}<strong>${escape(actorName)}</strong><span class="message-target">接入进度 · AO 核对</span><time>${time(item.updated||item.created)}</time></div><div class="message-body"><h3>${escape(target?.name||name)} · ${escape(title)}</h3><p>${escape(ready&&reused?'已加入办公室，继续使用原有连接，无需重新配置。':item.next_step||item.summary||'正在核对接入状态。')}</p>${handoff}${diagnostics}</div></article>`;
   }).join('');
 }
+function connectionAssistKind(item){return ['ready','managed','native_connect','manual_handoff','reauthorize','unsupported','wait'].includes(item.action_kind)?item.action_kind:'unknown';}
 function connectionAssistTarget(item){
   const member=item.target_member_id&&memberById(item.target_member_id);
-  if(!member||!(history.participants||[]).some(value=>value.id===member.id))return null;
+  const recovery=item.recovery_action,scopedReauthorization=connectionAssistKind(item)==='reauthorize'&&recovery?.operation==='reauthorize'&&recovery.room_id===roomId&&recovery.provider===item.provider&&recovery.target_member_id===member?.id;
+  if(!member||!(history.participants||[]).some(value=>value.id===member.id)&&!scopedReauthorization)return null;
   if(item.provider==='grok-bot'&&member.provider!=='grok-bot'&&member.adapter!=='grok-bridge')return null;
   return member;
 }
+function connectionAssistCanHandoff(item){return connectionAssistKind(item)==='manual_handoff'&&!!connectionAssistTarget(item)&&!['codex','claude-code','qwen-code','gemini-cli','native'].includes(item.provider)&&item.stage!=='awaiting_credential'&&item.status!=='needs_reauthorization'&&typeof item.copy_sentence==='string'&&!!item.copy_sentence;}
+function connectionAssistReauthorization(item){
+  const recovery=item.recovery_action,target=connectionAssistTarget(item);
+  return !!target&&recovery?.operation==='reauthorize'&&recovery.provider===item.provider&&recovery.room_id===roomId&&recovery.target_member_id===target.id;
+}
 async function connectionAssistAction(button) {
   if(!button||button.disabled)return;
-  const selected=button.dataset.assistCopy||button.dataset.assistDocument||button.dataset.assistCheck||button.dataset.assistOpen;
+  const selected=button.dataset.assistCopy||button.dataset.assistDocument||button.dataset.assistCheck||button.dataset.assistOpen||button.dataset.assistContinue||button.dataset.assistReauthorize;
   const item=(history.connection_assists||[]).find(value=>value.id===selected&&value.room_id===roomId);
   if(!item)return;
   const source=(history.messages||[]).find(message=>message.id===item.message_id&&message.room_id===roomId&&message.sender_id==='user'&&message.kind==='message'&&!message.coordination&&message.to_member_id===item.member_id);
   if(!source)return;
-  if(button.dataset.assistCopy){await navigator.clipboard.writeText(item.copy_sentence);toast(`已复制，请发给 ${item.name||item.provider} 自己的窗口。`);}
+  if(button.dataset.assistCopy){if(!connectionAssistCanHandoff(item))return;await navigator.clipboard.writeText(item.copy_sentence);toast(`已复制，请发给 ${item.name||item.provider} 自己的窗口。`);}
   else if(button.dataset.assistCheck){await refresh();toast('已核对实际连接状态，没有重新发起接入。');}
+  else if(button.dataset.assistContinue||button.dataset.assistReauthorize){
+    const reauthorize=!!button.dataset.assistReauthorize,selectedRoom=roomId,target=connectionAssistTarget(item);
+    if(item.target_member_id&&!target)return;
+    if(reauthorize?connectionAssistKind(item)!=='reauthorize'||!connectionAssistReauthorization(item):connectionAssistKind(item)!=='managed'||!item.run_id||item.recovery_action?.operation!=='retry')return;
+    button.disabled=true;
+    try{
+      let response;
+      if(reauthorize)response=await api('/api/onboarding/start',{room_id:selectedRoom,provider:item.provider,target_member_id:target.id,reauthorize:true});
+      else{const job=onboardingView(await api(`/api/onboarding/jobs/${encodeURIComponent(item.run_id)}`));if(roomId!==selectedRoom||job?.id!==item.run_id||job.room_id!==selectedRoom||job.provider!==item.provider||target&&job.member_id!==target.id)return;if(onboardingRunning(job)||onboardingReady(job)){await refresh();return;}response=await api(`/api/onboarding/jobs/${encodeURIComponent(item.run_id)}/retry`,{});}
+      if(roomId!==selectedRoom)return;const job=onboardingView(response);if(job?.id&&job.room_id===selectedRoom&&(!target||!job.member_id||job.member_id===target.id)){onboardingJobs.set(job.id,job);const flow=beginSecretaryNavigation('member');flow.jobId=job.id;flow.memberId=target?.id||job.member_id||null;}
+      await refresh();if(roomId!==selectedRoom)return;returnSecretaryAfterOnboarding();action(refreshOnboarding);toast(reauthorize?'已按你的选择恢复这位成员的授权，正在核对原连接。':'已继续这位成员的原接入进度。');
+    }finally{button.disabled=false;}
+  }
   else if(button.dataset.assistOpen){
-    const target=connectionAssistTarget(item);if(target)return showMemberSetup(target.id);
-    if(item.target_member_id){toast('这位成员的连接步骤已变化，请刷新当前办公室后再查看。');return;}
+    const target=connectionAssistTarget(item),kind=connectionAssistKind(item);if(target&&['manual_handoff','native_connect','ready'].includes(kind))return showMemberSetup(target.id);
+    if(item.target_member_id&&!target&&['manual_handoff','native_connect','ready'].includes(kind)){toast('这位成员的连接步骤已变化，请刷新当前办公室后再查看。');return;}
     const selectedRoom=roomId;if(item.run_id){const job=onboardingView(await api(`/api/onboarding/jobs/${encodeURIComponent(item.run_id)}`));if(roomId!==selectedRoom)return;if(job?.id)onboardingJobs.set(job.id,job);}if(roomId!==selectedRoom)return;setProfessionalView(false);renderLaunch();$('onboarding-progress').scrollIntoView({block:'nearest',behavior:'smooth'});
   }
-  else{const file=await api(`/api/connection-assists/${encodeURIComponent(item.id)}/document?room_id=${encodeURIComponent(roomId)}`),url=URL.createObjectURL(new Blob([file.text],{type:'text/markdown;charset=utf-8'})),link=document.createElement('a');try{link.href=url;link.download=file.filename;document.body.append(link);link.click();link.remove();}finally{URL.revokeObjectURL(url);}}
+  else{if(!connectionAssistCanHandoff(item))return;const file=await api(`/api/connection-assists/${encodeURIComponent(item.id)}/document?room_id=${encodeURIComponent(roomId)}`),url=URL.createObjectURL(new Blob([file.text],{type:'text/markdown;charset=utf-8'})),link=document.createElement('a');try{link.href=url;link.download=file.filename;document.body.append(link);link.click();link.remove();}finally{URL.revokeObjectURL(url);}}
 }
 function renderTyping(messages) {
   const states = {queued:'已排队，等待接手',pending:'等待接手',delivered:'已送达，等待接手',consumed:'已读取，等待回复',creating:'正在打开工作会话',running:'正在思考',processing:'正在思考',waiting_input:'在等你确认'};
@@ -633,7 +675,13 @@ function renderTyping(messages) {
     if (!webConnected) { label = '本机服务未连接'; busy = false; needsYou = true; }
     else if (busy && !active.has(message.id)) { label = '处理状态待核对'; busy = false; needsYou = true; }
     else if (needsYou && !approvals.some(approval => approval.request_id === message.id || message.request_id && approval.request_id === message.request_id)) label = '确认状态待核对';
-    // Desktop clients only act when someone types in their own window, so say so instead of implying they will pick it up.
+    // A verified notification endpoint can notify a Bot without proving that
+    // its model has started. Only an actual per-message receipt says notified.
+    else if(member.can_notify===true&&['queued','pending','delivered'].includes(message.status)){
+      const notification=message.notification?.status,target=member.provider==='grok-bot'||member.adapter==='grok-bridge'?'Grok':'成员';
+      label=notification==='accepted'?`已通知，等待 ${target} 处理`:notification==='sending'?`正在通知 ${target}`:notification==='uncertain'?'通知结果待核对，请查看连接状态':`已排队，等待通知 ${target}`;busy=false;needsYou=notification==='uncertain';
+    }
+    // A manual-only connection still needs its own window to receive work.
     else if (member.manual_wake && ['queued','pending','delivered'].includes(message.status)) { label = `${label} · 它不会自己接手，请到它的窗口里说「用 AgentOffice 查看我的收件箱」`; needsYou = true; }
     return `<div class="typing-row${busy ? ' busy' : ''}${needsYou ? ' needs-you' : ''}" data-typing-member="${escape(memberId)}" role="status">${avatar(member.name,member.adapter,member.appearance,member.id)}<div class="typing-bubble"><span class="typing-dots" aria-hidden="true"><i></i><i></i><i></i></span><span>${escape(member.name)} · ${escape(label)}</span></div></div>`;
   }).join('');
@@ -1200,7 +1248,7 @@ function finishSecretaryNavigation(flow,expected) {
   // Only a newly seated secretary becomes the recipient; connecting another member keeps the person's choice.
   if(flow.source==='member'){if(!$('recipient').value){$('recipient').value=flow.memberId;updateRecipientNote();}}
   else if(!flow.memberId || flow.memberId===selected.member_id){$('recipient').value=selected.member_id;updateRecipientNote();}
-  toast(flow.source==='member'||flow.memberId && flow.memberId!==selected.member_id?onboardingReady(job)==='ready_mailbox'?'成员信箱已接通，已进入办公室。':'成员已真实接通，已进入办公室。':'秘书已真实接通，可以在办公室交代目标。');return true;
+  toast(job?.reused_connection===true||job?.connection_reused===true?'已加入办公室，沿用原有连接和配置。':flow.source==='member'||flow.memberId && flow.memberId!==selected.member_id?onboardingReady(job)==='ready_mailbox'?'成员信箱已接通，已进入办公室。':'成员已真实接通，已进入办公室。':'秘书已真实接通，可以在办公室交代目标。');return true;
 }
 function secretaryResponse(value, selectedRoom) {
   const selected = value?.secretary || value; if (!selected || selected.room_id !== selectedRoom) throw new Error('尚未确认秘书角色，请刷新查看。');
@@ -1591,7 +1639,7 @@ $('inspector-member-connect').onclick=()=>inspectorMemberId&&action(()=>showMemb
 $('connection-doctor-run').onclick=()=>action(runConnectionDoctor);
 $('connection-doctor-member').onchange=()=>{$('connection-doctor-old-member').value='';connectionDoctor=null;connectionDoctorError='';renderConnectionDoctor();};
 $('connection-doctor-old-member').oninput=()=>{connectionDoctor=null;connectionDoctorError='';renderConnectionDoctor();};
-document.addEventListener('click',event=>{const button=event.target.closest('[data-assist-copy],[data-assist-document],[data-assist-check],[data-assist-open]');if(button)action(()=>connectionAssistAction(button));});
+document.addEventListener('click',event=>{const button=event.target.closest('[data-assist-copy],[data-assist-document],[data-assist-check],[data-assist-open],[data-assist-continue],[data-assist-reauthorize]');if(button)action(()=>connectionAssistAction(button));});
 $('connection-doctor-copy').onclick=()=>action(async()=>{await navigator.clipboard.writeText(doctorSummary());toast('诊断摘要已复制，不含入口凭据。');});
 $('connection-doctor-select').onclick=()=>{$('connection-doctor-old-member').value='';$('connection-doctor-member').value='';connectionDoctor=null;connectionDoctorError='';renderConnectionDoctor();$('connection-doctor-member').focus();};
 $('connection-doctor-resume').onclick=()=>{const member=doctorMember();if(member)showResume(member.id);};
@@ -1609,6 +1657,7 @@ $('onboarding-jobs').onclick = event => { const button = event.target.closest('[
     else if (button.dataset.onboardingOperation) {
       const operation = button.dataset.onboardingOperation;
       if(operation==='native_desktop_connect'){await connectOnboardingNative(job);return;}
+      if(operation==='reauthorize'){const updated=await reauthorizeOnboarding(job);if(!updated?.id)return;onboardingJobs.set(updated.id,updated);if(secretaryNavigationCurrent(secretaryNavigation)&&secretaryNavigation.jobId===job.id){secretaryNavigation.jobId=updated.id;secretaryNavigation.memberId=job.member_id;}renderLaunch();returnSecretaryAfterOnboarding();action(refresh);action(refreshOnboarding);toast('已按你的选择重新授权原人物，正在检查连接。');return;}
       const response = operation === 'retry' || operation === 'install_runtime' ? await api(`/api/onboarding/jobs/${encodeURIComponent(jobId)}/retry`,operation === 'install_runtime' ? {install_runtime:true} : {}) : await api('/api/onboarding/action',{run_id:jobId,operation});
       const updated = onboardingView(response); if (updated?.id) onboardingJobs.set(updated.id,updated); renderLaunch(); action(refreshOnboarding); toast(response.action?.instruction || (operation === 'login_client' ? '首次配置入口已请求打开。完成后点击继续接入。' : '已请求继续接入这个成员。'));
     }

@@ -8,7 +8,7 @@ const {COMMON_OPERATION_INSTRUCTIONS,operationPolicy}=require('./operation-polic
 const done=status=>['posted','answered','completed','failed','cancelled','uncertain'].includes(status);
 class ChatManager {
   constructor(service,options={}){
-    this.service=service;this.store=new ChatStore(service.store);this.options=options;this.clients=new Map();this.connectedMembers=new Set();this.active=new Map();this.connecting=new Map();this.connectionProgress=new Map();this.progress=new Map();this.notifications=new Map();this.closing=false;
+    this.service=service;this.store=new ChatStore(service.store);this.options=options;this.clients=new Map();this.connectedMembers=new Set();this.active=new Map();this.connecting=new Map();this.connectionProgress=new Map();this.progress=new Map();this.notifications=new Map();this.memberVaults=new Map();this.closing=false;
     this.discovery=new DiscoveryCatalog({env:{...process.env,...service.codex.executable?{AGENTROOM_CODEX_PATH:service.codex.executable}:{}},...options.discovery});
     const mailbox={capabilities:['room-history','inbox','reply'],connect:(m,r)=>this.invite(m,r),message:m=>this.notifyMailbox(m)};
     // Product-specific behavior lives behind adapters, never in room recipients.
@@ -17,13 +17,39 @@ class ChatManager {
     this.store.recovery();
     this.exportTimer=setInterval(()=>this.exportRooms(),3000);this.exportTimer.unref();
   }
-  adapter(member){if(this.service.desktop?.configured(member.id))return this.service.desktop.adapter;return this.adapters.get(member.adapter)||this.adapters.get('mailbox');}
+  memberVaultStamp(file){try{const stat=fs.statSync(file,{bigint:true});return `${stat.mtimeNs}:${stat.ctimeNs}:${stat.size}`;}catch(error){if(error.code==='ENOENT')return 'missing';throw error;}}
+  memberVault(memberId){const directory=path.join(this.service.store.dir,'members',memberId),stamp=this.memberVaultStamp(path.join(directory,'grok-vault.json'));let cached=this.memberVaults.get(memberId);if(!cached||cached.stamp!==stamp){cached={vault:new Vault(directory),stamp};this.memberVaults.set(memberId,cached);}return cached.vault;}
+  notificationCredential(member){
+    if(!member.config.webhook_enabled)return null;
+    const credential=this.memberVault(member.id).get();
+    if(!credential||typeof credential.url!=='string'||typeof credential.key!=='string'||!credential.key)return null;
+    require('./vault.cjs').validateWebhook(credential.url,credential.key);return credential;
+  }
+  nativeDeliveryPending(memberId){
+    return !!this.store.db.prepare("SELECT 1 FROM desktop_message_runs WHERE member_id=? AND status IN ('sending','running','uncertain') LIMIT 1").get(memberId);
+  }
+  deliveryCapability(value){
+    const member=typeof value==='string'?this.store.member(value):value,desktop=this.service.desktop,provider=member.config.launch_provider||(member.adapter==='grok-bridge'?'grok-bot':member.adapter);
+    const nativeConfigured=desktop?.configured(member.id)===true,nativeSupported=desktop?.nativeCapability(provider).available===true,nativeUsable=desktop?.canWake(member.id)===true;
+    const managed=this.adapters.get(member.adapter)?.capabilities.includes('automatic-wakeup')===true;
+    let notificationConfigured=false;try{notificationConfigured=!!this.notificationCredential(member);}catch{}
+    const credentials=this.service.resume?.credentials(member.id)||[],revoked=credentials.length>0&&credentials.every(row=>row.status==='revoked');
+    const pendingNative=this.nativeDeliveryPending(member.id)||nativeConfigured&&!nativeSupported&&!!this.store.db.prepare("SELECT 1 FROM chat_messages WHERE to_member_id=? AND status='processing' LIMIT 1").get(member.id);
+    const seated=this.store.rooms().some(room=>this.store.joined(room.id,member.id));
+    const canNotify=notificationConfigured&&!!member.verified_at&&member.status==='ready'&&seated&&!revoked&&!pendingNative;
+    const method=nativeConfigured&&(nativeSupported||nativeUsable)?'native_desktop':managed?'managed_native':notificationConfigured?'configured_notification':'manual';
+    return {connection_method:method,native_usable:nativeUsable,native_supported:nativeSupported,native_configured:nativeConfigured,
+      notification_configured:notificationConfigured,can_notify:canNotify,can_wake:managed||nativeUsable,
+      ...(pendingNative?{routing_blocked:'native_outcome_uncertain'}:revoked?{routing_blocked:'resume_revoked'}:{})};
+  }
+  adapter(member){const capability=this.deliveryCapability(member);if(capability.connection_method==='native_desktop')return this.service.desktop.adapter;return this.adapters.get(member.adapter)||this.adapters.get('mailbox');}
   roomDeleted(roomId){return !!this.store.db.prepare('SELECT 1 FROM chat_room_tombstones WHERE room_id=?').get(roomId);}
-  publicMember(m){const provider=m.config.launch_provider||(m.adapter==='grok-bridge'?'grok-bot':m.adapter);return {id:m.id,name:m.name,adapter:m.adapter,provider,status:m.status,error:m.error,verified_at:m.verified_at,capabilities:this.adapter(m).capabilities,operation_policy:operationPolicy(provider),created:m.created,updated:m.updated,last_seen:m.config.last_seen||null,manual_wake:!this.service.desktop?.configured(m.id)&&(['mailbox','grok-bridge','grok-proxy'].includes(m.adapter)||/^manual_/.test(m.config.connection_mode||'')),desktop_connection:this.service.desktop?.state(m.id)||null,runtime_state:this.service.runtime?.memberState(m.id)||null,appearance:require('./appearance.cjs').storedAppearance(this.service.store,m)};}
+  publicMember(m){const provider=m.config.launch_provider||(m.adapter==='grok-bridge'?'grok-bot':m.adapter),delivery=this.deliveryCapability(m);return {id:m.id,name:m.name,adapter:m.adapter,provider,status:m.status,error:m.error,verified_at:m.verified_at,capabilities:this.adapter(m).capabilities,operation_policy:operationPolicy(provider),created:m.created,updated:m.updated,last_seen:m.config.last_seen||null,manual_wake:delivery.connection_method==='manual'&&(['mailbox','grok-bridge','grok-proxy'].includes(m.adapter)||/^manual_/.test(m.config.connection_mode||'')),can_notify:delivery.can_notify,connection_method:delivery.connection_method,delivery_capability:delivery,desktop_connection:this.service.desktop?.state(m.id)||null,runtime_state:this.service.runtime?.memberState(m.id)||null,appearance:require('./appearance.cjs').storedAppearance(this.service.store,m)};}
+  deliveryMessage(message){const notification=this.store.notification(message.id);return notification?{...message,notification:{status:notification.status,...notification.error?{error:redact(notification.error).replace(/https?:\/\/[^\s<>"']+/gi,'[地址已隐藏]').slice(0,1000)}:{}}}:message;}
   snapshot(){return {rooms:this.store.rooms(),members:this.store.members().map(m=>this.publicMember(m)),activeMessages:[...this.active.values()].map(a=>a.messageId).filter(Boolean)};}
   changed(){this.service.changed();this.exportRooms();}
   room(roomId,options={}){
-    const page=this.store.messagePage(roomId,options),messages=page.messages.map(m=>({...m,...this.progress.has(m.id)?{progress:this.progress.get(m.id)}:{}}));
+    const page=this.store.messagePage(roomId,options),messages=page.messages.map(m=>({...this.deliveryMessage(m),...this.progress.has(m.id)?{progress:this.progress.get(m.id)}:{}}));
     const participants=this.store.participants(roomId).map(m=>({...this.publicMember(m),native_thread_id:this.store.binding(roomId,m.id).thread_id,binding_state:this.store.binding(roomId,m.id).binding_state}));
     const approvals=[...this.service.approvals.values()].filter(a=>this.store.db.prepare('SELECT 1 FROM chat_messages WHERE room_id=? AND id=?').get(roomId,a.public.request_id)||participants.some(m=>a.public.request_id===`connect:${m.id}`&&this.active.get(m.id)?.roomId===roomId)).map(a=>a.public);
     const reconciliations=this.store.db.prepare('SELECT id,record,created FROM chat_reconciliations WHERE room_id=? ORDER BY rowid DESC LIMIT 200').all(roomId).map(row=>({id:row.id,...JSON.parse(row.record),created:row.created}));
@@ -192,7 +218,7 @@ class ChatManager {
     let target=input.to_member_id||null;
     if(!target&&!['reply','acknowledgment'].includes(input.kind)){const text=String(input.text||'');const matches=this.store.participants(input.room_id).filter(m=>new RegExp('@'+m.name.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'(?=$|\\s|[，。！？,:;!?])','u').test(text));if(matches.length>1)throw new RoomError('一次请选择一个处理成员；其他成员都可以看到房间记录。');if(matches.length===1)target=matches[0].id;}
     if(target&&target===input.sender_id)throw new RoomError('不能向自己的活动会话排队提问。',409,'self_message');
-    if(input.attachments?.length&&target&&this.service.desktop?.configured(target))throw new RoomError('这个原生本人对话尚未启用图片输入，请选择支持图片的成员。',400,'image_adapter_unsupported');
+    if(input.attachments?.length&&target&&this.deliveryCapability(target).connection_method==='native_desktop')throw new RoomError('这个原生本人对话尚未启用图片输入，请选择支持图片的成员。',400,'image_adapter_unsupported');
     if(input.attachments?.length&&target&&!['codex','claude-code','mailbox','grok-bridge'].includes(this.store.member(target).adapter))throw new RoomError('该成员暂未启用图像输入，请选择 Codex、Claude Code 或本人 MCP 窗口。',400,'image_adapter_unsupported');
     if(target&&input.sender_id&&input.sender_id!=='user'&&this.service.launch){const proxy=this.service.launch.db.prepare('SELECT backend_member_id FROM launch_proxies WHERE room_id=? AND proxy_member_id=?').get(input.room_id,input.sender_id);if(proxy&&target!==proxy.backend_member_id)throw new RoomError('群内代理只连接其固定本机后端。',403,'proxy_target_mismatch');}
     if(input.sender_id&&input.sender_id!=='user'&&!input.reply_to){const old=this.store.db.prepare('SELECT reply_to FROM chat_messages WHERE room_id=? AND sender_id=? AND idempotency_key=?').get(input.room_id,input.sender_id,input.idempotency_key);const reference=old?old.reply_to:this.active.get(input.sender_id)?.messageId;if(reference)input={...input,reply_to:reference};}
@@ -291,21 +317,36 @@ class ChatManager {
       return {binding:this.store.bind(roomId,memberId,input.outcome==='bound'?'bound':'new',thread),reconciliation};
     });this.changed();return result;
   }
-  inbox(memberId,roomId){this.heartbeat(memberId);return this.store.inbox(memberId,roomId);}
+  inbox(memberId,roomId){
+    this.heartbeat(memberId);return this.store.inbox(memberId,roomId).map(message=>{
+      const visible=this.deliveryMessage(message);let assists=[];
+      try{assists=this.service.connectionAssist?.snapshotForMessage(message.id)||[];}catch{}
+      const safeText=value=>typeof value==='string'?redact(value).replace(/https?:\/\/[^\s<>"']+/gi,'[地址已隐藏]').replace(/(?:secret|token|key|凭据)\s*[:=]\s*[^\s,;]+/gi,'凭据=[已隐藏]').slice(0,1600):null;
+      const summaries=assists.filter(item=>item.message_id===message.id&&item.member_id===memberId&&item.room_id===message.room_id).map(item=>({
+        authority:'ao_controller',read_only:true,id:item.id,message_id:message.id,member_id:memberId,room_id:message.room_id,provider:safeText(item.provider),name:safeText(item.name),status:safeText(item.status),stage:safeText(item.stage),
+        summary:safeText(item.summary),next_step:safeText(item.next_step),target_window:safeText(item.target_window),action_kind:safeText(item.action_kind),handoff_kind:safeText(item.handoff_kind),
+        can_wake:item.can_wake===true,can_notify:item.can_notify===true,local_verified:item.local_verified===true,automatic_reply_verified:item.automatic_reply_verified===true
+      }));
+      return summaries.length?{...visible,connection_assists:summaries}:visible;
+    });
+  }
   ack(messageId,memberId){const r=this.store.ack(messageId,memberId);this.changed();return r;}
-  async configureGrok(memberId,url,key){const m=this.store.member(memberId);if(m.adapter!=='grok-bridge')throw new RoomError('请选择 Grok 桥接成员。');const vault=new Vault(path.join(this.service.store.dir,'members',memberId));const status=vault.set(url,key);this.store.updateMember(memberId,{config:{...m.config,webhook_enabled:true}});this.changed();return status;}
+  async configureGrok(memberId,url,key){const m=this.store.member(memberId);if(m.adapter!=='grok-bridge')throw new RoomError('请选择 Grok 桥接成员。');const vault=this.memberVault(memberId),status=vault.set(url,key);this.memberVaults.set(memberId,{vault,stamp:this.memberVaultStamp(vault.file)});this.store.updateMember(memberId,{config:{...m.config,webhook_enabled:true}});this.changed();return status;}
   async notifyMailbox(message){
     // A bridge caller waits on the correlated result and returns it in its
     // original native context. A separate Routine must not steal that return.
     if(message.kind==='reply'&&message.reply_to&&this.service.bridge?.store.entryForMessage(message.reply_to))return;
-    if(this.closing||this.store.message(message.id).status!=='queued')return;const m=this.store.member(message.to_member_id);if(m.status!=='ready'||!m.config.webhook_enabled)return;
-    const vault=new Vault(path.join(this.service.store.dir,'members',m.id)),credential=vault.get();if(!credential)return;
+    if(this.closing||this.store.message(message.id).status!=='queued')return;const m=this.store.member(message.to_member_id);if(!this.deliveryCapability(m).can_notify)return;
+    // An existing native execution, even a completed or failed one, cannot be
+    // resubmitted through a second transport under the same message identity.
+    if(this.store.db.prepare('SELECT 1 FROM desktop_message_runs WHERE message_id=?').get(message.id))return;
+    const credential=this.notificationCredential(m);if(!credential)return;
     if(!this.store.claimNotification(message.id))return;
     // The inbox remains readable before the external wake is emitted. The
     // separate durable notification row claims this side effect exactly once.
     const abort=new AbortController(),own=ownCommand();let resolveWork;const work=new Promise(resolve=>{resolveWork=resolve;});this.notifications.set(message.id,{abort,work});this.changed();
-    try{const response=await this.service.fetch(credential.url,{method:'POST',headers:{Authorization:`Bearer ${credential.key}`,'Content-Type':'application/json'},body:JSON.stringify({event:'agentroom.chat_message',room_id:message.room_id,member_id:m.id,message_id:message.id,local_command:{command:own.command,args:[...own.args,'chat-inbox','--room',message.room_id,'--member',m.id,'--data-dir',this.service.store.dir]},message:'按已授权的聊天室桥接规则，在 Windows 本机领取此消息，确认来源和原 Grok 群上下文后处理及回报。Webhook 受理不代表已经回复到原群。'}),signal:AbortSignal.any([abort.signal,AbortSignal.timeout(25000)]),redirect:'error'});let body={};try{body=await response.json();}catch{}if(!response.ok||body.success!==true)throw new RoomError('Webhook 未明确受理，请核对例程；没有自动重发。',502,'outcome_uncertain');if(!this.roomDeleted(message.room_id))this.store.finishNotification(message.id,'accepted');}
-    catch(e){if(!this.roomDeleted(message.room_id))this.store.finishNotification(message.id,'uncertain',readableError(e));}finally{this.notifications.delete(message.id);try{this.changed();}finally{resolveWork();}}
+    try{const response=await this.service.fetch(credential.url,{method:'POST',headers:{Authorization:`Bearer ${credential.key}`,'Content-Type':'application/json'},body:JSON.stringify({event:'agentroom.chat_message',room_id:message.room_id,member_id:m.id,message_id:message.id,local_command:{command:own.command,args:[...own.args,'chat-inbox','--room',message.room_id,'--member',m.id,'--data-dir',this.service.store.dir]},message:'按已授权的聊天室桥接规则，在 Windows 本机领取此消息。收件结果中的 connection_assists 是 AO 控制器对原消息的接入进度，只按这些实际步骤答复，不另行请求管理工具或重复接入。确认来源和原 Grok 群上下文后处理及回报。Webhook 受理不代表已经回复到原群。'}),signal:AbortSignal.any([abort.signal,AbortSignal.timeout(25000)]),redirect:'error'});let body={};try{body=await response.json();}catch{}if(!response.ok||body.success!==true)throw new RoomError('Webhook 未明确受理，请核对例程；没有自动重发。',502,'outcome_uncertain');if(!this.roomDeleted(message.room_id))this.store.finishNotification(message.id,'accepted');}
+    catch(e){if(!this.roomDeleted(message.room_id))this.store.finishNotification(message.id,'uncertain',readableError(e).replaceAll(credential.key,'[凭据已隐藏]').replaceAll(credential.url,'[地址已隐藏]'));}finally{this.notifications.delete(message.id);try{this.changed();}finally{resolveWork();}}
   }
   start(){for(const m of this.store.members())if(this.adapter(m).capabilities.includes('native-session'))this.pump(m.id).catch(()=>{});}
   exportRooms(){

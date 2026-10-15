@@ -70,6 +70,9 @@ class RoomEntry {
   revoke(memberId,roomId){this.service.chat.store.requireParticipant(roomId,memberId);const list=this.service.resume.credentials(memberId,roomId);for(const c of list)this.service.resume.revoke(c.id);this.service.changed();return {ok:true,revoked:list.length};}
   accept(card){const r=this.service.resume.accept(card);this.service.runtime.heartbeat(r.member_id,{session_ref:`entry:${card.credential_id}`});this.service.changed();return r;}
   async wake(roomId,memberId,callerId){const {chat,runtime}=this.service;chat.store.requireParticipant(roomId,memberId);if(callerId)chat.store.requireParticipant(roomId,callerId);const m=chat.store.member(memberId),s=runtime.memberState(memberId);
+    const delivery=chat.deliveryCapability(m);
+    if(!s.can_wake&&delivery.can_notify)return {status:'available_notification',member:chat.publicMember(m),can_notify:true,can_wake:false,detail:'这位同事已有通知通路。给它发消息时会沿用原通知入口；是否收到通知和实际回复分别核对，无需重新复制连接说明。'};
+    if(!s.can_wake&&delivery.routing_blocked==='native_outcome_uncertain')return {status:'needs_result_review',member:chat.publicMember(m),can_notify:false,can_wake:false,detail:'这位同事有尚待核对的原生执行结果，保留原消息，没有改走其他通路重新执行。'};
     if(!s.can_wake)return {status:'needs_external_entry',member:chat.publicMember(m),detail:'这个工具没有本机后台唤醒适配器。请让它在自己的会话调用已有恢复入口；记录与消息仍保留。'};
     if(chat.active.has(memberId)||s.worker_online)return {status:'already_running',member:chat.publicMember(m)};
     if(m.status==='ready'&&m.verified_at&&chat.store.binding(roomId,memberId).thread_id)return {status:'available_idle',member:chat.publicMember(m),detail:'这位成员的原生会话已验证；新消息会按需继续原会话，无需再次邀请握手。',native_thread_id:chat.store.binding(roomId,memberId).thread_id};

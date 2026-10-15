@@ -92,6 +92,12 @@ test('onboarding native action uses its scoped job and stops after a room switch
   await assert.rejects(pending,/当前房间已切换/);assert.equal(stale.calls.filter(call=>call.route==='/api/desktop/connect').length,0);
   await assert.rejects(stale.context.connectOnboardingNative(job),/不属于当前房间/);assert.equal(stale.calls.length,1);
 });
+test('ordinary onboarding reauthorization uses its declared exact member instead of a generic retry',async()=>{
+  const f=fixture(),job={id:'blocked-run',room_id:'room:one',member_id:f.member.id,provider:'qwen-desktop',status:'needs_action',stage:'awaiting_credential',next_actions:[{operation:'reauthorize',target_member_id:f.member.id}]};f.context.onboardingView=value=>value;f.context.api=async(route,body)=>{f.calls.push({route,body});return{...job,id:'recovery-run',status:'running'};};
+  assert.match(f.context.onboardingActionMarkup(job),/data-onboarding-operation="reauthorize"/);assert.doesNotMatch(f.context.onboardingActionMarkup({...job,next_actions:[{operation:'reauthorize',target_member_id:'other'}]}),/data-onboarding-operation="reauthorize"/);
+  const updated=await f.context.reauthorizeOnboarding(job);assert.equal(updated.id,'recovery-run');assert.deepEqual(plain(f.calls),[{route:'/api/onboarding/start',body:{room_id:'room:one',provider:'qwen-desktop',target_member_id:f.member.id,reauthorize:true}}]);
+  f.context.roomId='other-room';await assert.rejects(f.context.reauthorizeOnboarding(job),/授权步骤已变化/);assert.equal(f.calls.length,1);
+});
 
 test('Grok native guide reaches the owned dialogue action while legacy Grok retains its bridge',async()=>{
   const f=fixture({provider:'grok-bot',adapter:'grok-bridge'});await f.context.showMemberSetup(f.member.id);

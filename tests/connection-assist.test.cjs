@@ -26,7 +26,7 @@ function setup(t,options={}){
   service=new RoomService(files.data,{codex:new FakeCodex(),vault:new FakeVault(),fetch:async()=>{throw Error('no external requests in fixture');},
     chat:{clientFactory:member=>new HandshakeFixture(member,service,calls.native)},
     launch:{discover(){calls.scans++;return {candidates};},installer:async()=>{calls.install++;throw Error('installation not authorized');}},
-    onboarding:{desktopConnector:async input=>{calls.desktop.push(input);if(options.desktopGate)await options.desktopGate;throw Error('fixture 本机接口不可用 https://localhost/mcp/private-token token=fixture-private-token');}},
+    onboarding:{desktopConnector:options.manualOnly?null:async input=>{calls.desktop.push(input);if(options.desktopGate)await options.desktopGate;throw Error('fixture 本机接口不可用 https://localhost/mcp/private-token token=fixture-private-token');}},
     connectionAssist:{contextWaitMs:options.contextWaitMs??100}});
   service._localUrl='http://127.0.0.1:47831';
   const project=service.addProject({name:'assist fixture',path:files.project}),room=service.chat.addRoom({project_id:project.id,title:'办公室'}),other=service.chat.addRoom({project_id:project.id,title:'另一间'}),recipient=service.chat.addMember({name:'接入助手',adapter:'mailbox'});
@@ -121,7 +121,7 @@ test('historical Grok handshake with a stale connection failure keeps guiding un
   assert.doesNotMatch(ready.next_step,/点击|复制/);assert.match(await v.manager.prepareContext(message.id),/"connection_ready":true/);
 });
 test('mailbox document is private and read-only polling never scans, issues credentials or generates templates again',async t=>{
-  const v=setup(t),message=v.message('那拉个豆包进来');v.manager.begin(message);const [state]=await v.finish(),before=counts(v),scans=v.calls.scans,revision=v.service.revision;
+  const v=setup(t,{manualOnly:true}),message=v.message('那拉个豆包进来');v.manager.begin(message);const [state]=await v.finish(),before=counts(v),scans=v.calls.scans,revision=v.service.revision;
   const cardFile=v.service.entry.describe(state.target_member_id,v.room.id).file,card=JSON.parse(fs.readFileSync(cardFile,'utf8')),bytes=fs.readFileSync(cardFile),doc=v.manager.document(state.id,v.room.id);
   assert.ok(!doc.text.includes(card.secret),'document points to the target private template without embedding its secret');assert.match(doc.text,/STDIO/);assert.match(doc.text,/Streamable HTTP/);
   const first=fs.statSync(state.document_path).mtimeMs;
@@ -139,7 +139,7 @@ test('revoked target credential remains revoked and fallback cannot quietly rene
   const message=v.message('连接豆包');v.manager.begin(message);for(let i=0;i<30&&!v.calls.scans;i++)await new Promise(resolve=>setTimeout(resolve,1));
   while(!v.service.store.db.prepare('SELECT id FROM chat_members WHERE adapter=? AND name<>?').get('mailbox',v.recipient.name))await new Promise(resolve=>setTimeout(resolve,1));
   const member=v.service.chat.store.members().find(value=>value.config.launch_provider==='doubao'),file=v.service.entry.describe(member.id,v.room.id).file,bytes=fs.readFileSync(file);v.service.entry.revoke(member.id,v.room.id);const credentials=counts(v).credentials;release();const [state]=await v.finish();
-  assert.equal(state.stage,'awaiting_credential');assert.equal(state.local_verified,false);assert.match(v.manager.document(state.id,v.room.id).text,/已撤销/);assert.equal(counts(v).credentials,credentials);assert.deepEqual(fs.readFileSync(file),bytes);
+  assert.equal(state.stage,'awaiting_credential');assert.equal(state.action_kind,'reauthorize');assert.equal(state.local_verified,false);assert.equal(state.document_path,null);assert.equal(state.copy_sentence,'');assert.equal(counts(v).credentials,credentials);assert.deepEqual(fs.readFileSync(file),bytes);
 });
 for(const provider of ['grok-bot','doubao'])test(`already revoked ${provider} identity cannot be renewed by a new chat assistance request`,async t=>{
   const v=setup(t),member=v.service.chat.addMember({name:'已有同事',adapter:provider==='grok-bot'?'grok-bridge':'mailbox'});v.service.chat.join(v.room.id,member.id);
@@ -148,7 +148,7 @@ for(const provider of ['grok-bot','doubao'])test(`already revoked ${provider} id
   const before=counts(v),message=v.message(provider==='grok-bot'?'把 Grok Bot 拉进群':'连接豆包');v.manager.begin(message);const [state]=await v.finish(),after=counts(v);
   assert.equal(state.status,'needs_action');assert.equal(state.stage,'awaiting_credential');assert.equal(state.run_id,null);assert.equal(state.local_verified,false);assert.equal(state.can_wake,false);assert.match(state.error,/已撤销/);
   assert.equal(after.members,before.members);assert.equal(after.credentials,before.credentials);assert.equal(after.runs,before.runs);assert.equal(after.assists,before.assists+1);assert.deepEqual(fs.readFileSync(entry.file),bytes);
-  assert.equal(v.calls.scans+v.calls.native.length+v.calls.desktop.length+v.calls.install,0);assert.match(v.manager.document(state.id,v.room.id).text,/明确重新授权/);
+  assert.equal(v.calls.scans+v.calls.native.length+v.calls.desktop.length+v.calls.install,0);assert.equal(state.action_kind,'reauthorize');assert.equal(state.target_member_id,member.id);assert.equal(state.document_path,null);assert.equal(state.copy_sentence,'');assert.equal(state.recovery_action.target_member_id,member.id);
   const restored=new ConnectionAssist(v.service);restored.begin(message);await restored.close();assert.equal(v.calls.scans,0);assert.equal(counts(v).credentials,before.credentials);
 });
 test('interrupted assistance without a document reports interruption instead of perpetual preparation',async t=>{
@@ -156,12 +156,12 @@ test('interrupted assistance without a document reports interruption instead of 
   v.service.store.db.prepare('INSERT INTO connection_assists(id,room_id,message_id,member_id,provider,run_id,status,error,document_path,created,updated) VALUES(?,?,?,?,?,NULL,?,NULL,NULL,?,?)').run(assistId,v.room.id,message.id,v.recipient.id,'doubao','starting',now(),now());
   const restored=new ConnectionAssist(v.service),[state]=restored.snapshotForMessage(message.id);assert.equal(state.status,'interrupted');assert.match(state.summary,/已中断|失败/);assert.doesNotMatch(state.summary,/正在准备/);assert.equal(v.calls.scans,0);await restored.close();
 });
-test('unavailable selected provider receives a truthful generic document without fabricated identity or configuration',async t=>{
+test('unavailable selected provider receives a support action without a misleading window handoff',async t=>{
   const v=setup(t),message=v.message('连接 OpenCode');v.manager.begin(message);const [state]=await v.finish();
-  assert.equal(state.status,'needs_action');assert.equal(state.target_member_id,null);assert.ok(state.document_path);const doc=v.manager.document(state.id,v.room.id);assert.match(doc.text,/安装、登录或本机工具授权/);assert.doesNotMatch(doc.text,/mcpServers|127\.0\.0\.1|credential_id/);assert.equal(v.calls.native.length+v.calls.install+v.calls.desktop.length,0);
+  assert.equal(state.status,'needs_action');assert.equal(state.target_member_id,null);assert.equal(state.action_kind,'unsupported');assert.equal(state.document_path,null);assert.equal(state.copy_sentence,'');assert.equal(v.calls.native.length+v.calls.install+v.calls.desktop.length,0);
 });
 test('document scope and fixed path checks reject cross-room, tampered path and symlink',async t=>{
-  const v=setup(t),message=v.message('连接豆包');v.manager.begin(message);const [state]=await v.finish();
+  const v=setup(t,{manualOnly:true}),message=v.message('连接豆包');v.manager.begin(message);const [state]=await v.finish();
   assert.throws(()=>v.manager.document(state.id,v.other.id),error=>error.code==='connection_assist_scope_mismatch');
   v.service.store.db.prepare('UPDATE connection_assists SET document_path=? WHERE id=?').run(path.join(v.root,'outside.md'),state.id);assert.throws(()=>v.manager.document(state.id,v.room.id),error=>error.code==='connection_assist_document_scope');
   v.service.store.db.prepare('UPDATE connection_assists SET document_path=? WHERE id=?').run(state.document_path,state.id);

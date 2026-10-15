@@ -4,6 +4,7 @@ const {RoomError,id,now,cleanText,redact,atomicWrite,asset,ownCommand,shellComma
 const {installClient,prepareManualClient}=require('./install-clients.cjs');
 const manualProviders=new Set(['claude-desktop','qwen-desktop','doubao','opencode','cherry-studio','cline','roo-code']);
 const preparedManualProviders=new Set(['doubao','opencode','cherry-studio','cline','roo-code']);
+const {resolveConnectionTarget}=require('./connection-target.cjs');
 // Discovery runs only on request. Preparation affects only explicitly selected
 // providers; native Grok bot creation remains a separate host operation.
 class LaunchManager{
@@ -56,16 +57,22 @@ class LaunchManager{
   prepare(input={}){
     if(this.closing)throw new RoomError('AgentRoom 正在停止。',503);
     const providers=this.selectedProviders(input),room=this.chooseRoom(input),pending=this.db.prepare("SELECT id,selected_providers FROM launch_sessions WHERE room_id=? AND status='preparing' ORDER BY created DESC LIMIT 1").get(room.id);
+    if(input.target_member_id&&providers.length!==1)throw new RoomError('精确人物接入每次只处理一位同事。',400,'single_provider_required');
+    if(input.reauthorize===true&&!input.target_member_id)throw new RoomError('重新授权必须明确指定原人物。',403,'connection_target_required');
     if(pending){const previous=JSON.parse(pending.selected_providers||'[]');if(previous.length!==providers.length||providers.some(provider=>!previous.includes(provider)))throw new RoomError('上一次指定成员的接入仍在进行，请等待完成后再选择其他成员。',409,'launch_busy');return this.state({session_id:pending.id});}
     const scan=this.discovery(),unknown=providers.filter(provider=>!scan.candidates.some(candidate=>candidate.provider===provider));
     if(unknown.length)throw new RoomError('所选 agent 没有在本次扫描中发现，请先扫描并选择实际成员。',409,'provider_not_found');
     const session={id:id(),room_id:room.id,status:'preparing',goal:input.goal?redact(cleanText(input.goal,1200,'协作目标')):'',candidates:JSON.stringify(scan.candidates),install_clients:input.install_clients===true?1:0,error:null,created:now(),updated:now(),selected_providers:JSON.stringify(providers)};
     this.db.prepare('INSERT INTO launch_sessions(id,room_id,status,goal,candidates,install_clients,error,created,updated,selected_providers) VALUES(:id,:room_id,:status,:goal,:candidates,:install_clients,:error,:created,:updated,:selected_providers)').run(session);
-    const selected=scan.candidates.filter(candidate=>providers.includes(candidate.provider));
+    const selected=scan.candidates.filter(candidate=>providers.includes(candidate.provider)).map(candidate=>({...candidate,...input.target_member_id?{target_member_id:input.target_member_id}:{},reauthorize:input.reauthorize===true}));
     const work=this.run(session,selected).catch(e=>{this.db.prepare("UPDATE launch_sessions SET status='needs_setup',error=?,updated=? WHERE id=? AND status!='cancelled'").run(redact(e.message).slice(0,1200),now(),session.id);this.service.changed();}).finally(()=>this.jobs.delete(session.id));this.jobs.set(session.id,work);this.service.changed();return this.state({session_id:session.id});
   }
   backend(room,candidate){
-    const chat=this.service.chat,participants=chat.store.participants(room.id);let existing;
+    const chat=this.service.chat,target=resolveConnectionTarget(this.service,{provider:candidate.provider,room_id:room.id,target_member_id:candidate.target_member_id});
+    if(target.fixed_proxy&&target.fixed_proxy.room_id!==room.id)throw new RoomError('此连接保留原固定桥接路由，不能跨房复用。',403,'proxy_not_bound');
+    if(target.blocked&&!candidate.reauthorize)throw new RoomError('这位同事的连接已撤销，请明确重新授权原人物。',410,'resume_revoked');
+    if(target.member){if(!target.joined)chat.join(room.id,target.member.id);return chat.store.member(target.member.id);}
+    const participants=chat.store.participants(room.id);let existing;
     if(manualProviders.has(candidate.provider)){
       // Mailboxes are identities, not interchangeable product processes.
       existing=participants.find(member=>member.adapter==='mailbox'&&member.config.launch_provider===candidate.provider);
@@ -100,7 +107,7 @@ class LaunchManager{
     const chat=this.service.chat;
     // Reuse the user's first working Grok bridge for Codex, rather than forcing
     // another bot or invalidating its already active credential.
-    let proxy=candidate.provider==='codex'?chat.store.participants(room.id).find(m=>m.adapter==='grok-bridge'&&m.verified_at&&!this.db.prepare('SELECT 1 FROM launch_proxies WHERE proxy_member_id=?').get(m.id)):null;
+    let proxy=candidate.provider==='codex'?chat.store.participants(room.id).find(m=>m.adapter==='grok-bridge'&&m.config.launch_provider!=='grok-bot'&&m.verified_at&&!this.db.prepare('SELECT 1 FROM launch_proxies WHERE proxy_member_id=?').get(m.id)):null;
     if(!proxy){proxy=chat.addMember({name:`${candidate.name} · Grok群入口`,adapter:'grok-proxy'});chat.join(room.id,proxy.id);}
     const row={id:id(),room_id:room.id,provider:candidate.provider,name:candidate.name,backend_member_id:backend.id,proxy_member_id:proxy.id,installation:null,native_bot_ref:null,native_group_ref:null,native_group_status:'pending',created:now(),updated:now()};
     this.db.prepare('INSERT INTO launch_proxies VALUES(:id,:room_id,:provider,:name,:backend_member_id,:proxy_member_id,:installation,:native_bot_ref,:native_group_ref,:native_group_status,:created,:updated)').run(row);return row;
@@ -110,7 +117,7 @@ class LaunchManager{
     for(const candidate of candidates){
       if(this.closing||this.service.chat.roomDeleted(session.room_id))return;
       if(candidate.provider==='grok-bot'&&candidate.adapter==='grok-bridge'&&candidate.capabilities?.manual_connect===true){
-        const member=this.prepareGrok(room),stored=JSON.parse(this.db.prepare('SELECT candidates FROM launch_sessions WHERE id=?').get(session.id).candidates);
+        const member=this.prepareGrok(room,candidate),stored=JSON.parse(this.db.prepare('SELECT candidates FROM launch_sessions WHERE id=?').get(session.id).candidates);
         const selected=stored.find(item=>item.provider==='grok-bot');if(selected)selected.prepared_member_id=member.id;
         this.db.prepare('UPDATE launch_sessions SET candidates=?,updated=? WHERE id=?').run(JSON.stringify(stored),now(),session.id);this.service.changed();continue;
       }
@@ -119,7 +126,7 @@ class LaunchManager{
       if(!managed&&!manual||managed&&candidate.installed!==true)continue;
       const old=this.db.prepare('SELECT * FROM launch_proxies WHERE room_id=? AND provider=?').get(room.id,candidate.provider);
       const seatedBefore=new Set(this.service.chat.store.participants(room.id).map(member=>member.id));
-      let backend=old?this.service.chat.store.member(old.backend_member_id):this.backend(room,candidate),carried=!seatedBefore.has(backend.id)&&!!backend.verified_at;
+      let backend=this.backend(room,candidate),carried=!seatedBefore.has(backend.id)&&!!backend.verified_at;
       // An explicit installation repair may publish a new owned CLI path. Keep
       // the member and native session while replacing only its executable.
       if(managed&&(backend.config.executable!==candidate.executable||JSON.stringify(backend.config.executable_args||[])!==JSON.stringify(candidate.executable_args||[]))){
@@ -129,7 +136,8 @@ class LaunchManager{
         this.service.chat.store.updateMember(backend.id,{status:'connecting',config:{...backend.config,executable:candidate.executable,executable_args:candidate.executable_args||[]}});backend=this.service.chat.store.member(backend.id);carried=false;
       }
       const proxy=this.proxy(room,candidate,backend),backendEntry=manual?this.service.entry.primary(backend.id,room.id):this.service.entry.issue(backend.id,room.id,{repair_invalid:true});
-      this.service.entry.issue(proxy.proxy_member_id,room.id,{repair_invalid:true});
+      const proxyEntry=this.service.entry.describe(proxy.proxy_member_id,room.id);
+      if(proxyEntry.status==='missing'&&!this.service.resume.credentials(proxy.proxy_member_id).length)this.service.entry.issue(proxy.proxy_member_id,room.id);
       if(candidate.provider==='qwen-desktop'){
         let result;
         if(!this.service._localUrl)result={status:'needs_setup',installed:false,connected:false,can_wake:false,reason:'local_transport_not_started',detail:'请启动本机 AgentRoom 后重新生成 Qwen MCP 导入配置。'};
@@ -163,11 +171,13 @@ class LaunchManager{
     }
     this.db.prepare("UPDATE launch_sessions SET status='awaiting_grok',updated=? WHERE id=?").run(now(),session.id);this.handoff(session.id);this.service.changed();
   }
-  prepareGrok(room){
-    const chat=this.service.chat,participants=chat.store.participants(room.id),existing=participants.filter(member=>member.adapter==='grok-bridge');
+  prepareGrok(room,options={}){
+    const chat=this.service.chat,target=resolveConnectionTarget(this.service,{provider:'grok-bot',room_id:room.id,target_member_id:options.target_member_id});
+    if(target.fixed_proxy&&target.fixed_proxy.room_id!==room.id)throw new RoomError('此连接保留原固定桥接路由，不能跨房复用。',403,'proxy_not_bound');
+    if(target.blocked&&!options.reauthorize)throw new RoomError('这位 Grok 的连接已撤销，请明确重新授权原人物。',410,'resume_revoked');
     // A Grok Bot is an entry into the office, not a proxy pointing at itself.
     // Keep any existing fixed proxy mapping and original webhook unchanged.
-    let member=existing.find(value=>value.config.launch_provider==='grok-bot')||existing.find(value=>value.verified_at)||existing[0];
+    let member=target.member;if(member&&!target.joined)chat.join(room.id,member.id);
     if(!member){
       const added=chat.addMember({name:'Grok Bot',adapter:'grok-bridge'});chat.join(room.id,added.id);
       chat.store.updateMember(added.id,{status:'awaiting_handshake',config:{...chat.store.member(added.id).config,launch_provider:'grok-bot',connection_mode:'manual_cli'}});member=chat.store.member(added.id);
@@ -180,7 +190,7 @@ class LaunchManager{
     if(!memberId)return null;
     let member;try{this.service.chat.store.requireParticipant(session.room_id,memberId);member=this.service.chat.store.member(memberId);}catch{return null;}
     if(member.adapter!=='grok-bridge')return null;
-    const entry=this.service.entry.describe(member.id,session.room_id),valid=entry.status==='active',ready=!!member.verified_at&&valid&&!member.error&&!['connecting','connection_failed','awaiting_handshake'].includes(member.status),own=ownCommand();
+    const entry=this.service.entry.describePrimary(member.id,session.room_id),valid=entry.status==='active',ready=!!member.verified_at&&valid&&!member.error&&!['connecting','connection_failed','awaiting_handshake'].includes(member.status),own=ownCommand();
     const command=shellCommand(own.command,[...own.args,'enter','--entry',entry.file])+(process.platform==='win32'?' | Out-String -Width 4096':'');
     const history=shellCommand(own.command,[...own.args,'chat-history','--entry',entry.file])+(process.platform==='win32'?' | Out-String -Width 4096':'');
     const fixed=this.db.prepare('SELECT backend_member_id FROM launch_proxies WHERE room_id=? AND proxy_member_id=?').get(session.room_id,member.id);
@@ -189,9 +199,10 @@ class LaunchManager{
     return {provider:'grok-bot',name:member.name,member_id:member.id,room_id:session.room_id,entry_file:entry.file,entry_status:entry.status,local_verified:ready,can_wake:false,response_mode:'manual_bridge',native_group_status:'not_requested',requires_local_execution:true,needs_import:false,import_kind:'command',status:ready?'ready_mailbox':'awaiting_bridge_handshake',detail,instruction};
   }
   role(proxy){
-    const entry=this.service.entry.issue(proxy.proxy_member_id,proxy.room_id),own=ownCommand();
+    const entry=this.service.entry.describe(proxy.proxy_member_id,proxy.room_id),own=ownCommand();
     const cli=args=>shellCommand(own.command,[...own.args,...args,'--entry',entry.file])+(process.platform==='win32'?' | Out-String -Width 4096':'');
     const file=path.join(this.service.store.dir,'launch',proxy.room_id,`role-${proxy.id}.md`),requestDir=path.join(this.service.store.dir,'launch',proxy.room_id,proxy.id,'requests');fs.mkdirSync(requestDir,{recursive:true});
+    if(!entry.available){atomicWrite(file,'# 固定代理入口不可用\n\n原人物与固定后端路由保留。请在 AO 明确重新授权此代理；没有重新签发凭据，也没有替换人物。\n');return file;}
     const text=`# ${proxy.name}\n\n你在 Grok 中的显示名是「${proxy.name}」。你是这个群与本机真实 ${proxy.name} 成员的接口，工作问题由本机成员实际处理；不要自行猜测并冒充本机结果。\n\n你只能使用本人的已授权 Windows 本机命令工具。云端 computer 的路径与 localhost 不代表 Windows。首次进入后，后续请求会自行恢复后台。\n${cli(['enter'])}\n\n每次被用户点名提出工作问题，为每个问题创建新UUID文件名，用UTF-8保存到 ${requestDir}，不要多个Bot共用 question.md，也不要把对方正文拼成执行代码。然后执行（文件参数换成你刚保存的实际文件）：\n${cli(['delegate','--file',path.join(requestDir,'本次唯一问题.md'),'--wait','300'])}\n\n此工具已绑定你的真实后端，不需要指定其他成员或由用户提供ID。回答状态answered时只将 answer 文字原样回复当前原生群，不向用户展示JSON、入口路径、内部ID或测试标识。pending时保留request_id，用delegate-wait 同一ID继续等待，不能再发同一任务。需要修改项目的额外权限时明确说明，不以群消息扩大原权限。\n\nMCP接法（仅在确实运行于Windows本机的宿主安装）：\n${JSON.stringify(entry.mcp,null,2)}\n\nnative代理的名称与本机成员是不同层的身份，实际委托记录可在专业网页查看；不自动回复每条公告或每个其他Bot的回报，避免循环。`;
     const manual=manualProviders.has(proxy.provider)?`\n\n此成员使用 ${proxy.name} 本人的 MCP 消息信箱，AgentRoom 没有唤醒桌面模型的后台接口。已验证接入也不等于能自动回答。委托后若仍 waiting/pending，说明“已放入 ${proxy.name} 信箱，需在它自己的窗口领取处理”，保留同一request_id；不得改用其他CLI或API模型冒充桌面会话回答，也不要声称桌面已经开始处理。` : '';
     atomicWrite(file,text+manual);return file;
