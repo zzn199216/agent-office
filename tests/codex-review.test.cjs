@@ -32,6 +32,8 @@ test('stale-turn and unscoped native approvals cannot ask the current person or 
   const f=fixture(),log=path.join(f.root,'stale-rpc.jsonl'),client=new CodexClient({executable:process.execPath,args:[path.join(__dirname,'fake-review-app-server.cjs'),log,'--stale-approvals']});t.after(()=>client.close());let asked=0;
   const result=await client.run({project:{id:id(),name:'Scope fixture',path:f.project,canonical:normalizePath(f.project),access:'read-only'},discussion:{id:id(),title:'Person',binding_state:'new',thread_id:null},request:{id:id(),sender:'user',prompt:'Inspect'},timeout:150,onBinding:()=>{},onTurn:()=>{},onProgress:()=>{},onApproval:()=>asked++,signal:new AbortController().signal});
   assert.equal(result.answer,'fixture answer');assert.equal(asked,0);assert.equal(client.listenerCount('approval-response'),0);
+  const calls=fs.readFileSync(log,'utf8').trim().split('\n').map(JSON.parse),rejection=calls.filter(m=>m.id===92&&!m.method);
+  assert.equal(rejection.length,1);assert.equal(rejection[0].error.code,-32602);assert.equal(rejection[0].result,undefined);
 });
 
 test('a failed manual approval callback stops safely instead of crashing or waiting forever',async t=>{
@@ -44,4 +46,33 @@ test('cancellation settles before a delayed turn acknowledgement and never appli
   const f=fixture(),log=path.join(f.root,'late-ack-rpc.jsonl'),client=new CodexClient({executable:process.execPath,args:[path.join(__dirname,'fake-review-app-server.cjs'),log,'--wait-approval','--hold-start-ack']});t.after(()=>client.close());const abort=new AbortController(),turns=[],start=Date.now();
   await assert.rejects(client.run({project:{id:id(),name:'Ack fixture',path:f.project,canonical:normalizePath(f.project),access:'read-only'},discussion:{id:id(),title:'Person',binding_state:'new',thread_id:null},request:{id:id(),sender:'user',prompt:'Inspect'},timeout:150,onBinding:()=>{},onTurn:turn=>turns.push(turn),onProgress:()=>{},onApproval:()=>abort.abort(),signal:abort.signal}),{code:'outcome_uncertain'});
   assert.ok(Date.now()-start<1200,'Cancellation waited for the late RPC acknowledgement');assert.equal(turns.length,1);assert.equal(client.pending.size,0);
+});
+
+test('a human choice before the start acknowledgement can outlast the RPC deadline without interrupting or replaying',async t=>{
+  const client=new CodexClient({executable:process.execPath,isolate:false}),sent=[];
+  client.bind=async()=> 'owned-thread';
+  client.child={stdin:{writable:true,write:line=>sent.push(JSON.parse(line))}};
+  t.mock.timers.enable({apis:['setTimeout','Date']});
+  let outcome='pending';const run=client.run({project:{access:'read-only',path:process.cwd()},discussion:{},request:{id:'task',prompt:'fixture'},onBinding(){},onTurn(){},onProgress(){},onApproval(){},signal:new AbortController().signal,timeout:150}).then(value=>{outcome='completed';return value;},error=>{outcome=error.code;throw error;});
+  run.catch(()=>{});await new Promise(resolve=>setImmediate(resolve));
+  client.emit('notification',{method:'turn/started',params:{threadId:'owned-thread',turn:{id:'turn'}}});
+  client.emit('request',{id:71,method:'item/commandExecution/requestApproval',params:{threadId:'owned-thread',turnId:'turn'}});
+  t.mock.timers.tick(31000);await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(outcome,'pending');assert.equal(client.pending.size,1);
+  client.respond(71,{decision:'decline'});
+  client.emit('notification',{method:'item/completed',params:{threadId:'owned-thread',turnId:'turn',item:{id:'answer',type:'agentMessage',text:'Safely stopped',phase:'final_answer'}}});
+  client.emit('notification',{method:'turn/completed',params:{threadId:'owned-thread',turn:{id:'turn',status:'completed'}}});
+  assert.equal((await run).answer,'Safely stopped');assert.equal(outcome,'completed');assert.equal(client.pending.size,0);
+  assert.equal(sent.filter(m=>m.method==='turn/start').length,1);assert.equal(sent.some(m=>m.method==='turn/interrupt'),false);
+  assert.equal(client.listenerCount('approval-response'),0);
+});
+
+test('a missing turn acknowledgement without a human wait still reaches the execution deadline',async t=>{
+  const client=new CodexClient({executable:process.execPath,isolate:false}),sent=[];
+  client.bind=async()=> 'owned-thread';client.child={stdin:{writable:true,write:line=>sent.push(JSON.parse(line))}};
+  t.mock.timers.enable({apis:['setTimeout','Date']});
+  const run=client.run({project:{access:'read-only',path:process.cwd()},discussion:{},request:{id:'task',prompt:'fixture'},onBinding(){},onTurn(){},onProgress(){},onApproval(){},signal:new AbortController().signal,timeout:150});
+  const rejected=assert.rejects(run,{code:'outcome_uncertain'});await new Promise(resolve=>setImmediate(resolve));
+  t.mock.timers.tick(151);await rejected;
+  assert.equal(client.pending.size,0);assert.equal(sent.filter(m=>m.method==='turn/start').length,1);assert.equal(client.listenerCount('request'),0);
 });

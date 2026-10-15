@@ -968,9 +968,12 @@ function toggleOfficeComposer(open=!officeComposerOpen) {
     else {$('mention-choices').classList.add('hidden');$('office-compose-launch').focus();}
   }
 }
+function officeApprovalCards() {
+  return [...$('approval-panel').querySelectorAll('[data-approval]'),...$('messages').querySelectorAll('[data-approval],[data-approval-review][data-review-active="1"]')];
+}
 function updateOfficeApprovalAlert() {
   // Finished tasks keep their denial note in the timeline, but it no longer asks for attention.
-  const count=$('approval-panel').querySelectorAll('[data-approval]').length+$('messages').querySelectorAll('[data-approval],[data-approval-review][data-review-active]').length;
+  const count=officeApprovalCards().length;
   $('office-approval-alert').classList.toggle('hidden',!document.body.classList.contains('office-view') || !count);
   $('office-approval-alert').textContent=`${count} 项需要确认 ↗`;
 }
@@ -1447,7 +1450,7 @@ $('secretary-connect-progress').onclick = event => {if(secretaryConnectRoom===ro
 $('secretary-connect-back').onclick = ()=>{secretaryNavigation=null;$('secretary-connect-dialog').close();secretaryConnectJob=null;openSecretaryTutorial();};
 $('secretary-connect-manual').onclick = ()=>{secretaryNavigation=null;$('secretary-connect-dialog').close();secretaryConnectJob=null;action(showMembers);};
 $('secretary-connect-dialog').addEventListener('close',()=>{if(secretaryNavigation?.source==='picker')secretaryNavigation=null;});
-$('office-approval-alert').onclick=()=>{selectRoomView(false);requestAnimationFrame(()=>{const card=[...$('messages').querySelectorAll('[data-approval],[data-approval-review]')].at(-1)||$('approval-panel');card.scrollIntoView({block:'center',behavior:'smooth'});card.querySelector('input,button,a')?.focus({preventScroll:true});});};
+$('office-approval-alert').onclick=()=>{selectRoomView(false);requestAnimationFrame(()=>{const card=officeApprovalCards().at(-1);if(!card)return;card.scrollIntoView({block:'center',behavior:'smooth'});card.querySelector('input,button,a')?.focus({preventScroll:true});});};
 window.visualViewport?.addEventListener('resize',updateOfficeKeyboardInset);window.visualViewport?.addEventListener('scroll',updateOfficeKeyboardInset);
 $('composer').addEventListener('focusin',updateOfficeKeyboardInset);$('composer').addEventListener('focusout',()=>requestAnimationFrame(updateOfficeKeyboardInset));
 $('chat-stream').addEventListener('scroll',rememberTextScroll,{passive:true});

@@ -149,3 +149,18 @@ test('a denial note asks for attention only while its task is unfinished, and th
   const withSession=f.context.approvalContentMarkup(approval({session_allowed:true})),without=f.context.approvalContentMarkup(approval({session_allowed:false}));
   assert.match(withSession,/approval-note/);assert.match(withSession,/只想放行这一次/);assert.doesNotMatch(without,/approval-note|acceptForSession/);
 });
+
+test('office attention count and navigation select the same actionable cards and tolerate resolution before the click',()=>{
+  const targets=[],selectors=[],panelCards=[],roomCards=[],frame=[];
+  const card=id=>({id,scrollIntoView:()=>targets.push(id),querySelector:()=>null});
+  const approval=card('pending'),finished=card('finished-denial'),activeReview=card('active-review'),alert={classList:{toggle(){}}};
+  const elements={'office-approval-alert':alert,'approval-panel':{querySelectorAll:()=>panelCards},messages:{querySelectorAll:selector=>{selectors.push(selector);return selector.includes('data-review-active="1"')?roomCards:[...roomCards,finished];}}};
+  const context=vm.createContext({$:id=>elements[id],document:{body:{classList:{contains:()=>true}}},selectRoomView(){},requestAnimationFrame:fn=>frame.push(fn)});
+  vm.runInContext(section('function officeApprovalCards()', 'function currentSecretary(')+source.split('\n').find(line=>line.startsWith("$('office-approval-alert').onclick=")),context);
+  roomCards.push(approval);context.updateOfficeApprovalAlert();assert.equal(alert.textContent,'1 项需要确认 ↗');
+  alert.onclick();frame.shift()();assert.deepEqual(targets,['pending']);
+  roomCards.push(activeReview);context.updateOfficeApprovalAlert();alert.onclick();frame.shift()();assert.equal(targets.at(-1),'active-review');assert.equal(alert.textContent,'2 项需要确认 ↗');
+  alert.onclick();roomCards.length=0;frame.shift()();assert.equal(targets.length,2,'resolved cards do not redirect to a historical denial');
+  panelCards.push(card('legacy-pending'));context.updateOfficeApprovalAlert();alert.onclick();frame.shift()();assert.equal(targets.at(-1),'legacy-pending');
+  assert.ok(selectors.every(selector=>selector.includes('data-review-active="1"')));
+});

@@ -95,13 +95,15 @@ class CodexClient extends EventEmitter {
   call(method, params, timeout = 30000) {
     const requestId = this.nextId++;
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => { this.pending.delete(String(requestId)); reject(new RoomError(`Codex ${method} 等待超时，未自动重试。`, 504, 'rpc_timeout')); }, timeout);
+      // A null deadline is reserved for turn/start, whose entire lifecycle is
+      // bounded by run() and must pause while a real human choice is pending.
+      const timer = timeout === null ? null : setTimeout(() => { this.pending.delete(String(requestId)); reject(new RoomError(`Codex ${method} 等待超时，未自动重试。`, 504, 'rpc_timeout')); }, timeout);
       this.pending.set(String(requestId), { resolve, reject, timer });
       try { this.send({ id: requestId, method, params }); } catch (e) { clearTimeout(timer); this.pending.delete(String(requestId)); reject(e); }
     });
   }
   respond(requestId, result) { this.send({ id: requestId, result }); this.emit('approval-response',{requestId}); }
-  rejectRequest(requestId) { this.send({ id: requestId, error: { code: -32601, message: 'AgentRoom does not support this request.' } }); this.emit('approval-response',{requestId}); }
+  rejectRequest(requestId, error = { code: -32601, message: 'AgentRoom does not support this request.' }) { this.send({ id: requestId, error }); this.emit('approval-response',{requestId}); }
   async status() {
     const info = await this.ready();
     const account = await this.call('account/read', { refreshToken: false });
@@ -199,6 +201,11 @@ class CodexClient extends EventEmitter {
     };
     const approvals = m => {
       const v = m.params || {};
+      if (typeof v.threadId !== 'string' || !v.threadId.trim()) {
+        this.rejectRequest(m.id,{code:-32602,message:'A threadId is required; no action was authorized.'});
+        onProgress('已拒绝缺少会话标识的原生请求；没有关联当前任务或授予权限。');
+        return;
+      }
       if (v.threadId !== threadId || (turnId && v.turnId && v.turnId !== turnId)) return;
       if (['item/commandExecution/requestApproval','item/fileChange/requestApproval','item/tool/requestUserInput','mcpServer/elicitation/request','item/permissions/requestApproval'].includes(m.method)) { manualPending.add(String(m.id)); pauseDeadline(); }
       onApproval(m, project.access);
@@ -226,7 +233,7 @@ class CodexClient extends EventEmitter {
       // read-only policy; project scoping is guidance, not a claimed read ACL.
       const policy = project.access === 'read-only' ? { type: 'readOnly' } : { type: 'workspaceWrite', writableRoots: [project.path], networkAccess: false };
       startRpcId=this.nextId;
-      const starting=this.call('turn/start', { threadId, clientUserMessageId: request.id, input: [{ type: 'text', text: `AgentRoom request ${request.id}\nPeer: ${request.sender}\nProject: ${project.name}\n${this.mcpEnvironment.AGENTROOM_MEMBER_ID?TEAM_INSTRUCTIONS:''}\n${REVIEW_INSTRUCTIONS}\n\n${request.prompt}` },...(request.images||[]).map(image=>({type:'image',source:{url:`data:${image.mime};base64,${image.data}`}}))], approvalPolicy:'on-request', approvalsReviewer:'auto_review', sandboxPolicy: policy }).then(ack=>({ack}));
+      const starting=this.call('turn/start', { threadId, clientUserMessageId: request.id, input: [{ type: 'text', text: `AgentRoom request ${request.id}\nPeer: ${request.sender}\nProject: ${project.name}\n${this.mcpEnvironment.AGENTROOM_MEMBER_ID?TEAM_INSTRUCTIONS:''}\n${REVIEW_INSTRUCTIONS}\n\n${request.prompt}` },...(request.images||[]).map(image=>({type:'image',source:{url:`data:${image.mime};base64,${image.data}`}}))], approvalPolicy:'on-request', approvalsReviewer:'auto_review', sandboxPolicy: policy },null).then(ack=>({ack}));
       const first=await Promise.race([starting,ended.then(result=>({result}))]);
       if(first.result)return first.result;
       turnId = first.ack.turn.id; onTurn(turnId); return await ended;
