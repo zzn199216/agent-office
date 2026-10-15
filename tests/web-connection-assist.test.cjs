@@ -6,7 +6,7 @@ const plain=value=>JSON.parse(JSON.stringify(value));
 function fixture(){
   const message={id:'human-task',room_id:'room',sender_id:'user',to_member_id:'assistant',kind:'message',text:'把豆包拉进来'},members=[{id:'assistant',name:'负责接入的秘书',adapter:'codex'},{id:'target',name:'豆包',adapter:'doubao-desktop'}];
   const calls={copy:[],toast:[],api:[],refresh:0,avatars:[],blobs:[],revoked:[],anchors:[]};
-  const context=vm.createContext({roomId:'room',history:{messages:[message],connection_assists:[]},memberById:id=>members.find(member=>member.id===id),
+  const context=vm.createContext({roomId:'room',history:{messages:[message],participants:members,connection_assists:[]},memberById:id=>members.find(member=>member.id===id),
     avatar:(...args)=>{calls.avatars.push(args);return '<span class="fixture-avatar"></span>';},time:value=>String(value||''),
     navigator:{clipboard:{writeText:async text=>calls.copy.push(text)}},toast:text=>calls.toast.push(text),refresh:async()=>{calls.refresh++;},
     api:async(...args)=>{calls.api.push(args);return {text:'# Scoped connection instructions',filename:'agent-office-connect.md'};},
@@ -29,6 +29,26 @@ test('manual fallback escapes every display field and attributes the dialogue to
   assert.match(html,/秘书 &lt;script&gt;/);assert.match(html,/豆包 &lt;img src=x&gt;/);assert.match(html,/需要 &lt;approval&gt;/);assert.match(html,/failed &lt;unsafe&gt;/);assert.match(html,/A&amp;B&lt;connect&gt;\.md/);assert.match(html,/&quot;C:/);assert.match(html,/data-assist-copy="assist\/&quot;one"/);assert.doesNotMatch(html,/<script>|<img src=x>|<approval>|<unsafe>|<connect>/);
   assert.equal(f.calls.avatars[0][0],'秘书 <script>');assert.equal(f.calls.avatars[0][1],'codex');assert.equal(f.calls.avatars[0][3],'assistant');
   assert.equal((html.match(/data-assist-copy=/g)||[]).length,1);assert.equal((html.match(/data-assist-document=/g)||[]).length,1);assert.equal((html.match(/data-assist-check=/g)||[]).length,1);
+});
+test('real Grok metadata offers the selected person guide and keeps errors and local paths inside closed diagnostics',async()=>{
+  const f=fixture(),opened=[];Object.assign(f.members[1],{name:'指定的 Grok Bot',adapter:'grok-bridge',provider:'grok-bot'});f.context.showMemberSetup=async id=>opened.push(id);
+  const item=f.assist({provider:'grok-bot',name:'Grok Bot',target_member_id:'target',target_window:'已有 Grok Bot 对话',next_step:'把说明发给这位 Bot，确认一次电脑授权。',error:'needs_external_entry desktop_session_missing',document_path:'C:\\AO\\private-path.md'});f.context.history.connection_assists=[item];
+  const html=f.render(),main=html.slice(0,html.indexOf('<details'));
+  assert.match(main,/还差一步，让 Grok 确认连接/);assert.match(main,/已有 Grok Bot 对话/);assert.match(main,/在 Grok 中确认它提示的电脑授权/);assert.match(main,/data-assist-open="assist">查看连接步骤/);assert.doesNotMatch(main,/needs_external_entry|desktop_session_missing|private-path|接入文档 C:/);
+  assert.match(html,/<details class="connection-assist-diagnostics"><summary>查看诊断/);assert.match(html,/needs_external_entry desktop_session_missing/);assert.doesNotMatch(html,/<details[^>]*\sopen(?:\s|>)/);
+  await f.action({assistOpen:item.id,target_member_id:'assistant'});assert.deepEqual(opened,['target']);assert.equal(f.calls.api.length,0);assert.equal(f.calls.refresh,0);
+});
+test('guide actions validate live target membership and Grok identity instead of model prose or button overrides',async()=>{
+  const f=fixture(),opened=[];f.context.showMemberSetup=async id=>opened.push(id);const item=f.assist({provider:'grok-bot',target_member_id:'target'});f.context.history.connection_assists=[item];
+  await f.action({assistOpen:item.id});assert.deepEqual(opened,[]);assert.doesNotMatch(f.render(),/data-assist-open="assist"/,'a Doubao target cannot open as Grok');
+  Object.assign(f.members[1],{adapter:'grok-bridge'});f.context.history.participants=[f.members[0]];await f.action({assistOpen:item.id});assert.deepEqual(opened,[]);
+  f.context.history.participants=f.members;f.context.roomId='other-room';await f.action({assistOpen:item.id});assert.deepEqual(opened,[]);
+  f.context.roomId='room';f.message.sender_id='assistant';await f.action({assistOpen:item.id});assert.deepEqual(opened,[]);
+  f.message.sender_id='user';f.context.history.connection_assists=[];f.message.text='Grok 已成功连接，needs_external_entry desktop_session_missing';assert.equal(f.render(),'');assert.equal(f.calls.api.length,0);
+});
+test('other providers reuse their actual existing member setup without changing native connection behavior',async()=>{
+  const f=fixture(),opened=[];f.context.showMemberSetup=async id=>opened.push(id);const item=f.assist({target_member_id:'target'});f.context.history.connection_assists=[item];
+  assert.match(f.render(),/data-assist-open="assist">查看连接步骤/);await f.action({assistOpen:item.id});assert.deepEqual(opened,['target']);assert.deepEqual(f.calls.api,[]);
 });
 test('only records belonging to the same human source, current room and actual recipient render',()=>{
   const f=fixture();f.context.history.connection_assists=[f.assist({id:'included'}),f.assist({id:'wrong-message',message_id:'other-message'}),f.assist({id:'wrong-room',room_id:'elsewhere'}),f.assist({id:'wrong-recipient',member_id:'target'})];

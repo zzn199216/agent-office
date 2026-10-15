@@ -585,10 +585,19 @@ function renderConnectionAssists(message) {
   const actor=memberById(message.to_member_id),actorName=actor?.name||'接入助手';
   return (history.connection_assists||[]).filter(item=>item.message_id===message.id&&item.room_id===roomId&&item.member_id===message.to_member_id).map(item=>{
     const ready=item.status==='ready',automatic=ready&&item.can_wake===true,pending=['running','starting','prepared','preparing_document'].includes(item.status)&&!item.error;
-    const title=automatic?'已自动接通':ready?'本人入口已接通':pending?'正在连接':item.status==='interrupted'?'接入已中断':['error','failed'].includes(item.status)?'接入未完成':'需要在本人窗口完成连接';
-    const handoff=!ready&&item.copy_sentence?`<p>把下面这句话发给 <strong>${escape(item.name||item.provider)}</strong> 自己的窗口：</p><pre class="connection-assist-sentence">${escape(item.copy_sentence)}</pre><div class="actions"><button type="button" class="primary" data-assist-copy="${escape(item.id)}">复制给 ${escape(item.name||item.provider)}</button><button type="button" class="secondary" data-assist-document="${escape(item.id)}">保存接入文档</button><button type="button" class="secondary" data-assist-check="${escape(item.id)}">检查连接</button></div><details><summary>接入文档已保存在本机</summary><code>${escape(item.document_path||'')}</code><p class="small-note">同一台电脑上的 AI 可按这句话读取文档；换房间和升级沿用原人物连接。</p></details>`:ready?`<p class="small-note">${automatic?'可直接在 AO 给它发消息。':'当前是本人窗口信箱，需由该窗口处理消息。'}</p>`:pending?'<p class="small-note">有需要你完成的步骤时，会在这里给出文档与复制句。</p>':`<p class="small-note">原进度保留，请查看所需步骤后明确继续；没有自动重连。</p><div class="actions"><button type="button" class="secondary" data-assist-open="${escape(item.id)}">查看接入步骤</button><button type="button" class="secondary" data-assist-check="${escape(item.id)}">检查连接</button></div>`;
-    return `<article class="chat-message connection-assist-message" data-connection-assist="${escape(item.id)}"><div class="message-header">${avatar(actorName,actor?.adapter,actor?.appearance,actor?.id)}<strong>${escape(actorName)}</strong><span class="message-target">接入进度 · AO 核对</span><time>${time(item.updated||item.created)}</time></div><div class="message-body"><h3>${escape(item.name||item.provider)} · ${title}</h3><p>${escape(item.summary||'正在核对接入状态。')}</p>${item.error?`<p class="small-note">${escape(item.error)}</p>`:''}${handoff}</div></article>`;
+    const name=item.name||item.provider,target=connectionAssistTarget(item),grok=item.provider==='grok-bot',windowName=item.target_window||(grok?'已有 Grok Bot 对话':`${name} 自己的窗口`);
+    const title=automatic?'已自动接通':ready?'本人入口已接通':pending?'正在连接':item.status==='interrupted'?'接入已中断':['error','failed'].includes(item.status)?'接入未完成':`还差一步，让${grok?' Grok ':` ${name} `}确认连接`;
+    const open=target?`<button type="button" class="secondary" data-assist-open="${escape(item.id)}">查看连接步骤</button>`:'';
+    const handoff=!ready&&item.copy_sentence?`<p>点击复制，把接入说明发给 <strong>${escape(windowName)}</strong>。${grok?'在 Grok 中确认它提示的电脑授权；AO 会自动检查新的连接。':'按该窗口提示完成一次连接，AO 会核对实际结果。'}</p><div class="actions"><button type="button" class="primary" data-assist-copy="${escape(item.id)}">复制给 ${escape(name)}</button>${open}<button type="button" class="secondary" data-assist-check="${escape(item.id)}">检查连接</button></div>`:ready?`<p class="small-note">${automatic?'可直接在 AO 给它发消息。':'当前是本人窗口信箱，需由该窗口处理消息。'}</p>${open?`<div class="actions">${open}</div>`:''}`:pending?`<p class="small-note">有需要你完成的步骤时，会在这里给出文档与复制句。</p>${open?`<div class="actions">${open}</div>`:''}`:`<p class="small-note">原进度保留，请查看所需步骤后明确继续；没有自动重连。</p><div class="actions">${open||`<button type="button" class="secondary" data-assist-open="${escape(item.id)}">查看接入步骤</button>`}<button type="button" class="secondary" data-assist-check="${escape(item.id)}">检查连接</button></div>`;
+    const diagnostics=item.error||item.document_path||item.copy_sentence?`<details class="connection-assist-diagnostics"><summary>查看诊断</summary>${item.error?`<p class="small-note">${escape(item.error)}</p>`:''}${item.copy_sentence?`<pre class="connection-assist-sentence">${escape(item.copy_sentence)}</pre>`:''}${item.document_path?`<code>${escape(item.document_path)}</code><p class="small-note">同一台电脑上的 AI 可读取接入文档；换房间和升级沿用原人物连接。</p><button type="button" class="secondary" data-assist-document="${escape(item.id)}">保存接入文档</button>`:''}</details>`:'';
+    return `<article class="chat-message connection-assist-message" data-connection-assist="${escape(item.id)}"><div class="message-header">${avatar(actorName,actor?.adapter,actor?.appearance,actor?.id)}<strong>${escape(actorName)}</strong><span class="message-target">接入进度 · AO 核对</span><time>${time(item.updated||item.created)}</time></div><div class="message-body"><h3>${escape(target?.name||name)} · ${escape(title)}</h3><p>${escape(item.next_step||item.summary||'正在核对接入状态。')}</p>${handoff}${diagnostics}</div></article>`;
   }).join('');
+}
+function connectionAssistTarget(item){
+  const member=item.target_member_id&&memberById(item.target_member_id);
+  if(!member||!(history.participants||[]).some(value=>value.id===member.id))return null;
+  if(item.provider==='grok-bot'&&member.provider!=='grok-bot'&&member.adapter!=='grok-bridge')return null;
+  return member;
 }
 async function connectionAssistAction(button) {
   if(!button||button.disabled)return;
@@ -599,7 +608,11 @@ async function connectionAssistAction(button) {
   if(!source)return;
   if(button.dataset.assistCopy){await navigator.clipboard.writeText(item.copy_sentence);toast(`已复制，请发给 ${item.name||item.provider} 自己的窗口。`);}
   else if(button.dataset.assistCheck){await refresh();toast('已核对实际连接状态，没有重新发起接入。');}
-  else if(button.dataset.assistOpen){if(item.run_id){const job=onboardingView(await api(`/api/onboarding/jobs/${encodeURIComponent(item.run_id)}`));if(job?.id)onboardingJobs.set(job.id,job);}setProfessionalView(false);renderLaunch();$('onboarding-progress').scrollIntoView({block:'nearest',behavior:'smooth'});}
+  else if(button.dataset.assistOpen){
+    const target=connectionAssistTarget(item);if(target)return showMemberSetup(target.id);
+    if(item.target_member_id){toast('这位成员的连接步骤已变化，请刷新当前办公室后再查看。');return;}
+    const selectedRoom=roomId;if(item.run_id){const job=onboardingView(await api(`/api/onboarding/jobs/${encodeURIComponent(item.run_id)}`));if(roomId!==selectedRoom)return;if(job?.id)onboardingJobs.set(job.id,job);}if(roomId!==selectedRoom)return;setProfessionalView(false);renderLaunch();$('onboarding-progress').scrollIntoView({block:'nearest',behavior:'smooth'});
+  }
   else{const file=await api(`/api/connection-assists/${encodeURIComponent(item.id)}/document?room_id=${encodeURIComponent(roomId)}`),url=URL.createObjectURL(new Blob([file.text],{type:'text/markdown;charset=utf-8'})),link=document.createElement('a');try{link.href=url;link.download=file.filename;document.body.append(link);link.click();link.remove();}finally{URL.revokeObjectURL(url);}}
 }
 function renderTyping(messages) {

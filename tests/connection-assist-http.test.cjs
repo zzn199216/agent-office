@@ -36,6 +36,12 @@ test('HTTP peer messages, internal scheduler-style calls and JSON human claims d
   const diagnostic=await v.send({text:'Grok 连不上，找一下原因'});await answered(v.service,diagnostic.data.id);assert.equal(v.calls.length,0);
   const unauthorized=await v.send({},'not-the-controller');assert.equal(unauthorized.response.status,401);assert.equal(v.calls.length,0);
 });
+test('replaying an old queued message under the same key cannot retroactively authorize connection help',async t=>{
+  const v=await setup(t),key=id(),text='接入一下grok',message=v.service.chat.store.post({room_id:v.room.id,sender_id:'user',to_member_id:v.peer.id,text,idempotency_key:key});
+  assert.equal(message.status,'queued');const before=v.service.store.db.prepare('SELECT count(*) n FROM chat_resume_credentials').get().n;
+  for(let i=0;i<2;i++){const repeated=await v.send({text,to_member_id:v.peer.id,idempotency_key:key});assert.equal(repeated.response.status,202);assert.equal(repeated.data.id,message.id);assert.equal(repeated.data.status,'queued');}
+  assert.equal(v.calls.length,0);assert.deepEqual(v.service.connectionAssist.snapshotForMessage(message.id),[]);assert.equal(v.service.store.db.prepare('SELECT count(*) n FROM chat_resume_credentials').get().n,before);assert.equal(v.service.store.db.prepare('SELECT count(*) n FROM onboarding_runs').get().n,0);
+});
 
 test('connection documents stay controller-only and use the exact room-scoped lookup',async t=>{
   const v=await setup(t),assistId=id(),seen=[];

@@ -202,7 +202,7 @@ class ChatManager {
     const m=this.store.post({...input,to_member_id:target,sender_id:input.sender_id||'user'});this.changed();
     // The HTTP controller supplies this option; message JSON, peers and the
     // scheduler cannot authorize setup by claiming to be a human in text.
-    if(options.human===true&&m.sender_id==='user'&&m.to_member_id&&m.kind==='message'&&!m.coordination&&(!existing||m.status==='queued'))this.service.connectionAssist?.begin(m);
+    if(options.human===true&&m.sender_id==='user'&&m.to_member_id&&m.kind==='message'&&!m.coordination&&!existing)this.service.connectionAssist?.begin(m);
     if(target&&m.status==='queued'){const member=this.store.member(target);this.adapter(member).message(m)?.catch?.(()=>{});}return m;
   }
   assertNoDependencyCycle(sender,target,kind,excludeMessageId=''){

@@ -5,7 +5,7 @@ const {EventEmitter}=require('node:events');
 const {ConnectionAssist,parseConnectionProviders}=require('../src/connection-assist.cjs');
 const {RoomService}=require('../src/service.cjs');
 const {fixture,FakeCodex,FakeVault}=require('./helpers.cjs');
-const {id,now}=require('../src/util.cjs');
+const {id,now,sleep}=require('../src/util.cjs');
 
 class HandshakeFixture extends EventEmitter{
   constructor(member,service,calls){super();this.member=member;this.service=service;this.calls=calls;}
@@ -46,6 +46,14 @@ test('parser accepts named imperative requests and keeps CLI identities separate
   assert.deepEqual(parseConnectionProviders('不要接入Qwen，只拉豆包进来'),['doubao']);
   assert.deepEqual(parseConnectionProviders('接入 Gemini CLI、Codex 和 Cherry Studio'),['gemini-cli','codex','cherry-studio']);
   assert.deepEqual(parseConnectionProviders('连接 qwen-code 和 claude-code'),['qwen-code','claude-code']);
+  for(const text of ['接入一下grok','请帮我接入一下grok','把grok接一下'])assert.deepEqual(parseConnectionProviders(text),['grok-bot'],text);
+  for(const text of ['帮我接一下豆包','帮我连接一下豆包'])assert.deepEqual(parseConnectionProviders(text),['doubao'],text);
+});
+test('multiline quotations, tool output, chat history and deferred wording cannot authorize connection',()=>{
+  for(const text of ['他说：\n连接grok','工具返回：\n连接grok','以下是聊天记录：\n连接grok','同事建议：\n连接grok',
+    '他说‘\n连接grok\n’','"\n接入一下grok\n"',"'\n连接grok\n'",'连接grok，先别接入','连接grok，先让我确认一下','连接grok，等我再说',
+    '不要接一下豆包','如何接入一下grok','帮我连接一下豆包的文档','请帮我接一下豆包，等我同意后再执行'])assert.deepEqual(parseConnectionProviders(text),[],text);
+  assert.deepEqual(parseConnectionProviders('不要接入Qwen，只拉豆包进来'),['doubao']);
 });
 test('parser ignores diagnostic questions, quotes, code, negation, documents and unknown clients',()=>{
   for(const text of ['为什么Grok不能拉进来','Qwen 连接失败，帮我排查','能不能连接豆包？','不要接入 Grok','不想拉豆包','解释如何连接 Qwen',
@@ -84,6 +92,33 @@ test('Grok fallback returns a copy sentence and owned document while bot-visible
   const document=v.manager.document(state.id,v.room.id);assert.match(document.filename,/grok-bot/);assert.match(document.text,/长期恢复入口/);assert.match(document.text,/不自动创建群聊/);assert.ok(!document.text.includes('fixture-private-token'));
   const context=await v.manager.prepareContext(message.id);assert.match(context,/逐字给用户/);assert.match(context,/copy_sentence/);assert.doesNotMatch(context,/fixture-private-token|\/mcp\/private-token|secret/);
   assert.equal(v.calls.native.length+v.calls.install,0);assert.equal(v.calls.desktop.length,0,'unverified Grok native adapter must not be contacted');
+});
+test('exact casual user request prepares one existing Grok guide and gives the secretary a concrete continuation',async t=>{
+  const v=setup(t),message=v.message('接入一下grok');v.manager.begin(message);const [state]=await v.finish();
+  assert.equal(state.provider,'grok-bot');assert.equal(state.handoff_kind,'grok_guided');assert.equal(state.connection_method,'grok_command_bridge');assert.equal(state.target_window,'已有 Grok Bot 对话');assert.match(state.next_step,/查看连接步骤/);assert.match(state.next_step,/不需要创建群聊/);
+  assert.ok(state.target_member_id);assert.ok(state.copy_sentence);assert.ok(state.document_path);assert.equal(state.status,'needs_action');assert.equal(state.can_wake,false);
+  const before=counts(v),scans=v.calls.scans,credentials=v.service.resume.credentials(state.target_member_id),bytes=fs.readFileSync(v.service.entry.describePrimary(state.target_member_id,v.room.id).file);
+  const context=await v.manager.prepareContext(message.id);assert.match(context,/不能只回答/);assert.match(context,/逐字给用户/);assert.match(context,/target_window/);assert.match(context,/已有 Grok Bot 对话/);assert.doesNotMatch(context,/fixture-private-token|desktop_session_missing|needs_external_entry/);
+  v.manager.begin(message);await v.finish();assert.deepEqual(counts(v),before);assert.equal(v.calls.scans,scans);assert.deepEqual(v.service.resume.credentials(state.target_member_id),credentials);assert.deepEqual(fs.readFileSync(v.service.entry.describePrimary(state.target_member_id,v.room.id).file),bytes);assert.equal(v.calls.desktop.length,0);
+});
+test('reported history and deferred requests create no assists, scans, sessions or credentials',async t=>{
+  const v=setup(t),before=counts(v);
+  for(const text of ['他说：\n接入一下grok','工具返回：\n连接grok','以下是聊天记录：\n连接grok','连接grok，先别接入','连接grok，先让我确认一下','连接grok，等我再说'])assert.deepEqual(v.manager.begin(v.message(text)),[]);
+  assert.deepEqual(counts(v),before);assert.equal(v.calls.scans,0);assert.equal(v.calls.desktop.length,0);assert.equal(v.calls.native.length,0);
+});
+test('historical Grok handshake with a stale connection failure keeps guiding until fresh real contact',async t=>{
+  const v=setup(t),first=v.message('连接grok');v.manager.begin(first);const [initial]=await v.finish(),memberId=initial.target_member_id,file=v.service.entry.describePrimary(memberId,v.room.id).file,bytes=fs.readFileSync(file),card=JSON.parse(bytes);
+  v.service.entry.accept(card);const oldTime=new Date(Date.now()-60000).toISOString();
+  v.service.store.db.prepare('UPDATE chat_resume_credentials SET last_seen=? WHERE id=?').run(oldTime,card.credential_id);
+  v.service.chat.store.updateMember(memberId,{status:'connection_failed',error:'desktop_session_missing',verified_at:oldTime});
+  const message=v.message('接入一下grok');v.manager.begin(message);await v.finish();const state=v.manager.snapshotForMessage(message.id)[0];
+  assert.equal(state.target_member_id,memberId);assert.equal(state.status,'needs_action');assert.equal(state.local_verified,false);assert.ok(state.document_path);assert.ok(state.copy_sentence);assert.match(state.next_step,/查看连接步骤/);
+  const before=counts(v),scans=v.calls.scans,contact=v.service.resume.credential(card.credential_id).last_seen;
+  for(let i=0;i<3;i++){const context=await v.manager.prepareContext(message.id);assert.match(context,/已有 Grok Bot 对话/);assert.doesNotMatch(context,/desktop_session_missing/);assert.equal(v.manager.snapshotForMessage(message.id)[0].status,'needs_action');}
+  assert.equal(v.service.resume.credential(card.credential_id).last_seen,contact);assert.deepEqual(counts(v),before);assert.equal(v.calls.scans,scans);assert.deepEqual(fs.readFileSync(file),bytes);
+  await sleep(5);v.service.entry.accept(card);const ready=v.manager.snapshotForMessage(message.id)[0];
+  assert.equal(ready.status,'ready');assert.equal(ready.local_verified,true);assert.equal(ready.can_wake,false);assert.equal(ready.automatic_reply_verified,false);assert.equal(ready.error,null);assert.deepEqual(counts(v),before);assert.deepEqual(fs.readFileSync(file),bytes);
+  assert.doesNotMatch(ready.next_step,/点击|复制/);assert.match(await v.manager.prepareContext(message.id),/"connection_ready":true/);
 });
 test('mailbox document is private and read-only polling never scans, issues credentials or generates templates again',async t=>{
   const v=setup(t),message=v.message('那拉个豆包进来');v.manager.begin(message);const [state]=await v.finish(),before=counts(v),scans=v.calls.scans,revision=v.service.revision;
