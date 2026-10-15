@@ -1434,7 +1434,7 @@ document.querySelectorAll('[data-inspector-tab]').forEach(button=>button.onclick
 $('chat-view-button').onclick=()=>selectRoomView(false);$('office-view-button').onclick=()=>selectRoomView(true);
 $('office-compose-launch').onclick=()=>toggleOfficeComposer(true);$('office-composer-close').onclick=()=>toggleOfficeComposer(false);
 $('secretary-room-entry').onclick = openSecretaryTutorial;
-$('secretary-dismiss').onclick = closeSecretaryTutorial; $('secretary-look-around').onclick = closeSecretaryTutorial;
+$('secretary-dismiss').onclick = closeSecretaryTutorial; $('secretary-look-around').onclick = () => {closeSecretaryTutorial();selectRoomView(true);};
 $('secretary-member-options').onclick = event => {const button = event.target.closest('[data-secretary-select],[data-secretary-member-connections]');if(!button||button.disabled)return;if(button.hasAttribute('data-secretary-member-connections')){closeSecretaryTutorial();openInspector('members');return;}action(()=>chooseSecretary(button.dataset.secretarySelect));};
 $('secretary-selected-person').onclick = event => {if(event.target.closest('[data-secretary-change]')){secretaryPickingRoom=roomId;secretaryError='';renderSecretary();}};
 $('secretary-role-card').onclick = event => {const button=event.target.closest('[data-secretary-open],[data-secretary-reset]');if(!button || button.disabled)return;if(button.dataset.secretaryReset!==undefined)action(clearSecretary);else openSecretaryTutorial();};
