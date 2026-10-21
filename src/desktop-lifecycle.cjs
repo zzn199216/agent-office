@@ -56,6 +56,20 @@ function validateControl(value,strict=false){
   if(address.protocol!=='http:'||address.hostname!=='127.0.0.1'||address.username||address.password||address.pathname!=='/'||address.search||address.hash||strict&&Object.keys(value).some(key=>!['pid','owner_id','instance_id','url'].includes(key)))throw invalid();
   return {pid:value.pid,owner_id:value.owner_id,instance_id:value.instance_id,url:address.origin};
 }
+const lockBusy=error=>[5,6].includes((error.errcode||0)&255)||/busy|locked/i.test(error.message||'');
+function commitIntent(db){
+  const end=Date.now()+3500,waiter=new Int32Array(new SharedArrayBuffer(4));
+  for(;;){
+    db.exec('PRAGMA busy_timeout='+Math.max(0,Math.min(1000,end-Date.now()))+';');
+    try{db.exec('COMMIT');return;}catch(error){
+      if(!lockBusy(error))throw error;
+      const remaining=end-Date.now();if(remaining<=0)throw error;
+      // Keep the same transaction: the CAS callback already changed a file.
+      // SQLite may report BUSY immediately, so also bound synchronous retries.
+      Atomics.wait(waiter,0,0,Math.min(25,remaining));
+    }
+  }
+}
 function writeIntent(root,callback){
   const mutex=path.join(root,MUTEX);let db,begun=false;
   try{
@@ -65,11 +79,11 @@ function writeIntent(root,callback){
     const {DatabaseSync}=require('node:sqlite');
     db=new DatabaseSync(mutex);db.exec('PRAGMA busy_timeout=1000; BEGIN IMMEDIATE;');begun=true;
     for(const suffix of ['','-journal','-wal','-shm'])regular(mutex+suffix,root,suffix!=='');
-    const result=callback(readIntent(root));db.exec('COMMIT');begun=false;return result;
+    const result=callback(readIntent(root));commitIntent(db);begun=false;return result;
   }catch(error){
     if(begun)try{db.exec('ROLLBACK');}catch{}
     if(error instanceof RoomError)throw error;
-    const wrapped=/busy|locked/i.test(error.message)?new RoomError('另一个软件窗口正在更新服务状态，请稍后重试。',409,'desktop_lifecycle_busy'):new RoomError('无法保存软件服务状态，原办公室记录已保留。请检查本机诊断。',503,'desktop_lifecycle_unavailable');
+    const wrapped=lockBusy(error)?new RoomError('另一个软件窗口正在更新服务状态，请稍后重试。',409,'desktop_lifecycle_busy'):new RoomError('无法保存软件服务状态，原办公室记录已保留。请检查本机诊断。',503,'desktop_lifecycle_unavailable');
     wrapped.cause=error;throw wrapped;
   }finally{db?.close();}
 }

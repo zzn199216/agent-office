@@ -40,14 +40,28 @@ async function recordAlive(record,file,options={}){
   let modified;try{modified=fs.statSync(file).mtimeMs;}catch{return false;}
   return identity.birth_ms<=modified+1000;
 }
+function lockBusy(error){return [5,6].includes((error.errcode||0)&255)||/locked|busy/i.test(error.message||'');}
 async function exclusive(dir,callback,options={}){
   const {DatabaseSync}=require('node:sqlite');
   const file=path.join(dir,'daemon-mutex.sqlite'),end=Date.now()+(options.timeout||3500);
   for(;;){
     let db;
     try{db=new DatabaseSync(file);db.exec('PRAGMA busy_timeout=0; BEGIN IMMEDIATE; CREATE TABLE IF NOT EXISTS mutex (id INTEGER PRIMARY KEY);');}
-    catch(e){try{db?.close();}catch{}if(!/locked|busy/i.test(e.message))throw new RoomError('无法写入本机服务启动记录，请检查数据目录权限或磁盘空间。',503,'service_lock_unavailable');if(Date.now()>=end)throw new RoomError('另一次服务启动正在核对，请稍后重试。',409,'service_start_busy');await sleep(50);continue;}
-    try{const result=await callback();db.exec('COMMIT');return result;}catch(e){try{db.exec('ROLLBACK');}catch{}throw e;}finally{db.close();}
+    catch(e){try{db?.close();}catch{}if(!lockBusy(e))throw new RoomError('无法写入本机服务启动记录，请检查数据目录权限或磁盘空间。',503,'service_lock_unavailable');if(Date.now()>=end)throw new RoomError('另一次服务启动正在核对，请稍后重试。',409,'service_start_busy');await sleep(50);continue;}
+    try{
+      const result=await callback();
+      // A reader can retain a SHARED lock after BEGIN IMMEDIATE succeeded.
+      // Retry this transaction's COMMIT only: the callback may have already
+      // changed daemon.lock/control.json and must never be executed again.
+      for(;;){
+        try{db.exec('COMMIT');return result;}catch(error){
+          if(!lockBusy(error))throw error;
+          const remaining=end-Date.now();
+          if(remaining<=0){const failure=new RoomError('另一次服务启动正在核对，请稍后重试。',409,'service_start_busy');failure.cause=error;throw failure;}
+          await sleep(Math.min(50,remaining));
+        }
+      }
+    }catch(e){try{db.exec('ROLLBACK');}catch{}throw e;}finally{db.close();}
   }
 }
 async function acquireDaemonLock(dir,options={}){

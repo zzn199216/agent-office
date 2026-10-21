@@ -1,7 +1,7 @@
 'use strict';
 const {test}=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),os=require('node:os'),crypto=require('node:crypto'),{spawn}=require('node:child_process');
 const {desktopIntent,assertBackgroundAllowed,assertClosedIntent,activateDesktop,markDesktopClosed}=require('../src/desktop-lifecycle.cjs');
-function setup(t){const root=fs.mkdtempSync(path.join(os.tmpdir(),'agentroom-test-desktop-lifecycle-')),dir=path.join(root,'data');fs.mkdirSync(dir);t.after(()=>{assert.equal(path.dirname(path.resolve(root)),path.resolve(os.tmpdir()));assert.match(path.basename(root),/^agentroom-test-desktop-lifecycle-/);fs.rmSync(root,{recursive:true,force:true});});return {root,dir,marker:path.join(dir,'desktop-lifecycle.json')};}
+function setup(t){const root=fs.mkdtempSync(path.join(os.tmpdir(),'agentroom-test-desktop-lifecycle-')),dir=path.join(root,'data'),cleanups=[];fs.mkdirSync(dir);t.after(async()=>{for(const close of cleanups)await close();assert.equal(path.dirname(path.resolve(root)),path.resolve(os.tmpdir()));assert.match(path.basename(root),/^agentroom-test-desktop-lifecycle-/);fs.rmSync(root,{recursive:true,force:true});});return {root,dir,marker:path.join(dir,'desktop-lifecycle.json'),cleanups};}
 const control=()=>({pid:process.pid,owner_id:crypto.randomUUID(),instance_id:crypto.randomUUID(),url:'http://127.0.0.1:47831'});
 test('unmanaged legacy CLI stays allowed and lifecycle observations create no files',t=>{
   const f=setup(t);assert.equal(desktopIntent(f.dir),null);assert.equal(assertBackgroundAllowed(f.dir),null);assert.deepEqual(fs.readdirSync(f.dir),[]);
@@ -109,6 +109,36 @@ function worker(dir,activation,operation){
   const source=path.resolve(__dirname,'../src/desktop-lifecycle.cjs'),code="const m=require(process.argv[1]);function detail(e){return e?{code:e.code,name:e.name,message:e.message,stack:e.stack,cause:e.cause?detail(e.cause):undefined}:undefined;}try{const result=process.argv[4]==='activate'?m.activateDesktop(process.argv[2]):m.markDesktopClosed(process.argv[2],{expectedActivation:process.argv[3]});process.stdout.write(JSON.stringify({result}));}catch(error){process.stdout.write(JSON.stringify({error:error.code,detail:detail(error)}));}";
   return new Promise((resolve,reject)=>{const child=spawn(process.execPath,['-e',code,source,dir,activation,operation],{windowsHide:true,stdio:['ignore','pipe','pipe']});let out='',err='';const timer=setTimeout(()=>{child.kill();reject(Error('Owned lifecycle worker timed out'));},10000);child.stdout.on('data',part=>out+=part);child.stderr.on('data',part=>err+=part);child.once('error',error=>{clearTimeout(timer);reject(error);});child.once('exit',status=>{clearTimeout(timer);try{assert.equal(status,0,err);resolve(JSON.parse(out));}catch(error){reject(error);}});});
 }
+async function sharedReader(f,file){
+  const {Worker}=require('node:worker_threads');
+  const source="const {parentPort,workerData}=require('node:worker_threads'),{DatabaseSync}=require('node:sqlite');const db=new DatabaseSync(workerData);db.exec('BEGIN; SELECT * FROM fixture_read_lock;');let timer;parentPort.on('message',delay=>{clearTimeout(timer);timer=setTimeout(()=>{db.exec('ROLLBACK');db.close();parentPort.close();},delay);});parentPort.postMessage('ready');";
+  const child=new Worker(source,{eval:true,workerData:file}),done=new Promise((resolve,reject)=>{child.once('error',reject);child.once('exit',code=>code===0?resolve():reject(new Error('Owned SQLite reader exited '+code)));});done.catch(()=>{});
+  f.cleanups.push(async()=>{try{child.postMessage(0);}catch{}await child.terminate();await done.catch(()=>{});});
+  await new Promise((resolve,reject)=>{child.once('message',resolve);child.once('error',reject);});return {child,done};
+}
+
+test('a busy COMMIT retries the same lifecycle transaction after a real shared reader releases without replaying its file write',async t=>{
+  const f=setup(t),initial=activateDesktop(f.dir),{DatabaseSync}=require('node:sqlite'),mutex=path.join(f.dir,'desktop-lifecycle-mutex.sqlite'),seed=new DatabaseSync(mutex);seed.exec('CREATE TABLE fixture_read_lock (id INTEGER);');seed.close();
+  const reader=await sharedReader(f,mutex),exec=DatabaseSync.prototype.exec,rename=fs.renameSync;let commits=0,writes=0;
+  DatabaseSync.prototype.exec=function(sql,...args){if(sql==='COMMIT'&&++commits===1)reader.child.postMessage(1200);return exec.call(this,sql,...args);};
+  fs.renameSync=function(from,to,...args){if(to===f.marker)writes++;return rename.call(this,from,to,...args);};
+  try{const closed=markDesktopClosed(f.dir,{expectedActivation:initial.id});assert.equal(closed.state,'closed');assert.deepEqual(desktopIntent(f.dir),closed);assert.throws(()=>assertBackgroundAllowed(f.dir),{code:'desktop_application_closed'});assert.ok(commits>=2);assert.equal(writes,1);}finally{DatabaseSync.prototype.exec=exec;fs.renameSync=rename;reader.child.postMessage(0);await reader.done;}
+});
+
+test('busy COMMIT retries stop at their deadline and never rerun lifecycle file writes',t=>{
+  const f=setup(t),initial=activateDesktop(f.dir),{DatabaseSync}=require('node:sqlite'),exec=DatabaseSync.prototype.exec,rename=fs.renameSync,clock=Date.now;let simulated=clock(),commits=0,writes=0;
+  Date.now=()=>simulated;DatabaseSync.prototype.exec=function(sql,...args){if(sql==='COMMIT'){commits++;simulated+=2000;throw Object.assign(new Error('Synthetic database is locked'),{code:'ERR_SQLITE_ERROR',errcode:5});}return exec.call(this,sql,...args);};
+  fs.renameSync=function(from,to,...args){if(to===f.marker)writes++;return rename.call(this,from,to,...args);};
+  try{assert.throws(()=>markDesktopClosed(f.dir,{expectedActivation:initial.id}),error=>error.code==='desktop_lifecycle_busy'&&error.cause?.errcode===5);assert.equal(commits,2);assert.equal(writes,1);assert.equal(desktopIntent(f.dir).state,'closed');assert.throws(()=>assertBackgroundAllowed(f.dir),{code:'desktop_application_closed'});}finally{Date.now=clock;DatabaseSync.prototype.exec=exec;fs.renameSync=rename;}
+});
+
+test('a nonbusy COMMIT failure preserves its cause and does not retry or replay the lifecycle write',t=>{
+  const f=setup(t),{DatabaseSync}=require('node:sqlite'),exec=DatabaseSync.prototype.exec,rename=fs.renameSync;let commits=0,writes=0;
+  DatabaseSync.prototype.exec=function(sql,...args){if(sql==='COMMIT'){commits++;throw Object.assign(new Error('Synthetic disk input error'),{code:'ERR_SQLITE_ERROR',errcode:10});}return exec.call(this,sql,...args);};
+  fs.renameSync=function(from,to,...args){if(to===f.marker)writes++;return rename.call(this,from,to,...args);};
+  try{assert.throws(()=>activateDesktop(f.dir),error=>error.code==='desktop_lifecycle_unavailable'&&error.cause?.errcode===10);assert.equal(commits,1);assert.equal(writes,1);}finally{DatabaseSync.prototype.exec=exec;fs.renameSync=rename;}
+});
+
 test('cross-process activation and stale close serialize without overwriting a newly opened window',async t=>{
   const f=setup(t);
   for(let round=0;round<6;round++){

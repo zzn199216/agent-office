@@ -1,6 +1,7 @@
 'use strict';
 const {test}=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),os=require('node:os');
 const {EventEmitter}=require('node:events'),{spawn}=require('node:child_process');
+const {DatabaseSync}=require('node:sqlite');
 const {acquireDaemonLock,releaseDaemonLock,processIdentity,isControlProcessAlive}=require('../src/daemon-owner.cjs');
 const {serve,ensureServer,readControl,apiCall}=require('../src/main.cjs');
 const {RoomService}=require('../src/service.cjs');
@@ -10,6 +11,41 @@ const write=(dir,file,value)=>fs.writeFileSync(path.join(dir,file),JSON.stringif
 const read=(dir,file)=>JSON.parse(fs.readFileSync(path.join(dir,file),'utf8'));
 const known=async pid=>({identity:'fixture-'+pid,birth_ms:Date.now()-10000});
 function failedChild(action){const child=new EventEmitter();child.unref=()=>{};process.nextTick(()=>action(child));return child;}
+function contention(f){
+  const file=path.join(f.data,'daemon-mutex.sqlite'),initial=new DatabaseSync(file);initial.exec('CREATE TABLE fixture_reader (id INTEGER PRIMARY KEY); INSERT INTO fixture_reader VALUES (1);');initial.close();let reader,timer;
+  const release=()=>{clearTimeout(timer);if(reader){reader.exec('ROLLBACK');reader.close();reader=null;}};f.cleanups.push(release);
+  return {hold(delay){reader=new DatabaseSync(file);reader.exec('BEGIN; SELECT * FROM fixture_reader;');if(delay!==undefined)timer=setTimeout(release,delay);},release};
+}
+async function closeOwnedChild(child){
+  if(child.exitCode!==null||child.signalCode!==null)return;
+  let force,deadline;
+  try{await new Promise((resolve,reject)=>{
+    child.once('close',resolve);child.stdin.end();force=setTimeout(()=>child.kill(),500);deadline=setTimeout(()=>reject(Error('Owned startup fixture did not exit after termination')),3000);
+  });}finally{clearTimeout(force);clearTimeout(deadline);}
+}
+
+test('a transient COMMIT reader lock retries only COMMIT and preserves the acquired owner',async t=>{
+  const f=files(t),shared=contention(f),original=DatabaseSync.prototype.exec;let attempts=0,busy=0,identities=0;
+  DatabaseSync.prototype.exec=function(sql,...args){if(sql==='COMMIT'){attempts++;try{return original.call(this,sql,...args);}catch(error){if(error.errcode===5)busy++;throw error;}}return original.call(this,sql,...args);};
+  let owner;try{owner=await acquireDaemonLock(f.data,{timeout:1000,processIdentity:async pid=>{identities++;shared.hold(120);return known(pid);}});}finally{DatabaseSync.prototype.exec=original;shared.release();}
+  assert.ok(busy>0);assert.ok(attempts>1);assert.equal(identities,1);assert.equal(read(f.data,'daemon.lock').owner_id,owner.owner_id);await releaseDaemonLock(f.data,owner);
+});
+
+test('persistent COMMIT contention has a bounded typed failure without replaying filesystem ownership changes',async t=>{
+  const f=files(t),shared=contention(f),original=fs.writeFileSync;let identities=0,writes=0;
+  fs.writeFileSync=function(file,...args){if(typeof file==='string'&&path.resolve(file)===path.join(f.data,'daemon.lock'))writes++;return original.call(this,file,...args);};
+  const started=Date.now();let failure;
+  try{await assert.rejects(acquireDaemonLock(f.data,{timeout:120,processIdentity:async pid=>{identities++;shared.hold();return known(pid);}}),error=>{failure=error;return error.code==='service_start_busy'&&error.cause?.errcode===5;});}finally{fs.writeFileSync=original;shared.release();}
+  assert.ok(Date.now()-started<1500);assert.ok(failure);assert.equal(identities,1);assert.equal(writes,1);const owner=read(f.data,'daemon.lock');assert.equal(owner.pid,process.pid);await releaseDaemonLock(f.data,owner);
+});
+
+test('non-busy COMMIT failures are not retried and do not replay the completed owner callback',async t=>{
+  const f=files(t),original=DatabaseSync.prototype.exec;let attempts=0,identities=0;
+  const failure=Object.assign(Error('synthetic commit I/O failure'),{code:'ERR_SQLITE_ERROR',errcode:10});
+  DatabaseSync.prototype.exec=function(sql,...args){if(sql==='COMMIT'){attempts++;throw failure;}return original.call(this,sql,...args);};
+  try{await assert.rejects(acquireDaemonLock(f.data,{processIdentity:async pid=>{identities++;return known(pid);}}),error=>error===failure);}finally{DatabaseSync.prototype.exec=original;}
+  assert.equal(attempts,1);assert.equal(identities,1);await releaseDaemonLock(f.data,read(f.data,'daemon.lock'));
+});
 
 test('actual OS process birth distinguishes a reused legacy PID and retains the unrelated process',async t=>{
   const f=files(t),identity=await processIdentity(process.pid);assert.ok(identity?.identity);assert.ok(identity.birth_ms>0);
@@ -56,14 +92,13 @@ test('a daemon recorded on another machine cannot be reclaimed through local PID
 test('concurrent recovery processes acquire one daemon owner',async t=>{
   const f=files(t),children=[];write(f.data,'daemon.lock',{pid:999999999});
   const script=`const fs=require('node:fs'),path=require('node:path');const mod=require(process.argv[1]);(async()=>{const owner=await mod.acquireDaemonLock(process.argv[2],{processIdentity:async pid=>({identity:'fixture-'+pid,birth_ms:Date.now()-10000})});console.log(JSON.stringify({owned:!!owner}));if(owner){process.stdin.resume();await new Promise(r=>process.stdin.once('end',r));await mod.releaseDaemonLock(process.argv[2],owner);}})().catch(e=>{console.error(e);process.exitCode=1;});`;
-  t.after(async()=>{for(const child of children){child.stdin.end();if(child.exitCode===null){child.kill();await new Promise(resolve=>child.once('exit',resolve));}}});
+  f.cleanups.push(()=>Promise.all(children.map(closeOwnedChild)));
   const results=await Promise.all([0,1,2].map(()=>new Promise((resolve,reject)=>{
-    const child=spawn(process.execPath,['-e',script,path.resolve(__dirname,'../src/daemon-owner.cjs'),f.data],{windowsHide:true,stdio:['pipe','pipe','pipe']});children.push(child);let output='',errors='';const timer=setTimeout(()=>{child.kill();reject(Error('concurrent startup fixture timeout'));},10000);
-    child.stdout.on('data',part=>{output+=part;const line=output.split('\n')[0];try{const result=JSON.parse(line);clearTimeout(timer);resolve(result);}catch{}});child.stderr.on('data',part=>errors+=part);child.once('error',reject);child.once('exit',code=>{if(code){clearTimeout(timer);reject(Error(errors));}});
+    const child=spawn(process.execPath,['-e',script,path.resolve(__dirname,'../src/daemon-owner.cjs'),f.data],{windowsHide:true,stdio:['pipe','pipe','pipe']});children.push(child);let output='',errors='',settled=false;const timer=setTimeout(()=>{child.kill();reject(Error('concurrent startup fixture timeout'));},10000);
+    child.stdout.on('data',part=>{output+=part;const line=output.split('\n')[0];try{const result=JSON.parse(line);settled=true;clearTimeout(timer);resolve(result);}catch{}});child.stderr.on('data',part=>errors+=part);child.once('error',error=>{clearTimeout(timer);reject(error);});child.once('close',code=>{clearTimeout(timer);if(!settled)reject(Error(errors||'Startup fixture exited without an ownership result ('+code+')'));});
   })));
   assert.equal(results.filter(result=>result.owned).length,1);
-  for(const child of children)child.stdin.end();
-  await Promise.all(children.map(child=>child.exitCode===null?new Promise(resolve=>child.once('exit',resolve)):null));
+  await Promise.all(children.map(closeOwnedChild));
 });
 
 test('constructor failure removes its own lock and leaves an attempt-specific startup error',async t=>{
