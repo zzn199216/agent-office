@@ -273,7 +273,19 @@ namespace AgentRoomDesktop
         }
         internal Task<Dictionary<string, object>> CloseService(Dictionary<string, object> identity)
         {
-            return Invoke("desktop-close", null, CancellationToken.None, TimeoutMilliseconds, identity);
+            return CloseService(identity, CancellationToken.None, TimeoutMilliseconds);
+        }
+        internal Task<Dictionary<string, object>> CloseService(Dictionary<string, object> identity, CancellationToken cancellationToken, int timeoutMilliseconds)
+        {
+            return Invoke("desktop-close", null, cancellationToken, timeoutMilliseconds, identity);
+        }
+        internal async Task CloseForSystem(Dictionary<string, object> identity, CancellationToken cancellationToken, int timeoutMilliseconds)
+        {
+            // Persist the epoch's closed intent before any service/network
+            // verification. Both calls share the system-close cancellation.
+            Dictionary<string, object> result = await CloseService(new Dictionary<string, object> { { "activation-id", Json.Text(identity, "activation-id") } }, cancellationToken, timeoutMilliseconds);
+            if (Json.Flag(result, "running") && Json.Text(identity, "service-pid") != null) result = await CloseService(identity, cancellationToken, timeoutMilliseconds);
+            if (Json.Flag(result, "service_stop_unconfirmed")) throw new DesktopOperationException("软件已关闭并阻止后台重新启动；请检查本机诊断。", "desktop_stop_unconfirmed");
         }
         internal Task<Dictionary<string, object>> StartService(string roomId, string activationId, CancellationToken cancellationToken, int timeoutMilliseconds)
         {
@@ -356,6 +368,35 @@ namespace AgentRoomDesktop
                     finally { deadline.Cancel(); }
                 }
             }
+        }
+    }
+
+    internal static class DesktopSystemClose
+    {
+        internal const int RequestTimeoutMilliseconds = 1800;
+        internal const int WaitTimeoutMilliseconds = 2000;
+        internal static bool TryClose(FormClosingEventArgs args, Action begin, Func<CancellationToken, Task> request, Action<Exception> diagnose)
+        {
+            if (args.CloseReason != CloseReason.WindowsShutDown && args.CloseReason != CloseReason.TaskManagerClosing) return false;
+            // WinForms cannot await a system close without cancelling it. Run
+            // the CLI away from the UI context and wait only for this budget.
+            args.Cancel = false;
+            using (CancellationTokenSource deadline = new CancellationTokenSource(RequestTimeoutMilliseconds))
+            {
+                try
+                {
+                    begin();
+                    Task closing = Task.Run(() => request(deadline.Token));
+                    closing.ContinueWith(failed => { var observed = failed.Exception; }, TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously);
+                    if (!closing.Wait(WaitTimeoutMilliseconds)) throw new TimeoutException("系统正在关闭，已结束等待本机服务关闭；请检查本机诊断。");
+                }
+                catch (Exception error)
+                {
+                    try { diagnose(error is AggregateException ? error.GetBaseException() : error); } catch { }
+                }
+                finally { deadline.Cancel(); }
+            }
+            return true;
         }
     }
 
@@ -651,6 +692,14 @@ namespace AgentRoomDesktop
         {
             SaveWindow();
             if (allowClose || options.Check && !options.Smoke) return;
+            if (DesktopSystemClose.TryClose(args, () => {
+                allowClose = true; closingWindow = true; activationTimer.Stop(); windowLifetime.Cancel();
+            }, async token => {
+                // Do not wait for WebView/startup during OS shutdown. The
+                // activation alone can close a still-pending startup epoch.
+                Dictionary<string, object> identity = ownedService ?? (serviceStartupAttempted ? new Dictionary<string, object> { { "activation-id", windowActivationId } } : null);
+                if (identity != null) await cli.CloseForSystem(identity, token, DesktopSystemClose.RequestTimeoutMilliseconds);
+            }, RecordCloseError)) return;
             args.Cancel = true; if (closingWindow) return;
             closingWindow = true; activationTimer.Stop(); windowLifetime.Cancel(); view.Enabled = false; view.Visible = false;
             Text = "Agent 办公室 · 正在关闭本机服务…";
@@ -668,9 +717,13 @@ namespace AgentRoomDesktop
             }
             catch (Exception error)
             {
-                try { Diagnostic.Write(options.DataDirectory, "desktop-close-error.json", new Dictionary<string, object> { { "at", DateTime.UtcNow.ToString("o") }, { "error", error.Message }, { "code", DesktopServiceState.ErrorCode(error) } }); } catch { }
+                RecordCloseError(error);
             }
             finally { allowClose = true; Close(); }
+        }
+        private void RecordCloseError(Exception error)
+        {
+            try { Diagnostic.Write(options.DataDirectory, "desktop-close-error.json", new Dictionary<string, object> { { "at", DateTime.UtcNow.ToString("o") }, { "error", error.Message }, { "code", DesktopServiceState.ErrorCode(error) } }); } catch { }
         }
         private bool AllowedOrigin(string value)
         {

@@ -303,6 +303,15 @@ function closeFixture(t){
   const main={readControl:()=>current,apiCall:async(_dir,route,value)=>{if(route==='/api/state')return {instance_id:original.instance_id};posts.push({route,value});return {ok:true};},isControlProcessAlive:async()=>{verifications++;return alive;}};
   return {...files,lifecycle,activation,original,input,main,posts,kills,get current(){return current;},set current(value){current=value;},get verifications(){return verifications;},set alive(value){alive=value;},terminatePid:pid=>{kills.push(pid);alive=false;current=null;},isPidAlive:()=>alive,sleep:async()=>{}};
 }
+test('system close can persist its intent before attempting the verified service shutdown',async t=>{
+  const f=closeFixture(t),pending=await desktopClose(f.data,{activation_id:f.activation.id},{main:f.main});
+  assert.equal(pending.closed,true);assert.equal(pending.service_stop_unconfirmed,true);assert.equal(f.verifications,0);assert.equal(f.posts.length,0);
+  const closed=f.lifecycle.desktopIntent(f.data);assert.throws(()=>f.lifecycle.assertBackgroundAllowed(f.data),{code:'desktop_application_closed'});
+  const stateCall=f.main.apiCall;f.main.apiCall=async(...args)=>{assert.deepEqual(f.lifecycle.desktopIntent(f.data),closed);return stateCall(...args);};
+  const stopped=await desktopClose(f.data,f.input,{main:f.main,graceMs:0,isPidAlive:f.isPidAlive,sleep:f.sleep,terminatePid:f.terminatePid});
+  assert.equal(stopped.closed,true);assert.equal(stopped.running,false);assert.equal(f.posts.length,1);assert.equal(f.posts[0].route,'/api/shutdown');assert.equal(f.posts[0].value.desktop_intent_id,closed.id);
+});
+
 test('software close has a bounded fallback that signals only the repeatedly verified daemon',async t=>{
   const f=closeFixture(t),result=await desktopClose(f.data,f.input,{main:f.main,graceMs:0,isPidAlive:f.isPidAlive,sleep:f.sleep,terminatePid:f.terminatePid});
   assert.equal(result.terminated_owned_daemon,true);assert.equal(result.running,false);assert.deepEqual(f.kills,[f.original.pid]);assert.equal(f.verifications,2);assert.equal(f.posts.length,1);assert.equal(f.posts[0].value.desktop_close,true);assert.equal(f.lifecycle.desktopIntent(f.data).state,'closed');

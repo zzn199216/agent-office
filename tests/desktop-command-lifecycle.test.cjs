@@ -31,6 +31,7 @@ internal static class FixtureCli
         if (args.Length == 1 && (args[0] == "hold-pipe" || args[0] == "sentinel")) { Thread.Sleep(3000); return 0; }
         string directory = args[2], mode = File.ReadAllText(Path.Combine(directory, "mode.txt"));
         File.WriteAllText(Path.Combine(directory, "wrapper-pid.txt"), Process.GetCurrentProcess().Id.ToString());
+        if (args[0] == "desktop-close") { File.WriteAllText(Path.Combine(directory, "closed-intent.txt"), String.Join(" ", args)); File.AppendAllText(Path.Combine(directory, "close-requests.txt"), String.Join(" ", args) + "\n"); }
         if (mode == "slow") { Thread.Sleep(10000); return 0; }
         if (mode == "failure") { Console.Error.WriteLine("(node:fixture) SQLite experimental warning"); Console.Error.WriteLine("{\"error\":\"fixture specific startup failure\",\"code\":\"fixture_start_failed\"}"); return 1; }
         if (mode == "pipe-parent")
@@ -53,6 +54,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Windows.Forms;
 using AgentRoomDesktop;
 internal static class CommandTests
 {
@@ -155,6 +157,27 @@ internal static class CommandTests
         Check(pinned != null && pinned.Count == 5 && pinned["activation-id"].Equals(epoch) && pinned["service-pid"].Equals("12345") && !Json.Encode(pinned).Contains("must-not"), "close pins only lifecycle and service identity without tokens or history");
         Check(DesktopServiceState.Identity(autoStarted, Guid.NewGuid().ToString("D")) == null && DesktopServiceState.Identity(autoStarted, epoch) != null, "a fallback observation cannot adopt another window activation for close");
         Mode(directory, "normal"); await cli.Activate(epoch); await cli.StartService(null, epoch, CancellationToken.None, 5000); await cli.CloseService(pinned);
+        foreach (CloseReason reason in new CloseReason[] { CloseReason.WindowsShutDown, CloseReason.TaskManagerClosing })
+        {
+            Mode(directory, "normal"); File.WriteAllText(Path.Combine(directory, "close-requests.txt"), ""); int began = 0, failures = 0;
+            FormClosingEventArgs systemClose = new FormClosingEventArgs(reason, true);
+            Check(DesktopSystemClose.TryClose(systemClose, () => began++, token => cli.CloseForSystem(pinned, token, DesktopSystemClose.RequestTimeoutMilliseconds), error => failures++), "system close uses the bounded shutdown path");
+            Check(!systemClose.Cancel && began == 1 && failures == 0, "system close is never cancelled and requests shutdown");
+            Check(File.ReadAllText(Path.Combine(directory, "closed-intent.txt")).Contains(epoch), "system close sends the exact activation for the closed intent");
+            string[] requests = File.ReadAllLines(Path.Combine(directory, "close-requests.txt"));
+            Check(requests.Length == 2 && !requests[0].Contains("--service-pid") && requests[1].Contains("--service-pid"), "closed intent is written before attempting verified service shutdown");
+        }
+        int userRequests = 0; var userClose = new FormClosingEventArgs(CloseReason.UserClosing, true);
+        Check(!DesktopSystemClose.TryClose(userClose, () => userRequests++, token => { userRequests++; return Task.FromResult(0); }, error => userRequests++) && userClose.Cancel && userRequests == 0, "UserClosing retains its existing asynchronous cancellation path");
+        Mode(directory, "slow"); Exception shutdownError = null; var timedClose = new FormClosingEventArgs(CloseReason.WindowsShutDown, true); Stopwatch shutdownWait = Stopwatch.StartNew();
+        Check(DesktopSystemClose.TryClose(timedClose, () => {}, token => cli.CloseForSystem(pinned, token, DesktopSystemClose.RequestTimeoutMilliseconds), error => shutdownError = error), "slow shutdown is handled");
+        Check(!timedClose.Cancel && shutdownWait.ElapsedMilliseconds < 2600 && shutdownError != null, "a stalled close wrapper cannot veto or indefinitely delay Windows shutdown");
+        Check(File.ReadAllText(Path.Combine(directory, "closed-intent.txt")).Contains(epoch), "stalled shutdown still attempts the closed intent before its deadline");
+        int shutdownWrapper = Int32.Parse(File.ReadAllText(Path.Combine(directory, "wrapper-pid.txt"))); await Task.Delay(100);
+        Check(!Alive(shutdownWrapper), "system close deadline stops only its owned CLI wrapper");
+        var never = new TaskCompletionSource<int>(); var uncooperativeClose = new FormClosingEventArgs(CloseReason.TaskManagerClosing, true); shutdownWait.Restart(); shutdownError = null;
+        DesktopSystemClose.TryClose(uncooperativeClose, () => {}, token => never.Task, error => shutdownError = error);
+        Check(!uncooperativeClose.Cancel && shutdownWait.ElapsedMilliseconds < 2600 && shutdownError is TimeoutException, "even an operation ignoring cancellation is bounded for Task Manager close"); never.SetException(new Exception("late fixture failure"));
         var failedOpen = await DesktopServiceState.StartOnOpen(unchanged, null, (command, room) => {
             if (command == "desktop-start") throw new DesktopOperationException("lost startup response", "fixture_start_failed");
             return Task.FromResult(new Dictionary<string, object> { { "running", false }, { "desktop_activation_id", epoch } });
