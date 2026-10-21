@@ -6,7 +6,18 @@ const {dataDirectory,atomicWrite,sleep,RoomError,readableError,ownCommand,livePi
 const {acquireDaemonLock,releaseDaemonLock,isControlProcessAlive}=require('./daemon-owner.cjs');
 
 function argumentsOf(args){const options={},pos=[];for(let i=0;i<args.length;i++){const a=args[i];if(a.startsWith('--')){const name=a.slice(2);options[name]=args[i+1]&&!args[i+1].startsWith('--')?args[++i]:true;}else pos.push(a);}return {options,pos};}
-function readControl(dir){try{const r=JSON.parse(fs.readFileSync(path.join(dir,'control.json'),'utf8'));const u=new URL(r.url);if(u.protocol!=='http:'||u.hostname!=='127.0.0.1'||u.username||u.password||u.pathname!=='/'||u.search||u.hash||!Number.isSafeInteger(r.pid)||r.pid<=0||!livePid(r.pid))return null;if(r.owner_id){const lock=JSON.parse(fs.readFileSync(path.join(dir,'daemon.lock'),'utf8'));if(lock.owner_id!==r.owner_id||lock.pid!==r.pid)return null;}return r;}catch{return null;}}
+function readControl(dir){try{
+  const r=JSON.parse(fs.readFileSync(path.join(dir,'control.json'),'utf8')),u=new URL(r.url);
+  if(u.protocol!=='http:'||u.hostname!=='127.0.0.1'||u.username||u.password||u.pathname!=='/'||u.search||u.hash||!Number.isSafeInteger(r.pid)||r.pid<=0||!livePid(r.pid))return null;
+  let lock;try{lock=JSON.parse(fs.readFileSync(path.join(dir,'daemon.lock'),'utf8'));}catch(error){if(error.code!=='ENOENT'||r.owner_id)return null;}
+  if(lock!==undefined){
+    if(!lock||typeof lock!=='object'||Array.isArray(lock)||!Number.isSafeInteger(lock.pid)||lock.pid<=0)return null;
+    // A recovered daemon owns its generation before publishing control.json.
+    // Never send a legacy token to that new listener while publication is pending.
+    if((r.owner_id||lock.owner_id)&&(lock.owner_id!==r.owner_id||lock.pid!==r.pid))return null;
+  }
+  return r;
+}catch{return null;}}
 async function apiCall(dir,endpoint,input,timeout=35000,expectedControl){
   const control=readControl(dir);if(!control)throw new RoomError('AgentRoom 尚未启动。',503,'not_running');
   if(expectedControl&&['pid','url','token','owner_id','instance_id'].some(key=>control[key]!==expectedControl[key]))throw new RoomError('本机服务身份已经变化，请重新检查状态；没有操作接管后的服务。',409,'desktop_service_changed');

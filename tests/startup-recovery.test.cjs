@@ -23,6 +23,40 @@ async function closeOwnedChild(child){
     child.once('close',resolve);child.stdin.end();force=setTimeout(()=>child.kill(),500);deadline=setTimeout(()=>reject(Error('Owned startup fixture did not exit after termination')),3000);
   });}finally{clearTimeout(force);clearTimeout(deadline);}
 }
+async function localController(f,handler){
+  const server=require('node:http').createServer(handler);await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(0,'127.0.0.1',resolve);});
+  f.cleanups.push(()=>new Promise((resolve,reject)=>server.close(error=>error?reject(error):resolve())));return 'http://127.0.0.1:'+server.address().port;
+}
+
+test('legacy control remains compatible only until a modern daemon owns the publication generation',t=>{
+  const f=files(t),legacy={pid:process.pid,url:'http://127.0.0.1:1',token:'fixture-legacy-controller'};write(f.data,'control.json',legacy);
+  assert.deepEqual(readControl(f.data),legacy);write(f.data,'daemon.lock',{pid:process.pid});assert.deepEqual(readControl(f.data),legacy);
+  write(f.data,'daemon.lock',{pid:process.pid,owner_id:'new-generation'});assert.equal(readControl(f.data),null);
+  const modern={...legacy,owner_id:'new-generation'};write(f.data,'control.json',modern);assert.deepEqual(readControl(f.data),modern);
+  write(f.data,'daemon.lock',{pid:process.pid});assert.equal(readControl(f.data),null);
+  write(f.data,'daemon.lock',{pid:process.pid,owner_id:'other-generation'});assert.equal(readControl(f.data),null);
+  write(f.data,'daemon.lock',{pid:999999999,owner_id:modern.owner_id});assert.equal(readControl(f.data),null);
+  fs.unlinkSync(path.join(f.data,'daemon.lock'));assert.equal(readControl(f.data),null);
+  write(f.data,'control.json',legacy);assert.deepEqual(readControl(f.data),legacy);
+  for(const damaged of ['{','null','[]','{}']){fs.writeFileSync(path.join(f.data,'daemon.lock'),damaged);assert.equal(readControl(f.data),null);}
+  const original=fs.readFileSync;fs.readFileSync=function(file,...args){if(file===path.join(f.data,'daemon.lock'))throw Object.assign(Error('Synthetic lock read denied'),{code:'EACCES'});return original.call(this,file,...args);};
+  try{assert.equal(readControl(f.data),null);}finally{fs.readFileSync=original;}
+});
+
+test('recovery waits for modern control publication instead of sending a legacy token to the new listener',async t=>{
+  const f=files(t),requests=[],instance='fixture-published-instance',current={pid:process.pid,owner_id:'new-generation',token:'fixture-current-controller',instance_id:instance};
+  current.url=await localController(f,(request,response)=>{requests.push(request.headers.authorization);const authenticated=request.headers.authorization==='Bearer '+current.token;response.writeHead(authenticated?200:401,{'Content-Type':'application/json'});response.end(JSON.stringify(authenticated?{instance_id:instance}:{error:'fixture wrong controller',code:'unauthorized'}));});
+  write(f.data,'daemon.lock',{pid:current.pid,owner_id:current.owner_id});write(f.data,'control.json',{pid:current.pid,url:current.url,token:'fixture-legacy-controller',instance_id:instance});let spawns=0;
+  const result=await ensureServer(f.data,{timeout:1500,spawn:()=>{spawns++;assert.equal(readControl(f.data),null);return failedChild(child=>{write(f.data,'control.json',current);child.emit('exit',0);});}});
+  assert.deepEqual(result,current);assert.equal(spawns,1);assert.deepEqual(requests,['Bearer '+current.token]);
+});
+
+test('a matching published generation still rejects real authentication and instance mismatches without spawning a replacement',async t=>{
+  const f=files(t),current={pid:process.pid,owner_id:'verified-generation',token:'fixture-current-controller',instance_id:'fixture-original-instance'};let status=401,value={error:'fixture rejected authentication',code:'unauthorized'},requests=0;
+  current.url=await localController(f,(_request,response)=>{requests++;response.writeHead(status,{'Content-Type':'application/json'});response.end(JSON.stringify(value));});write(f.data,'daemon.lock',{pid:current.pid,owner_id:current.owner_id});write(f.data,'control.json',current);
+  for(status of [401,403])await assert.rejects(ensureServer(f.data,{timeout:500,spawn:()=>assert.fail('Authentication rejection must not start another daemon')}),{code:'instance_control_mismatch'});
+  status=200;value={instance_id:'fixture-foreign-instance'};await assert.rejects(ensureServer(f.data,{timeout:500,spawn:()=>assert.fail('An instance mismatch must not start another daemon')}),{code:'instance_control_mismatch'});assert.equal(requests,3);
+});
 
 test('a transient COMMIT reader lock retries only COMMIT and preserves the acquired owner',async t=>{
   const f=files(t),shared=contention(f),original=DatabaseSync.prototype.exec;let attempts=0,busy=0,identities=0;
