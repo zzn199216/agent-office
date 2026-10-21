@@ -4,7 +4,8 @@ dist/
 dev/
 dev.previous/
 # Historical design references remain recoverable from Git history.
-/design/
+/design/concepts/2026-10-13/
+/design/reference/qwen-capybara-official-ambassador.png
 release/
 output/
 .playwright-cli/
