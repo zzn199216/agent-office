@@ -47,7 +47,7 @@ function offlineState(dir,roomId){
 }
 async function desktopState(dir,input={},options={}){
   operationTimeout(options);
-  const offline=offlineState(dir,input.room_id),main=options.main||require('./main.cjs'),control=main.readControl(dir);
+  const intent=require('./desktop-lifecycle.cjs').desktopIntent(dir),offline={...offlineState(dir,input.room_id),desktop_activation_id:intent?.state==='active'?intent.id:null},main=options.main||require('./main.cjs'),control=main.readControl(dir);
   operationTimeout(options);
   if(!control)return offline;
   let snapshot;
@@ -61,11 +61,12 @@ async function desktopState(dir,input={},options={}){
   const [history,team]=selected?await Promise.all([main.apiCall(dir,'/api/chat/rooms/'+selected,undefined,operationTimeout(options)),main.apiCall(dir,'/api/team?room_id='+encodeURIComponent(selected),undefined,operationTimeout(options))]):[null,null];
   operationTimeout(options);
   const busy=activity(snapshot),update=olderVersion(snapshot.version);
-  return {running:true,url:control.url,service_pid:control.pid,service_owner_id:control.owner_id||null,initialized:true,busy,snapshot,history,team,selected_room_id:selected,client_version:VERSION,update_available:update,can_update:update&&!busy.is_busy};
+  return {running:true,url:control.url,service_pid:control.pid,service_owner_id:control.owner_id||null,desktop_activation_id:offline.desktop_activation_id,initialized:true,busy,snapshot,history,team,selected_room_id:selected,client_version:VERSION,update_available:update,can_update:update&&!busy.is_busy};
 }
 async function desktopStart(dir,input={},options={}){
   roomInput(input.room_id);const deadline=Math.min(options.deadline??Infinity,(options.clock?.()??Date.now())+30000);options={...options,deadline};
   const main=options.main||require('./main.cjs'),before=await desktopState(dir,input,{...options,main});
+  const activation=require('./desktop-lifecycle.cjs').activateDesktop(dir,input.activation_id);
   if(before.update_available){
     if(before.busy.is_busy)throw new RoomError('旧后台正在处理任务。先完成或停止当前工作，再更新后台；没有中断任务。',409,'desktop_update_busy');
     await desktopStop(dir,input,{...options,main,authenticatedState:before});
@@ -73,7 +74,49 @@ async function desktopStart(dir,input={},options={}){
   await boundedOperation(()=>main.ensureServer(dir,{deadline}),options);const after=await desktopState(dir,input,{...options,main});
   if(after.running!==true)throw new RoomError(after.connection_error||'本机服务尚未接通。已保留原办公室记录，请查看启动诊断后重试。',503,'desktop_start_unconfirmed');
   if(after.update_available)throw new RoomError('后台仍是旧版本，更新尚未完成。请保留房间记录并重试更新后台。',409,'desktop_update_incomplete');
-  return after;
+  return {...after,desktop_activation_id:activation.id};
+}
+async function desktopActivate(dir,input={},options={}){
+  if(!ROOM_ID.test(input.activation_id||''))throw new RoomError('软件窗口的启动标识无效。',409,'desktop_service_changed');
+  const state=await desktopState(dir,{},options),activation=require('./desktop-lifecycle.cjs').activateDesktop(dir,input.activation_id);
+  return {...state,desktop_activation_id:activation.id};
+}
+function closeIdentity(input){
+  const expected=input?.service;
+  let url;try{url=new URL(expected?.url);}catch{}
+  if(!expected||!Number.isSafeInteger(expected.pid)||expected.pid<=0||!ROOM_ID.test(expected.instance_id||'')||expected.owner_id!=null&&!ROOM_ID.test(expected.owner_id)||!ROOM_ID.test(input.activation_id||'')||!url||url.protocol!=='http:'||url.hostname!=='127.0.0.1'||url.username||url.password||url.pathname!=='/'||url.search||url.hash)throw new RoomError('关闭窗口时缺少已核对的本机服务身份；没有停止其他服务。',409,'desktop_service_changed');
+  return {...expected,owner_id:expected.owner_id||null};
+}
+function matchesClose(control,expected){return !!control&&control.pid===expected.pid&&control.instance_id===expected.instance_id&&(control.owner_id||null)===expected.owner_id&&control.url===expected.url;}
+async function desktopClose(dir,input={},options={}){
+  if(!ROOM_ID.test(input.activation_id||''))throw new RoomError('关闭窗口时缺少本窗口的状态标识。',409,'desktop_service_changed');
+  const clock=options.clock||Date.now,main=options.main||require('./main.cjs'),lifecycle=require('./desktop-lifecycle.cjs');
+  options={...options,deadline:Math.min(options.deadline??Infinity,clock()+25000)};
+  let control=main.readControl(dir);
+  if(!control){lifecycle.markDesktopClosed(dir,{expectedActivation:input.activation_id,control:input.service?closeIdentity(input):null});return {running:false,closed:true};}
+  if(!input.service){lifecycle.markDesktopClosed(dir,{expectedActivation:input.activation_id,control:null});return {running:true,closed:true,service_stop_unconfirmed:true};}
+  const expected=closeIdentity(input);
+  const verified=async()=>{const current=main.readControl(dir);if(!matchesClose(current,expected)||!main.isControlProcessAlive||!await boundedOperation(()=>main.isControlProcessAlive(dir,current),options)||!matchesClose(main.readControl(dir),expected))throw new RoomError('服务身份已经变化，没有停止接管后的服务。',409,'desktop_service_changed');return current;};
+  control=await verified();const state=await main.apiCall(dir,'/api/state',undefined,operationTimeout(options),control);
+  if(state.instance_id!==expected.instance_id)throw new RoomError('关闭窗口时办公室实例已经变化，没有停止其他服务。',409,'desktop_service_changed');
+  const intent=lifecycle.markDesktopClosed(dir,{expectedActivation:input.activation_id,control:expected});
+  lifecycle.assertClosedIntent(dir,intent.id);
+  await main.apiCall(dir,'/api/shutdown',{desktop_close:true,desktop_intent_id:intent.id},operationTimeout(options),control);
+  const alive=options.isPidAlive?()=>options.isPidAlive(control.pid):()=>main.isControlProcessAlive(dir,control),pause=options.sleep||sleep;
+  const until=Math.min(options.deadline-7000,clock()+(options.graceMs??12000));let running=await boundedOperation(alive,options);
+  while(running&&clock()<until){await pause(operationTimeout(options,100));running=await boundedOperation(alive,options);}
+  let terminated=false;
+  if(running){
+    lifecycle.assertClosedIntent(dir,intent.id);await verified();
+    lifecycle.assertClosedIntent(dir,intent.id);
+    // Only this pinned daemon may be terminated after bounded graceful cleanup.
+    // Never signal its process tree or a personal agent/client application.
+    (options.terminatePid||process.kill)(control.pid);terminated=true;
+    for(let i=0;i<30&&running;i++){await pause(operationTimeout(options,100));running=await boundedOperation(alive,options);}
+  }
+  if(running)throw new RoomError('本机服务正在结束清理，关闭意图已保留，不会自动重新启动。',409,'desktop_stop_pending');
+  const current=main.readControl(dir);if(current&&!matchesClose(current,expected))throw new RoomError('已有其他服务接管，本次未停止新的服务。',409,'desktop_service_changed');
+  return {running:false,closed:true,terminated_owned_daemon:terminated};
 }
 async function desktopStop(dir,input={},options={}){
   options={...options,deadline:Math.min(options.deadline??Infinity,(options.clock?.()??Date.now())+25000)};
@@ -89,4 +132,4 @@ async function desktopStop(dir,input={},options={}){
   const current=main.readControl(dir);if(current && !sameControl(current,state))throw new RoomError('其他服务已接管本机入口，未停止新的服务。请刷新当前状态。',409,'desktop_service_changed');
   return offlineState(dir,input.room_id);
 }
-module.exports={activity,offlineState,desktopState,desktopStart,desktopStop,olderVersion};
+module.exports={activity,offlineState,desktopState,desktopActivate,desktopStart,desktopStop,desktopClose,olderVersion};

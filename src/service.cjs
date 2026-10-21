@@ -36,7 +36,7 @@ class RoomService extends EventEmitter {
   changed() { this.revision++; this.emit('change', this.revision); }
   flushExports() { try { this.store.exportPending(); this.exportError = null; } catch { this.exportError = '部分 Markdown 记录暂未写入，后台会继续补写。'; } }
   snapshot() {
-    return { version: require('./util.cjs').VERSION, instance_id:this.runtime.instanceId,runtime:this.runtime.offlineSnapshot(),chat:this.chat.snapshot(),office:this.office.snapshot(),secretaries:this.secretary.snapshot(),activeSetup:{onboarding:this.onboarding.jobs.size,runtime_installs:this.runtimeInstaller.jobs.size,launch:this.launch.jobs.size,connection_assists:this.connectionAssist?.jobs.size||0}, projects: this.store.projects(), discussions: this.store.discussions(), activeRequest: this.active?.requestId || null, approvals: [...this.approvals.values()].map(a => a.public), approval_reviews:this.liveApprovalReviews(), grok: this.vault.status(), codex: this.codexHealth || { connected: false, executable: this.codex.executable || null }, revision: this.revision, exportError: this.exportError, dataDirectory: this.store.dir };
+    return { version: require('./util.cjs').VERSION, instance_id:this.runtime.instanceId,service_closing:this.closing,runtime:this.runtime.offlineSnapshot(),chat:this.chat.snapshot(),office:this.office.snapshot(),secretaries:this.secretary.snapshot(),activeSetup:{onboarding:this.onboarding.jobs.size,runtime_installs:this.runtimeInstaller.jobs.size,launch:this.launch.jobs.size,connection_assists:this.connectionAssist?.jobs.size||0}, projects: this.store.projects(), discussions: this.store.discussions(), activeRequest: this.active?.requestId || null, approvals: [...this.approvals.values()].map(a => a.public), approval_reviews:this.liveApprovalReviews(), grok: this.vault.status(), codex: this.codexHealth || { connected: false, executable: this.codex.executable || null }, revision: this.revision, exportError: this.exportError, dataDirectory: this.store.dir };
   }
   history(discussionId) { return { discussion: this.store.discussion(discussionId), requests: this.store.history(discussionId).map(r => ({ ...publicRequest(r), delivery: this.store.deliveryFor(r.id) })) }; }
   async health() {
@@ -294,8 +294,15 @@ class RoomService extends EventEmitter {
     if (!fs.existsSync(executable) || !/[/\\]codex(\.exe)?$/i.test(executable)) throw new RoomError('请选择已安装的 codex 可执行文件。');
     await this.codex.close(); this.store.setting('codex_path', executable); this.codex = new CodexClient({ executable,dataDir:this.store.dir,authenticationMode:'shared-cache' }); this.codexHealth = null; return this.health();
   }
-  async close() {
-    this.closing = true; this.team.close();this.connectionAssist?.stop?.(); clearInterval(this.exportTimer);clearInterval(this.runtimeTimer);this.runtime.releaseWorker(this.runtimeRef); this.active?.abort.abort();await this.onboarding.close();await this.connectionAssist?.close?.();await this.runtimeInstaller.close();await this.launch.close();await this.bridge.close();await this.desktop.close();await this.chat.close(); await this.codex.close();
+  close(){if(!this.closePromise)this.closePromise=this.closeWork();return this.closePromise;}
+  async closeWork() {
+    this.closing = true; this.team.close();this.connectionAssist?.stop?.(); clearInterval(this.exportTimer);clearInterval(this.runtimeTimer);this.runtime.releaseWorker(this.runtimeRef); this.active?.abort.abort();
+    // Abort owned work before waiting for setup managers that may themselves be
+    // waiting on a native handshake or installer. Their durable records stay open
+    // until every manager has finished cleanup.
+    for(const active of this.chat.active.values())active.abort.abort();
+    for(const notification of this.chat.notifications.values())notification.abort.abort();
+    await Promise.allSettled([this.onboarding.close(),this.connectionAssist?.close?.(),this.runtimeInstaller.close(),this.launch.close(),this.bridge.close(),this.desktop.close(),this.chat.close(),this.codex.close()]);
     for (let i=0; this.pumping && i<40; i++) await sleep(100);
     this.flushExports(); this.store.close();
   }

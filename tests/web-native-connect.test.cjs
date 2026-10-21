@@ -10,7 +10,7 @@ function fixture({provider='qwen-desktop',adapter='mcp',evidence={},verifiedAt='
   const member={id:'member/native',name:'本人同事',adapter,provider,verified_at:verifiedAt,runtime_state:{connection_evidence:evidence}};
   const client={kind:'native_desktop',provider,native_state:{configured:false,can_wake:false},connection_evidence:evidence};
   const context=vm.createContext({$,roomId:'room:one',projectId:'project',legacyId:null,secretaryNavigation:null,secretaryConnectJob:null,secretaryConnectRoom:null,onboardingJobs:new Map(),onboardingFeedback:new Map(),selectedSetupMember:member.id,setupData:{member,client},nativeSetupPending:null,nativeSetupFailure:null,lastSetupSignature:'',webConnected:true,grokSetupWatch:null,grokSetupWatchTimer:null,grokSetupWatchSequence:0,grokSetupWatchError:'',
-    setTimeout:(callback,ms)=>{timers.set(++timerId,{callback,ms});return timerId;},clearTimeout:id=>timers.delete(id),
+    setUITimeout:(callback,ms)=>{timers.set(++timerId,{callback,ms});return timerId;},clearUITimeout:id=>timers.delete(id),
     state:{chat:{members:[member]}},toast:value=>notices.push(value),memberStatus:()=>({tone:'online',label:'旧协议已验证'}),memberPresence:()=>({status:'unknown',label:'在线性未知',canWake:false}),time:value=>String(value),
     refresh:async()=>{refreshes++;},refreshOnboarding:async()=>{onboardingRefreshes++;},renderLaunch:()=>{},showBridge:async id=>bridges.push(id),showResume:async()=>{},
     openInspector:()=>{},runConnectionDoctor:async()=>{},clientConfigLabel:()=>'',clientImportKind:()=>'',navigator:{clipboard:{writeText:async value=>copied.push(value)}},action:async callback=>callback(),

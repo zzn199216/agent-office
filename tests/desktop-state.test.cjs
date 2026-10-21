@@ -6,7 +6,7 @@ const {spawnSync}=require('node:child_process');
 const {DatabaseSync}=require('node:sqlite');
 const {RoomService}=require('../src/service.cjs');
 const {createServer}=require('../src/http.cjs');
-const {offlineState,desktopState,desktopStart,desktopStop,activity}=require('../src/desktop-state.cjs');
+const {offlineState,desktopState,desktopStart,desktopStop,desktopClose,activity}=require('../src/desktop-state.cjs');
 const {apiCall,readControl}=require('../src/main.cjs');
 const {fixture,FakeCodex,FakeVault}=require('./helpers.cjs');
 const {id,sleep,VERSION}=require('../src/util.cjs');
@@ -27,7 +27,7 @@ test('a completed startup command must still prove a running service rather than
   const files=fixture();t.after(()=>cleanup(files));let starts=0,calls=0;
   const main={readControl:()=>null,ensureServer:async()=>{starts++;return {pid:12345,url:'http://127.0.0.1:1'};},apiCall:async()=>{calls++;throw Error('No authenticated service');}};
   await assert.rejects(desktopStart(files.data,{}, {main}),error=>error.code==='desktop_start_unconfirmed'&&error.status===503);
-  assert.equal(starts,1);assert.equal(calls,0);assert.equal(fs.existsSync(files.data),false);
+  assert.equal(starts,1);assert.equal(calls,0);assert.equal(fs.existsSync(path.join(files.data,'room.sqlite')),false);assert.equal(require('../src/desktop-lifecycle.cjs').desktopIntent(files.data).state,'active');
 });
 test('startup cannot report success when its returned control still fails the authenticated state probe',async t=>{
   const files=fixture(),saved=await seed(files);t.after(()=>cleanup(files));let started=false,starts=0;
@@ -40,7 +40,7 @@ test('desktop start passes one total deadline to startup and cannot report succe
   const files=fixture();t.after(()=>cleanup(files));let time=1000,starts=0;
   const main={readControl:()=>null,apiCall:async()=>assert.fail('there is no service'),ensureServer:async(_dir,options)=>{starts++;assert.equal(options.deadline,31000);time=31001;}};
   await assert.rejects(desktopStart(files.data,{}, {main,clock:()=>time}),{code:'desktop_operation_timeout'});
-  assert.equal(starts,1);assert.equal(fs.existsSync(files.data),false);
+  assert.equal(starts,1);assert.equal(fs.existsSync(path.join(files.data,'room.sqlite')),false);assert.equal(require('../src/desktop-lifecycle.cjs').desktopIntent(files.data).state,'active');
   time=1000;await assert.rejects(desktopStart(files.data,{}, {main,clock:()=>time,deadline:999}),{code:'desktop_operation_timeout'});assert.equal(starts,1);
 });
 
@@ -281,9 +281,61 @@ test('an unfinished POST body cannot admit work after an idle shutdown was accep
 
 test('member entry cards cannot use native desktop or service controls and do not start a helper',async t=>{
   const files=fixture();t.after(()=>cleanup(files));const v=await seed(files),before=databaseState(files.data),source=path.resolve(__dirname,'../src/main.cjs');
-  for(const command of ['desktop','desktop-state','desktop-start','desktop-stop']){
+  for(const command of ['desktop','desktop-state','desktop-start','desktop-stop','desktop-close']){
     const result=spawnSync(process.execPath,[source,command,'--data-dir',files.data,'--entry',v.entry],{encoding:'utf8',windowsHide:true,timeout:10000,env:{...process.env,AGENTROOM_DATA_DIR:files.data}});
     assert.equal(result.status,1);assert.equal(result.stdout.trim(),'');const error=JSON.parse(result.stderr.trim());assert.equal(error.code,'resume_scope_mismatch');assert.equal(fs.existsSync(path.join(files.data,'daemon.lock')),false);
   }
   assert.deepEqual(databaseState(files.data),before);
+});
+
+test('closing a busy software window cancels its owned handshake before waiting for onboarding and preserves its records',async t=>{
+  const v=await httpFixture(t),started=await desktopStart(v.data,{room_id:v.first.id},{main:v.main}),abort=new AbortController(),runningService=v.service;let completed=false;
+  const work=new Promise(resolve=>abort.signal.addEventListener('abort',()=>{runningService.chat.active.delete(v.backend.id);completed=true;resolve();},{once:true}));
+  runningService.chat.active.set(v.backend.id,{abort,roomId:v.first.id,connecting:true});runningService.onboarding.jobs.set('close-fixture',work);
+  const identity={activation_id:started.desktop_activation_id,service:{pid:started.service_pid,owner_id:started.service_owner_id,instance_id:started.snapshot.instance_id,url:started.url}},before=Date.now();
+  const result=await desktopClose(v.data,identity,{main:{...v.main,isControlProcessAlive:async()=>v.online},isPidAlive:()=>v.online||!completed,sleep:v.sleep,terminatePid:()=>assert.fail('graceful fixture must not be killed')});
+  assert.equal(result.closed,true);assert.equal(result.running,false);assert.equal(completed,true);assert.ok(Date.now()-before<5000,'close cannot wait for the 120-second setup deadline');assert.equal(require('../src/desktop-lifecycle.cjs').desktopIntent(v.data).state,'closed');
+  const saved=offlineState(v.data,v.first.id);assert.equal(saved.snapshot.instance_id,v.instance);assert.equal(saved.history.participants.find(member=>member.id===v.backend.id).native_thread_id,v.thread);assert.equal(saved.history.messages[0].id,v.question.id);
+});
+
+function closeFixture(t){
+  const files=fixture();t.after(()=>cleanup(files));const lifecycle=require('../src/desktop-lifecycle.cjs'),activation=lifecycle.activateDesktop(files.data),original={pid:12345,owner_id:id(),instance_id:id(),url:'http://127.0.0.1:47831'},input={activation_id:activation.id,service:{...original}},posts=[],kills=[];let current={...original},alive=true,verifications=0;
+  const main={readControl:()=>current,apiCall:async(_dir,route,value)=>{if(route==='/api/state')return {instance_id:original.instance_id};posts.push({route,value});return {ok:true};},isControlProcessAlive:async()=>{verifications++;return alive;}};
+  return {...files,lifecycle,activation,original,input,main,posts,kills,get current(){return current;},set current(value){current=value;},get verifications(){return verifications;},set alive(value){alive=value;},terminatePid:pid=>{kills.push(pid);alive=false;current=null;},isPidAlive:()=>alive,sleep:async()=>{}};
+}
+test('software close has a bounded fallback that signals only the repeatedly verified daemon',async t=>{
+  const f=closeFixture(t),result=await desktopClose(f.data,f.input,{main:f.main,graceMs:0,isPidAlive:f.isPidAlive,sleep:f.sleep,terminatePid:f.terminatePid});
+  assert.equal(result.terminated_owned_daemon,true);assert.equal(result.running,false);assert.deepEqual(f.kills,[f.original.pid]);assert.equal(f.verifications,2);assert.equal(f.posts.length,1);assert.equal(f.posts[0].value.desktop_close,true);assert.equal(f.lifecycle.desktopIntent(f.data).state,'closed');
+});
+test('a replaced control or process birth cannot be killed or overwritten by closing an old window',async t=>{
+  for(const replacementAt of ['before-close','during-birth-check','failed-birth-proof']){
+    const f=closeFixture(t);if(replacementAt==='before-close')f.current={...f.original,owner_id:id(),pid:54321};
+    f.main.isControlProcessAlive=async()=>{if(replacementAt==='failed-birth-proof')return false;if(replacementAt==='during-birth-check'&&f.posts.length)f.current={...f.original,owner_id:id(),pid:54321};return true;};
+    await assert.rejects(desktopClose(f.data,f.input,{main:f.main,graceMs:0,isPidAlive:f.isPidAlive,sleep:f.sleep,terminatePid:f.terminatePid}),{code:'desktop_service_changed'});assert.deepEqual(f.kills,[]);
+    if(replacementAt!=='during-birth-check'){assert.equal(f.posts.length,0);assert.equal(f.lifecycle.desktopIntent(f.data).state,'active');}
+  }
+});
+test('reopening during the final birth check invalidates an old close before its termination fallback',async t=>{
+  const f=closeFixture(t);let latest;
+  f.main.isControlProcessAlive=async()=>{if(f.posts.length)latest=f.lifecycle.activateDesktop(f.data);return true;};
+  await assert.rejects(desktopClose(f.data,f.input,{main:f.main,graceMs:0,isPidAlive:f.isPidAlive,sleep:f.sleep,terminatePid:f.terminatePid}),{code:'desktop_service_changed'});assert.deepEqual(f.kills,[]);assert.equal(f.lifecycle.desktopIntent(f.data).id,latest.id);assert.equal(f.lifecycle.desktopIntent(f.data).state,'active');
+});
+test('closing before startup returns blocks the late spawn and reports an unbound daemon without signalling it',async t=>{
+  for(const unbound of [false,true]){
+    const f=closeFixture(t);if(!unbound)f.current=null;
+    const result=await desktopClose(f.data,{activation_id:f.activation.id},{main:f.main,terminatePid:f.terminatePid});assert.equal(result.closed,true);assert.equal(result.running,unbound);assert.equal(result.service_stop_unconfirmed,unbound?true:undefined);assert.deepEqual(f.kills,[]);assert.equal(f.posts.length,0);
+    let created=0;await assert.rejects(require('../src/main.cjs').ensureServer(f.data,{spawn:()=>{created++;}}),{code:'desktop_application_closed'});await assert.rejects(require('../src/main.cjs').serve(f.data,{serviceFactory:()=>{created++;}}),{code:'desktop_application_closed'});assert.equal(created,0);assert.equal(fs.existsSync(path.join(f.data,'room.sqlite')),false);
+  }
+});
+test('activation before WebView initialization permits immediate close without ever starting a daemon',async t=>{
+  const files=fixture();t.after(()=>cleanup(files));const epoch=id(),{desktopActivate}=require('../src/desktop-state.cjs');let starts=0;
+  const main={readControl:()=>null,ensureServer:async()=>{starts++;},apiCall:async()=>assert.fail('no daemon exists before startup')};
+  const opened=await desktopActivate(files.data,{activation_id:epoch},{main});assert.equal(opened.desktop_activation_id,epoch);assert.equal(opened.running,false);assert.equal(starts,0);assert.equal(fs.existsSync(path.join(files.data,'room.sqlite')),false);
+  const closed=await desktopClose(files.data,{activation_id:epoch},{main});assert.equal(closed.closed,true);await assert.rejects(desktopStart(files.data,{activation_id:epoch},{main}),{code:'desktop_application_closed'});assert.equal(starts,0);assert.equal(require('../src/desktop-lifecycle.cjs').desktopIntent(files.data).state,'closed');
+});
+test('a closed software intent rejects new HTTP work and a stale shutdown cannot cross a new open',async t=>{
+  const v=await httpFixture(t,{closeOnShutdown:false});await v.start();const lifecycle=require('../src/desktop-lifecycle.cjs'),activation=lifecycle.activateDesktop(v.data),intent=lifecycle.markDesktopClosed(v.data,{expectedActivation:activation.id,control:null});
+  await assert.rejects(apiCall(v.data,'/api/chat/messages',{room_id:v.first.id,sender_id:'user',text:'must stay closed',idempotency_key:'closed-window'}),{code:'desktop_application_closed'});assert.equal((await apiCall(v.data,'/api/state')).instance_id,v.instance);
+  const mcp=require('../src/mcp-http.cjs').createQwenMcpConfig(v.control.url,v.card).mcpServers.agentroom.url,response=await fetch(mcp,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({jsonrpc:'2.0',id:1,method:'tools/call',params:{name:'agentroom_chat_post',arguments:{text:'must stay closed'}}})});assert.equal(response.status,503);assert.equal((await response.json()).error.data.code,'desktop_application_closed');
+  lifecycle.activateDesktop(v.data);await assert.rejects(apiCall(v.data,'/api/shutdown',{desktop_close:true,desktop_intent_id:intent.id}),{code:'desktop_service_changed'});assert.equal(v.shutdowns,0);assert.equal(v.service.closing,false);
 });

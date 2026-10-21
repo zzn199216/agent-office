@@ -39,7 +39,10 @@ function createServer(service,{token,port=47831,onShutdown}={}) {
     const origins=hosts.map(h=>`http://${h}`);
     if(req.headers.origin && !origins.includes(req.headers.origin)) return json(res,{error:'不接受跨站请求。'},403);
     let pathname;try{pathname=new URL(req.url,`http://127.0.0.1:${actualPort}`).pathname;}catch{return json(res,{error:'访问地址无效。'},400);}
-    if(pathname.startsWith('/mcp/')){await mcpHttp.handle(req,res,new URL(req.url,`http://127.0.0.1:${actualPort}`));return;}
+    if(pathname.startsWith('/mcp/')){
+      if(req.method==='POST')try{require('./desktop-lifecycle.cjs').assertBackgroundAllowed(service.store.dir);}catch(error){return json(res,{jsonrpc:'2.0',id:null,error:{code:-32000,message:error.message,data:{code:error.code}}},error.status||503);}
+      await mcpHttp.handle(req,res,new URL(req.url,`http://127.0.0.1:${actualPort}`));return;
+    }
     const auth=req.headers.authorization?.startsWith('Bearer ')?req.headers.authorization.slice(7):'';
     const cookies=(req.headers.cookie || '').split(';').map(s=>s.trim()).find(s=>s.startsWith('agentroom_session='));
     const cookie=cookies?cookies.slice('agentroom_session='.length):'';
@@ -50,7 +53,7 @@ function createServer(service,{token,port=47831,onShutdown}={}) {
       const type=pathname.endsWith('.png')?'image/png':pathname.endsWith('.webp')?'image/webp':pathname.endsWith('.json')?'application/json; charset=utf-8':'image/svg+xml; charset=utf-8';
       res.setHeader('Content-Type',type);res.setHeader('Content-Security-Policy',"default-src 'none'; style-src 'unsafe-inline'; sandbox");res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Cache-Control','no-store');return res.end(content);
     }
-    const staticFiles={'/':'index.html','/app.js':'app.js','/desktop.js':'desktop.js','/office.js':'office.js','/office.css':'office.css','/style.css':'style.css'};
+    const staticFiles={'/':'index.html','/app.js':'app.js','/desktop.js':'desktop.js','/page-activity.js':'page-activity.js','/office.js':'office.js','/office.css':'office.css','/style.css':'style.css'};
     if(req.method==='GET' && staticFiles[pathname]) {
       if(pathname==='/')res.setHeader('Set-Cookie',`agentroom_session=${token}; HttpOnly; SameSite=Strict; Path=/`);
       res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
@@ -58,6 +61,7 @@ function createServer(service,{token,port=47831,onShutdown}={}) {
     }
     if(!authorized)return json(res,{error:'请从本机 AgentRoom 界面或 CLI 访问。'},401);
     try {
+      if(req.method==='POST'&&pathname!=='/api/shutdown')require('./desktop-lifecycle.cjs').assertBackgroundAllowed(service.store.dir);
       if(service.closing&&req.method==='POST'&&pathname!=='/api/shutdown')throw new RoomError('服务正在停止，新的操作尚未开始。',503,'service_stopping');
       if(req.method==='GET' && pathname==='/api/state')return json(res,service.snapshot());
       const assistDocument=pathname.match(/^\/api\/connection-assists\/([a-f0-9-]{36})\/document$/i);
@@ -130,6 +134,7 @@ function createServer(service,{token,port=47831,onShutdown}={}) {
       if(req.method==='GET' && pathname.startsWith('/api/threads/'))return json(res,await service.codex.list(service.store.project(pathname.slice('/api/threads/'.length))));
       if(req.method!=='POST')throw new RoomError('没有这个接口。',404);
       const input=await body(req,pathname==='/api/chat/messages'?12*1024*1024:pathname==='/api/office'?1000000:pathname==='/api/appearance'?360000:150000);
+      if(pathname!=='/api/shutdown')require('./desktop-lifecycle.cjs').assertBackgroundAllowed(service.store.dir);
       if(service.closing&&pathname!=='/api/shutdown')throw new RoomError('服务正在停止，新的操作尚未开始。',503,'service_stopping');
       const roomArchive=pathname.match(/^\/api\/chat\/rooms\/([a-f0-9-]{36})\/(archive|restore)$/i);
       if(roomArchive){const route=new URL(req.url,'http://127.0.0.1');if(route.search||!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).length)throw new RoomError('房间归档请求范围无效。',400,'room_archive_input_invalid');return json(res,require('./room-lifecycle.cjs').archiveRoom(service,roomArchive[1],roomArchive[2]==='archive'));}
@@ -204,8 +209,9 @@ function createServer(service,{token,port=47831,onShutdown}={}) {
       if(pathname==='/api/folder-picker')return json(res,await folderPicker());
       if(pathname.startsWith('/api/approvals/'))return json(res,service.respondApproval(pathname.slice('/api/approvals/'.length),input));
       if(pathname==='/api/shutdown'){
+        if(input.desktop_close===true)require('./desktop-lifecycle.cjs').assertClosedIntent(service.store.dir,input.desktop_intent_id);
         if(input.idle_only===true&&require('./desktop-state.cjs').activity(service.snapshot()).is_busy)throw new RoomError('仍有任务或安装正在进行。请先结束或取消这些任务，再停止服务。',409,'desktop_service_busy');
-        if(input.idle_only===true)service.closing=true;
+        service.closing=true;
         json(res,{ok:true});setTimeout(()=>onShutdown?.(),100);return;
       }
       if(m){

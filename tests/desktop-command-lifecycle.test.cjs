@@ -66,7 +66,7 @@ internal static class CommandTests
         while (!File.Exists(file) && elapsed.ElapsedMilliseconds < 3000) await Task.Delay(10);
         Check(File.Exists(file), "owned fixture wrapper actually started");
     }
-    private static async Task Run(string directory)
+    private static async Task Run(string directory, string mapped, string physical)
     {
         string fixture = Path.Combine(directory, "AgentRoom.exe");
         DesktopCli cli = new DesktopCli(directory, fixture);
@@ -144,11 +144,45 @@ internal static class CommandTests
         int unexpectedStarts = 0;
         var unchanged = new Dictionary<string, object> { { "can_update", false }, { "running", false } };
         Check(Object.ReferenceEquals(await DesktopServiceState.UpdateIfAvailable(unchanged, null, (command, room) => { unexpectedStarts++; return Task.FromResult(initial); }), unchanged) && unexpectedStarts == 0, "existing non-update activation behavior is preserved");
+        string epoch = Guid.NewGuid().ToString("D"), instance = Guid.NewGuid().ToString("D"), owner = Guid.NewGuid().ToString("D");
+        int automaticStarts = 0;
+        var autoStarted = await DesktopServiceState.StartOnOpen(unchanged, "selected", (command, room) => {
+            Check(command == "desktop-start" && room == "selected", "normal software open starts the saved room without another click"); automaticStarts++;
+            return Task.FromResult(new Dictionary<string, object> { { "running", true }, { "desktop_activation_id", epoch }, { "url", "http://127.0.0.1:47831" }, { "service_pid", 12345 }, { "service_owner_id", owner }, { "snapshot", new Dictionary<string, object> { { "instance_id", instance } } }, { "token", "must-not-be-a-process-argument" } });
+        });
+        Check(automaticStarts == 1, "window activation has one automatic start");
+        var pinned = DesktopServiceState.Identity(autoStarted);
+        Check(pinned != null && pinned.Count == 5 && pinned["activation-id"].Equals(epoch) && pinned["service-pid"].Equals("12345") && !Json.Encode(pinned).Contains("must-not"), "close pins only lifecycle and service identity without tokens or history");
+        Check(DesktopServiceState.Identity(autoStarted, Guid.NewGuid().ToString("D")) == null && DesktopServiceState.Identity(autoStarted, epoch) != null, "a fallback observation cannot adopt another window activation for close");
+        Mode(directory, "normal"); await cli.Activate(epoch); await cli.StartService(null, epoch, CancellationToken.None, 5000); await cli.CloseService(pinned);
+        var failedOpen = await DesktopServiceState.StartOnOpen(unchanged, null, (command, room) => {
+            if (command == "desktop-start") throw new DesktopOperationException("lost startup response", "fixture_start_failed");
+            return Task.FromResult(new Dictionary<string, object> { { "running", false }, { "desktop_activation_id", epoch } });
+        });
+        Check(DesktopServiceState.Identity(failedOpen)["activation-id"].Equals(epoch) && Json.Text(failedOpen, "service_error") == "lost startup response", "failed startup retains the epoch needed to close a still-pending spawn");
+        bool displayed = true; int suspends = 0, resumes = 0; var notices = new List<bool>(); var suspended = new TaskCompletionSource<bool>();
+        var visibility = new DesktopVisibility(visible => { notices.Add(visible); return Task.FromResult(0); }, visible => displayed = visible, () => { suspends++; return suspended.Task; }, () => resumes++);
+        Task hidden = visibility.SetVisible(false); Check(!displayed && suspends == 1 && !hidden.IsCompleted, "minimized content is hidden before a bounded native suspend completes");
+        Task restoredVisibility = visibility.SetVisible(true); suspended.SetResult(true); await Task.WhenAll(hidden, restoredVisibility);
+        Check(displayed && resumes == 1 && notices.Count == 2 && !notices[0] && notices[1], "a late suspend completion cannot hide the restored window");
+        var pauseNotice = new TaskCompletionSource<int>(); displayed = true; suspends = 0;
+        var racing = new DesktopVisibility(visible => visible ? Task.FromResult(0) : pauseNotice.Task, visible => displayed = visible, () => { suspends++; return Task.FromResult(true); }, () => {});
+        Task pausing = racing.SetVisible(false); Task showing = racing.SetVisible(true); pauseNotice.SetResult(0); await Task.WhenAll(pausing, showing);
+        Check(displayed && suspends == 0, "restore before pause notification finishes avoids a stale suspend");
+        var failedSuspend = new TaskCompletionSource<bool>(); displayed = true; resumes = 0;
+        var failureRace = new DesktopVisibility(visible => Task.FromResult(0), visible => displayed = visible, () => failedSuspend.Task, () => resumes++);
+        Task hidingWithFailure = failureRace.SetVisible(false); Task restoringWithFailure = failureRace.SetVisible(true); failedSuspend.SetException(new InvalidOperationException("fixture suspension failure")); await Task.WhenAll(hidingWithFailure, restoringWithFailure);
+        Check(displayed && resumes == 1, "a failed old suspension still applies the latest restore");
+        var failedNotice = new TaskCompletionSource<int>(); failedNotice.SetException(new InvalidOperationException("fixture notification failure")); displayed = true; suspends = 0;
+        var failedNotification = new DesktopVisibility(visible => failedNotice.Task, visible => displayed = visible, () => { suspends++; return Task.FromResult(true); }, () => {}); await failedNotification.SetVisible(false);
+        Check(!displayed && suspends == 1, "a failed pause notification cannot prevent hiding and suspending minimized content");
+        Check(String.Equals(WindowDataIdentity.CanonicalDirectory(directory), WindowDataIdentity.CanonicalDirectory(directory.ToUpperInvariant()), StringComparison.OrdinalIgnoreCase), "physical directory identity survives path casing");
+        Check(String.Equals(WindowDataIdentity.CanonicalDirectory(mapped), WindowDataIdentity.CanonicalDirectory(physical), StringComparison.OrdinalIgnoreCase), "mapped and UNC directories share the single-window mutex identity");
         Console.WriteLine(Json.Encode(new { ok = true, checks = checks }));
     }
     public static int Main(string[] args)
     {
-        try { Run(args[0]).GetAwaiter().GetResult(); return 0; }
+        try { Run(args[0],args[1],args[2]).GetAwaiter().GetResult(); return 0; }
         catch (Exception error) { Console.Error.WriteLine(error.ToString()); return 1; }
     }
 }
@@ -160,7 +194,7 @@ internal static class CommandTests
   compile(fixtureSource, fixtureExe);
   for (const reference of references) fs.copyFileSync(reference, path.join(temporary, path.basename(reference)));
   compile(harnessSource, executable, ['/main:CommandTests', '/r:System.Windows.Forms.dll', '/r:System.Drawing.dll', '/r:System.Web.Extensions.dll', ...references.map(file => `/r:${file}`), path.join(root, 'desktop', 'Program.cs')]);
-  const result = spawnSync(executable, [temporary], { cwd: temporary, encoding: 'utf8', windowsHide: true, timeout: 20000 });
+  const result = spawnSync(executable, [temporary,root,fs.realpathSync.native(root)], { cwd: temporary, encoding: 'utf8', windowsHide: true, timeout: 20000 });
   assert.equal(result.status, 0, (result.stdout || '') + (result.stderr || '') + (result.error || ''));
   const proof = JSON.parse(result.stdout.trim());
   assert.equal(proof.ok, true); assert.ok(proof.checks >= 25);

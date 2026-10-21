@@ -12,6 +12,10 @@ test('shared runtime installation remains active for another room after one owne
   const v=fixture(t);let release,signal;v.installer.fetch=async(_url,options)=>{signal=options.signal;return new Promise(resolve=>release=()=>resolve({ok:false,status:503}));};
   const first=v.installer.install({provider:'claude-code',room_id:'first'}),second=v.installer.install({provider:'claude-code',room_id:'second'});assert.equal(first,second);v.installer.cancelRoom('first');assert.equal(signal.aborted,false);release();await first;assert.equal(v.settings.size,0);
 });
+test('application shutdown cancels all owned runtime downloads and refuses another install',async t=>{
+  const v=fixture(t,{fetch:async(_url,{signal})=>new Promise((resolve,reject)=>signal.addEventListener('abort',()=>{const e=new Error('cancelled');e.name='AbortError';reject(e);},{once:true}))});
+  const pending=v.installer.install({provider:'claude-code',room_id:'first'});await v.installer.close();assert.equal((await pending).status,'cancelled');assert.equal(v.installer.jobOwners.size,0);assert.equal(v.settings.size,0);await assert.rejects(v.installer.install({provider:'claude-code',room_id:'later'}),{code:'service_stopping'});
+});
 
 function zip(files){
   const locals=[],central=[];let offset=0;

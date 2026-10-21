@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -14,6 +15,7 @@ using System.Web.Script.Serialization;
 using System.Windows.Forms;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
+using Microsoft.Win32.SafeHandles;
 
 namespace AgentRoomDesktop
 {
@@ -39,12 +41,42 @@ namespace AgentRoomDesktop
             if (result.DataDirectory == null) result.DataDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".agentroom");
             if (result.Smoke && (result.DiagnosticsDirectory == null || !IsTemporaryDataDirectory(result.DataDirectory)))
                 throw new ArgumentException("桌面 smoke test 必须显式指定临时 data-dir 和 diagnostics；不会在用户数据中测试启停。");
+            result.DataDirectory = WindowDataIdentity.CanonicalDirectory(result.DataDirectory);
             return result;
         }
         private static bool IsTemporaryDataDirectory(string directory)
         {
             string root = Path.GetFullPath(Path.GetTempPath()).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
             return directory.StartsWith(root, StringComparison.OrdinalIgnoreCase) && directory.IndexOf("agentroom-desktop-test-", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+    }
+
+    internal static class WindowDataIdentity
+    {
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern SafeFileHandle CreateFile(string name, uint access, uint share, IntPtr security, uint creation, uint flags, IntPtr template);
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern uint GetFinalPathNameByHandle(SafeFileHandle handle, StringBuilder path, uint length, uint flags);
+        internal static string CanonicalDirectory(string value)
+        {
+            string current = Path.GetFullPath(value); List<string> missing = new List<string>();
+            while (!Directory.Exists(current))
+            {
+                string parent = Path.GetDirectoryName(current);
+                if (String.IsNullOrEmpty(parent) || parent == current) throw new IOException("无法核对办公室保存目录。");
+                missing.Insert(0, Path.GetFileName(current)); current = parent;
+            }
+            using (SafeFileHandle handle = CreateFile(current, 0, 7, IntPtr.Zero, 3, 0x02000000, IntPtr.Zero))
+            {
+                if (handle.IsInvalid) throw new IOException("无法核对办公室保存目录的本机身份。");
+                StringBuilder path = new StringBuilder(32768); uint length = GetFinalPathNameByHandle(handle, path, (uint)path.Capacity, 0);
+                if (length == 0 || length >= path.Capacity) throw new IOException("办公室保存目录路径无效。");
+                current = path.ToString();
+                if (current.StartsWith(@"\\?\UNC\", StringComparison.OrdinalIgnoreCase)) current = @"\\" + current.Substring(8);
+                else if (current.StartsWith(@"\\?\", StringComparison.Ordinal)) current = current.Substring(4);
+            }
+            foreach (string part in missing) current = Path.Combine(current, part);
+            return Path.GetFullPath(current);
         }
     }
 
@@ -237,11 +269,42 @@ namespace AgentRoomDesktop
         }
         internal async Task<Dictionary<string, object>> Invoke(string command, string roomId, CancellationToken cancellationToken, int timeoutMilliseconds)
         {
-            if (command != "desktop-state" && command != "desktop-start" && command != "desktop-stop") throw new ArgumentException("不支持的桌面操作。");
+            return await Invoke(command, roomId, cancellationToken, timeoutMilliseconds, null);
+        }
+        internal Task<Dictionary<string, object>> CloseService(Dictionary<string, object> identity)
+        {
+            return Invoke("desktop-close", null, CancellationToken.None, TimeoutMilliseconds, identity);
+        }
+        internal Task<Dictionary<string, object>> StartService(string roomId, string activationId, CancellationToken cancellationToken, int timeoutMilliseconds)
+        {
+            Guid activation; if (!Guid.TryParseExact(activationId, "D", out activation)) throw new ArgumentException("本窗口的状态标识无效。");
+            return Invoke("desktop-start", roomId, cancellationToken, timeoutMilliseconds, new Dictionary<string, object> { { "activation-id", activationId } });
+        }
+        internal Task<Dictionary<string, object>> Activate(string activationId)
+        {
+            Guid activation; if (!Guid.TryParseExact(activationId, "D", out activation)) throw new ArgumentException("本窗口的状态标识无效。");
+            return Invoke("desktop-activate", null, CancellationToken.None, TimeoutMilliseconds, new Dictionary<string, object> { { "activation-id", activationId } });
+        }
+        private async Task<Dictionary<string, object>> Invoke(string command, string roomId, CancellationToken cancellationToken, int timeoutMilliseconds, Dictionary<string, object> identity)
+        {
+            if (command != "desktop-state" && command != "desktop-activate" && command != "desktop-start" && command != "desktop-stop" && command != "desktop-close") throw new ArgumentException("不支持的桌面操作。");
             Guid room;
             if (roomId != null && !Guid.TryParseExact(roomId, "D", out room)) throw new ArgumentException("聊天室 ID 无效。");
             ProcessStartInfo info = new ProcessStartInfo(executable);
             info.Arguments = command + " --data-dir " + Quote(dataDirectory) + (roomId == null ? "" : " --room " + Quote(roomId));
+            if ((command == "desktop-start" || command == "desktop-activate") && identity != null) info.Arguments += " --activation-id " + Quote(Json.Text(identity, "activation-id"));
+            if (command == "desktop-close")
+            {
+                if (identity == null) throw new ArgumentException("缺少本窗口已核对的服务身份。");
+                string activation = Json.Text(identity, "activation-id"); if (String.IsNullOrEmpty(activation)) throw new ArgumentException("缺少本窗口的状态标识。");
+                info.Arguments += " --activation-id " + Quote(activation);
+                foreach (string key in Json.Text(identity, "service-pid") == null ? new string[0] : new string[] { "service-pid", "service-instance", "service-url" })
+                {
+                    string item = Json.Text(identity, key); if (String.IsNullOrEmpty(item)) throw new ArgumentException("本窗口的服务身份不完整。");
+                    info.Arguments += " --" + key + " " + Quote(item);
+                }
+                string owner = Json.Text(identity, "service-owner"); if (owner != null) info.Arguments += " --service-owner " + Quote(owner);
+            }
             info.WorkingDirectory = AppDomain.CurrentDomain.BaseDirectory;
             info.UseShellExecute = false; info.CreateNoWindow = true; info.RedirectStandardOutput = true; info.RedirectStandardError = true;
             info.StandardOutputEncoding = Encoding.UTF8; info.StandardErrorEncoding = Encoding.UTF8;
@@ -332,6 +395,32 @@ namespace AgentRoomDesktop
             if (!String.IsNullOrEmpty(error)) { state["service_error"] = error; state["service_error_code"] = code; }
             return state;
         }
+        internal static Dictionary<string, object> Identity(Dictionary<string, object> state)
+        {
+            Guid activation; if (!Guid.TryParseExact(Json.Text(state, "desktop_activation_id"), "D", out activation)) return null;
+            if (!Json.Flag(state, "running")) return new Dictionary<string, object> { { "activation-id", activation.ToString("D") } };
+            object snapshot, pid; Guid instance; Dictionary<string, object> details;
+            if (!Guid.TryParseExact(Json.Text(state, "desktop_activation_id"), "D", out activation) || !state.TryGetValue("snapshot", out snapshot) || (details = snapshot as Dictionary<string, object>) == null || !Guid.TryParseExact(Json.Text(details, "instance_id"), "D", out instance) || !state.TryGetValue("service_pid", out pid) || !(pid is int) || (int)pid <= 0) return null;
+            string url = Json.Text(state, "url"), owner = Json.Text(state, "service_owner_id"); Uri parsed;
+            if (!Uri.TryCreate(url, UriKind.Absolute, out parsed) || parsed.Scheme != "http" || parsed.Host != "127.0.0.1" || parsed.AbsolutePath != "/" || !String.IsNullOrEmpty(parsed.Query) || !String.IsNullOrEmpty(parsed.Fragment) || !String.IsNullOrEmpty(parsed.UserInfo)) return null;
+            Guid ownerId; if (owner != null && !Guid.TryParseExact(owner, "D", out ownerId)) return null;
+            return new Dictionary<string, object> { { "activation-id", activation.ToString("D") }, { "service-pid", ((int)pid).ToString(System.Globalization.CultureInfo.InvariantCulture) }, { "service-instance", instance.ToString("D") }, { "service-url", url }, { "service-owner", owner } };
+        }
+        internal static Dictionary<string, object> Identity(Dictionary<string, object> state, string expectedActivation)
+        {
+            Dictionary<string, object> identity = Identity(state);
+            return String.Equals(Json.Text(identity, "activation-id"), expectedActivation, StringComparison.OrdinalIgnoreCase) ? identity : null;
+        }
+        internal static async Task<Dictionary<string, object>> StartOnOpen(Dictionary<string, object> state, string roomId, Func<string, string, Task<Dictionary<string, object>>> invoke)
+        {
+            Exception startupError;
+            try { return await invoke("desktop-start", roomId); }
+            catch (Exception error) { startupError = error; }
+            string detail = startupError.Message;
+            try { state = await invoke("desktop-state", roomId); }
+            catch (Exception refresh) { state = new Dictionary<string, object>(state); state["running"] = false; state["url"] = null; detail += " 状态检查也未完成：" + refresh.Message; }
+            return WithError(state, detail, ErrorCode(startupError));
+        }
         internal static async Task<Dictionary<string, object>> UpdateIfAvailable(Dictionary<string, object> state, string roomId, Func<string, string, Task<Dictionary<string, object>>> invoke)
         {
             if (!Json.Flag(state, "can_update")) return state;
@@ -349,6 +438,52 @@ namespace AgentRoomDesktop
                 detail += " 状态检查也未完成：" + refreshError.Message;
             }
             return WithError(state, detail, ErrorCode(updateError));
+        }
+    }
+
+    // Calls run on the UI thread. A restore arriving during an asynchronous
+    // suspend is applied afterwards, so an old completion cannot hide the page.
+    internal sealed class DesktopVisibility
+    {
+        private readonly Func<bool, Task> notify;
+        private readonly Action<bool> setVisible;
+        private readonly Func<Task<bool>> suspend;
+        private readonly Action resume;
+        private bool wanted = true, applying;
+        private int revision;
+        private Task work = Task.FromResult(0);
+        internal DesktopVisibility(Func<bool, Task> notify, Action<bool> setVisible, Func<Task<bool>> suspend, Action resume)
+        { this.notify = notify; this.setVisible = setVisible; this.suspend = suspend; this.resume = resume; }
+        internal Task SetVisible(bool visible)
+        {
+            wanted = visible; revision++;
+            if (!applying) { applying = true; work = Apply(); }
+            return work;
+        }
+        private async Task Apply()
+        {
+            try
+            {
+                int observed;
+                do
+                {
+                    observed = revision; bool show = wanted;
+                    if (show)
+                    {
+                        try { resume(); } catch { }
+                        try { setVisible(true); } catch { }
+                        try { await notify(true); } catch { }
+                    }
+                    else
+                    {
+                        try { await notify(false); } catch { }
+                        if (observed != revision) continue;
+                        try { setVisible(false); } catch { }
+                        try { await suspend(); } catch { }
+                    }
+                } while (observed != revision);
+            }
+            finally { applying = false; }
         }
     }
 
@@ -375,6 +510,13 @@ namespace AgentRoomDesktop
         private bool restoringWindow;
         private bool restoredWindow;
         private bool lastMaximized;
+        private bool closingWindow;
+        private bool allowClose;
+        private Task initializing;
+        private DesktopVisibility visibility;
+        private Dictionary<string, object> ownedService;
+        private readonly string windowActivationId = Guid.NewGuid().ToString("D");
+        private bool serviceStartupAttempted;
         private readonly string windowPreferences;
         private const string OfflineUrl = "https://agentroom.local/index.html";
         public RoomWindow(Options options, EventWaitHandle activate)
@@ -387,10 +529,10 @@ namespace AgentRoomDesktop
             Font = new Font("Microsoft YaHei UI", 9F); BackColor = Color.FromArgb(246, 248, 251);
             view.Dock = DockStyle.Fill; Controls.Add(view);
             activationTimer.Interval = 300; activationTimer.Tick += delegate { if (activate.WaitOne(0)) { if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal; Show(); Activate(); } }; activationTimer.Start();
-            Shown += async delegate { await Initialize(); };
+            Shown += async delegate { initializing = Initialize(); await initializing; };
             ResizeEnd += delegate { SaveWindow(); };
-            Resize += delegate { if (WindowState != FormWindowState.Minimized) lastMaximized = WindowState == FormWindowState.Maximized; };
-            FormClosing += delegate { SaveWindow(); };
+            Resize += async delegate { if (WindowState != FormWindowState.Minimized) lastMaximized = WindowState == FormWindowState.Maximized; await ApplyVisibility(); };
+            FormClosing += ClosingWindow;
             FormClosed += delegate { windowLifetime.Cancel(); activationTimer.Stop(); view.Dispose(); };
         }
         private float WindowDpi()
@@ -440,13 +582,23 @@ namespace AgentRoomDesktop
         {
             try
             {
+                if (!options.Check || options.Smoke)
+                {
+                    serviceStartupAttempted = true; latest = await cli.Activate(windowActivationId); ownedService = DesktopServiceState.Identity(latest, windowActivationId);
+                    if (closingWindow) return;
+                }
                 string assets = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "desktop-web");
                 if (!File.Exists(Path.Combine(assets, "index.html"))) throw new FileNotFoundException("桌面界面资源不完整；请完整解压安装包。");
                 string runtimeVersion = CoreWebView2Environment.GetAvailableBrowserVersionString();
                 string profile = Path.Combine(options.DataDirectory, "desktop-webview");
                 CoreWebView2Environment environment = await CoreWebView2Environment.CreateAsync(null, profile, null);
                 await view.EnsureCoreWebView2Async(environment);
+                if (closingWindow) return;
                 CoreWebView2 core = view.CoreWebView2;
+                visibility = new DesktopVisibility(async visible => {
+                    if (!view.IsDisposed) await core.ExecuteScriptAsync("window.dispatchEvent(new CustomEvent('agentoffice-visibility',{detail:{visible:" + (visible ? "true" : "false") + "}}))");
+                }, visible => { if (!view.IsDisposed) view.Visible = visible; }, () => core.TrySuspendAsync(), () => core.Resume());
+                core.NavigationCompleted += async delegate { await ApplyVisibility(); };
                 core.Settings.IsStatusBarEnabled = false; core.Settings.AreDevToolsEnabled = false; core.Settings.AreHostObjectsAllowed = false;
                 core.Settings.IsGeneralAutofillEnabled = false; core.Settings.IsPasswordAutosaveEnabled = false;
                 core.Settings.AreDefaultContextMenusEnabled = false; core.Settings.IsWebMessageEnabled = true;
@@ -464,9 +616,15 @@ namespace AgentRoomDesktop
                 };
                 core.WebMessageReceived += async delegate(object sender, CoreWebView2WebMessageReceivedEventArgs e) { await Receive(e); };
                 latest = await cli.Invoke("desktop-state", null); selectedRoom = Json.Text(latest, "selected_room_id");
-                latest = await DesktopServiceState.UpdateIfAvailable(latest, selectedRoom, cli.Invoke);
+                if (closingWindow) return;
+                if (!options.Check || options.Smoke) latest = await DesktopServiceState.StartOnOpen(latest, selectedRoom, (command, room) => {
+                    if (command != "desktop-start") return cli.Invoke(command, room);
+                    serviceStartupAttempted = true; return cli.StartService(room, windowActivationId, CancellationToken.None, DesktopCli.TimeoutMilliseconds);
+                });
+                Dictionary<string, object> currentIdentity = DesktopServiceState.Identity(latest, windowActivationId); if (currentIdentity != null) ownedService = currentIdentity;
                 serviceError = Json.Text(latest, "service_error");
                 serviceErrorCode = Json.Text(latest, "service_error_code");
+                if (closingWindow) return;
                 NavigateForState(latest);
                 if (options.DiagnosticsDirectory != null)
                 {
@@ -482,6 +640,37 @@ namespace AgentRoomDesktop
                 if (options.DiagnosticsDirectory != null) { FinishDiagnostics(ex.Message); Close(); }
                 else ShowFailure(ex);
             }
+        }
+        private async Task ApplyVisibility()
+        {
+            if (visibility == null || view.IsDisposed || closingWindow) return;
+            try { await visibility.SetVisible(WindowState != FormWindowState.Minimized && Visible); }
+            catch { /* Hidden WebView remains hidden even when suspension is unavailable. */ }
+        }
+        private async void ClosingWindow(object sender, FormClosingEventArgs args)
+        {
+            SaveWindow();
+            if (allowClose || options.Check && !options.Smoke) return;
+            args.Cancel = true; if (closingWindow) return;
+            closingWindow = true; activationTimer.Stop(); windowLifetime.Cancel(); view.Enabled = false; view.Visible = false;
+            Text = "Agent 办公室 · 正在关闭本机服务…";
+            try
+            {
+                // Startup is already bounded by the CLI deadline. Let its
+                // result identify any daemon it created before stopping it.
+                if (initializing != null) await initializing;
+                Dictionary<string, object> identity = ownedService ?? (serviceStartupAttempted ? new Dictionary<string, object> { { "activation-id", windowActivationId } } : null);
+                if (identity != null)
+                {
+                    Dictionary<string, object> result = await cli.CloseService(identity);
+                    if (Json.Flag(result, "service_stop_unconfirmed")) throw new DesktopOperationException("软件已关闭并阻止后台重新启动；未绑定的服务进程没有被终止，请检查本机诊断。", "desktop_stop_unconfirmed");
+                }
+            }
+            catch (Exception error)
+            {
+                try { Diagnostic.Write(options.DataDirectory, "desktop-close-error.json", new Dictionary<string, object> { { "at", DateTime.UtcNow.ToString("o") }, { "error", error.Message }, { "code", DesktopServiceState.ErrorCode(error) } }); } catch { }
+            }
+            finally { allowClose = true; Close(); }
         }
         private bool AllowedOrigin(string value)
         {
@@ -560,7 +749,9 @@ namespace AgentRoomDesktop
                 return await commandQueue.Run(async cancellationToken => {
                     string selected = roomId ?? selectedRoom;
                     string command = operation == "start_service" ? "desktop-start" : operation == "stop_service" ? "desktop-stop" : "desktop-state";
-                    Dictionary<string, object> result = await cli.Invoke(command, selected, cancellationToken, DesktopCli.TimeoutMilliseconds);
+                    if (operation == "start_service") serviceStartupAttempted = true;
+                    Dictionary<string, object> result = operation == "start_service" ? await cli.StartService(selected, windowActivationId, cancellationToken, DesktopCli.TimeoutMilliseconds) : await cli.Invoke(command, selected, cancellationToken, DesktopCli.TimeoutMilliseconds);
+                    if (operation == "start_service") { Dictionary<string, object> identity = DesktopServiceState.Identity(result, windowActivationId); if (identity != null) ownedService = identity; }
                     if (operation == "start_service" || operation == "stop_service") { serviceError = null; serviceErrorCode = null; }
                     result = DesktopServiceState.WithError(result, serviceError, serviceErrorCode);
                     selectedRoom = Json.Text(result, "selected_room_id"); latest = result; return result;
@@ -595,7 +786,7 @@ namespace AgentRoomDesktop
             NavigateForState(stop); await Task.Delay(1200); await Capture("offline-after.png");
             await CaptureOffice("office-offline");
             string ui = await view.CoreWebView2.ExecuteScriptAsync("JSON.stringify({title:document.title,hostname:location.hostname,body:document.body.innerText.slice(0,800)})");
-            Diagnostic.Write(options.DiagnosticsDirectory, "smoke.json", new Dictionary<string, object> { { "steps", steps }, { "rejected_navigation", rejectedNavigations }, { "rejected_messages", rejectedMessages }, { "bridge_commands", bridgeCommands }, { "ui", ui }, { "closed_window_stops_service", false } });
+            Diagnostic.Write(options.DiagnosticsDirectory, "smoke.json", new Dictionary<string, object> { { "steps", steps }, { "rejected_navigation", rejectedNavigations }, { "rejected_messages", rejectedMessages }, { "bridge_commands", bridgeCommands }, { "ui", ui }, { "closed_window_stops_service", true } });
             FinishDiagnostics(null); Close();
         }
         private async Task CaptureOffice(string name)
@@ -639,7 +830,7 @@ namespace AgentRoomDesktop
             Label detail = new Label(); detail.Text = "请确认已完整解压，并安装 Microsoft Edge WebView2 Runtime。\n" + error.Message; detail.MaximumSize = new Size(680, 0); detail.AutoSize = true;
             Button download = new Button(); download.Text = "打开 WebView2 官方下载页"; download.AutoSize = true; download.Padding = new Padding(12, 5, 12, 5);
             download.Click += delegate { Process.Start(new ProcessStartInfo("https://developer.microsoft.com/microsoft-edge/webview2/#download") { UseShellExecute = true }); };
-            Label fallback = new Label(); fallback.Text = "也可使用 AgentOffice.exe start --open，通过浏览器继续使用办公室。关闭这个窗口不会停止后台服务。"; fallback.MaximumSize = new Size(680, 0); fallback.AutoSize = true;
+            Label fallback = new Label(); fallback.Text = "也可使用 AgentOffice.exe start --open，通过浏览器继续使用办公室。正常打开软件会启动服务；关闭软件会停止服务，最小化则继续后台协作。"; fallback.MaximumSize = new Size(680, 0); fallback.AutoSize = true;
             panel.Controls.Add(title); panel.Controls.Add(detail); panel.Controls.Add(download); panel.Controls.Add(fallback); Controls.Add(panel); panel.BringToFront();
         }
     }

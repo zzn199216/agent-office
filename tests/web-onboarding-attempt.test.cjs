@@ -16,7 +16,7 @@ function fixture(overrides={}){
     beginSecretaryNavigation:source=>context.secretaryNavigation={source,roomId:context.roomId,projectId:context.projectId,jobId:null},
     renderLaunch(){context.renderOnboarding();const active=context.onboardingJobs.get(context.secretaryConnectJob);$('secretary-connect-progress').innerHTML=active?context.onboardingJobMarkup(active):'';},
     setApprovalMarkup:(element,html)=>{element.innerHTML=html;},refresh:async()=>events.push('refresh'),refreshOnboarding:async()=>events.push('poll'),refreshLaunch:async()=>context.renderLaunch(),
-    returnSecretaryAfterOnboarding:()=>{completions.push(context.secretaryNavigation?.jobId);},action:callback=>callback(),setTimeout:()=>0,
+    returnSecretaryAfterOnboarding:()=>{completions.push(context.secretaryNavigation?.jobId);},action:callback=>callback(),setUITimeout:()=>0,
     rememberSelection:()=>events.push('remember'),setReply:value=>events.push(['reply',value]),setProfessionalView:value=>events.push(['workspace',value]),showMemberSetup:async id=>events.push(['setup',id]),openSecretaryTutorial:()=>events.push('secretary-picker'),
     api:async(route,body)=>{calls.push({route,body});return{...job};}
   });

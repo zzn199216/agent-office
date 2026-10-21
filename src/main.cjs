@@ -14,20 +14,26 @@ async function apiCall(dir,endpoint,input,timeout=35000,expectedControl){
   const value=await res.json();if(!res.ok)throw new RoomError(value.error || '请求失败。',res.status,value.code);return value;
 }
 async function ensureServer(dir,options={}){
+  const lifecycle=require('./desktop-lifecycle.cjs');lifecycle.assertBackgroundAllowed(dir);
   const deadline=Math.min(options.deadline||Infinity,Date.now()+(options.timeout??20000)),read=options.readControl||readControl,call=options.call||apiCall;
+  let observedClosing=false;
   const remaining=max=>Math.max(1,Math.min(max,deadline-Date.now()));
   const ready=async()=>{
+    lifecycle.assertBackgroundAllowed(dir);
     if(!read(dir))return null;
     try{
-      const state=await call(dir,'/api/state',undefined,remaining(1500));let expected;const file=path.join(dir,'room.sqlite');
+      const state=await call(dir,'/api/state',undefined,remaining(1500));lifecycle.assertBackgroundAllowed(dir);if(state.service_closing===true){observedClosing=true;return null;}let expected;const file=path.join(dir,'room.sqlite');
       if(fs.existsSync(file)){const {DatabaseSync}=require('node:sqlite');const db=new DatabaseSync(file,{readOnly:true});try{const row=db.prepare("SELECT value FROM settings WHERE key='instance_fingerprint'").get();expected=row?JSON.parse(row.value):null;}finally{db.close();}}
-      const control=read(dir);if(!control)return null;
+      lifecycle.assertBackgroundAllowed(dir);const control=read(dir);if(!control)return null;
       if((expected&&state.instance_id!==expected)||(control.instance_id&&control.instance_id!==state.instance_id))throw new RoomError('处理程序与磁盘实例不匹配，没有连接另一空聊天室。',409,'instance_control_mismatch');return control;
     }catch(e){if(e.code==='instance_control_mismatch')throw e;if(e.status===401||e.status===403)throw new RoomError('已有处理程序身份不匹配，没有另建替代实例。',409,'instance_control_mismatch');return null;}
   };
   const current=await ready();if(current)return current;
+  // A deliberate reopen must not attach to a daemon already shutting down or
+  // start a competing helper while that daemon still owns the lock.
+  while(observedClosing&&read(dir)&&Date.now()<deadline){await sleep(remaining(100));const current=await ready();if(current)return current;}
   if(Date.now()>=deadline)throw new RoomError('本机服务检查超时，请重新检查状态后再试。',503,'start_timeout');
-  fs.mkdirSync(dir,{recursive:true});const own=ownCommand();
+  lifecycle.assertBackgroundAllowed(dir);fs.mkdirSync(dir,{recursive:true});const own=ownCommand();
   if(isSea()){const current=require('./install.cjs').activeRuntime(dir);if(current)own.command=current;}
   const attempt=crypto.randomUUID();let spawnError=null,exitCode=null;
   const log=fs.openSync(path.join(dir,'daemon.log'),'a');
@@ -64,13 +70,14 @@ function openBrowser(url){
 }
 async function serve(dir,options={}){
   const recordFailure=e=>{if(typeof options['startup-id']==='string')try{atomicWrite(path.join(dir,'startup-error.json'),JSON.stringify({attempt_id:options['startup-id'],at:new Date().toISOString(),error:readableError(e),code:e.code||'service_start_failed'}));}catch{}};
-  let owner;try{owner=await acquireDaemonLock(dir);}catch(e){recordFailure(e);throw e;}if(!owner)return;
+  let owner;try{require('./desktop-lifecycle.cjs').assertBackgroundAllowed(dir);owner=await acquireDaemonLock(dir);}catch(e){recordFailure(e);throw e;}if(!owner)return;
   let service,server;let stopped=false;
   const stop=async()=>{
     if(stopped)return;stopped=true;
     try{try{await server?.close();}finally{await service?.close();}}finally{await releaseDaemonLock(dir,owner);}
   };
   try{
+    require('./desktop-lifecycle.cjs').assertBackgroundAllowed(dir);
     const {RoomService}=require('./service.cjs');service=options.serviceFactory?options.serviceFactory(dir):new RoomService(dir);
     const token=crypto.randomBytes(32).toString('hex');
     const listener=await require('./http-listener.cjs').listenLocal(service,{token,port:options.port,onShutdown:()=>stop().then(()=>process.exit(0))});
@@ -107,9 +114,9 @@ async function main(args=process.argv.slice(2)){
     const result=await require('./work-records.cjs').offlineWorkRecord(dir,{room_id:options.room,member_id:options.member,discussion_id:options.discussion});print({path:result.path,thread_id:result.thread_id,turn_count:result.turns.length,read_only:true});return;
   }
   if(command==='help'||options.help){console.log('Agent Office (agentroom compatible): work-record --room ID --member ID [--data-dir PATH] (read-only; no service or inference), desktop, desktop-state [--room ID], desktop-start, desktop-stop, scan-agents, connect --provider codex --install-client --wait 90 [--install-runtime], connect-state RUN_ID, connect-retry RUN_ID [--wait 90], auto-connect --providers codex --install-clients --wait 90, group-state, group-sync (disabled), sync-report --paused true, mcp --setup, delegate --entry FILE --file question.md --wait 300, delegate-wait REQUEST_ID --entry FILE; enter --entry FILE, room-state --entry FILE --offline, room-ensure --entry FILE, wake --entry FILE --to PEER_ID; start [--open], status, check, add-project --path PATH, chat-status, chat-room --project ID --title TITLE, chat-member --name NAME --adapter TYPE, chat-connect --room ID --member ID, chat-join --invite ID --nonce VALUE --member ID, chat-history --room ID, chat-post --room ID --member ID --to PEER_ID --file question.md --key UNIQUE [--wait 300], chat-wait MESSAGE_ID, chat-reply MESSAGE_ID --member ID --file answer.md --key UNIQUE, chat-rooms --entry FILE, chat-inbox --entry FILE [--room ID], chat-inbox --member ID, chat-ack MESSAGE_ID --member ID, bridge-request --room ID --member ID --to PEER_ID --file question.md --key UNIQUE [--origin REAL_REF --source-message REAL_MSG] [--wait 300], bridge-result ENTRY_ID --member ID, bridge-wait ENTRY_ID --member ID, bridge-report ENTRY_ID --member ID --origin REAL_REF --reply-ref REAL_REPLY, mcp, stop; legacy: discuss, ask, result, wait, delivery, inbox, reply, ack');return;}
-  if(['desktop-state','desktop-start','desktop-stop'].includes(command)){
-    if(options.entry)throw new RoomError('桌面服务控制属于本机用户操作，成员入口不能管理服务。',403,'resume_scope_mismatch');
-    const module=require('./desktop-state.cjs'),input={room_id:options.room};print(await module[command==='desktop-state'?'desktopState':command==='desktop-start'?'desktopStart':'desktopStop'](dir,input,{main:{readControl,ensureServer,apiCall,isControlProcessAlive}}));return;
+  if(['desktop-state','desktop-activate','desktop-start','desktop-stop','desktop-close'].includes(command)){
+    if(options.entry||process.env.AGENTROOM_MEMBER_ID)throw new RoomError('桌面服务控制属于本机用户操作，成员入口不能管理服务。',403,'resume_scope_mismatch');
+    const module=require('./desktop-state.cjs'),input=command==='desktop-close'?{activation_id:options['activation-id'],...options['service-pid']?{service:{pid:Number(options['service-pid']),owner_id:options['service-owner']||null,instance_id:options['service-instance'],url:options['service-url']}}:{}}:{room_id:options.room,...['desktop-activate','desktop-start'].includes(command)?{activation_id:options['activation-id']}:{}};print(await module[command==='desktop-state'?'desktopState':command==='desktop-activate'?'desktopActivate':command==='desktop-start'?'desktopStart':command==='desktop-close'?'desktopClose':'desktopStop'](dir,input,{main:{readControl,ensureServer,apiCall,isControlProcessAlive}}));return;
   }
   if(command==='desktop'){
     if(options.entry)throw new RoomError('成员入口不用于打开桌面管理窗口。',403,'resume_scope_mismatch');
@@ -149,6 +156,7 @@ async function main(args=process.argv.slice(2)){
   if(command==='room-ensure'||command==='enter'){const runtime=await api(`/api/runtime${options.room?'?room_id='+encodeURIComponent(options.room):''}`);print({...runtime,restored:true,url:readControl(dir).url,ui_required:false});return;}
   if(command==='wake'){print(await api('/api/runtime/wake',{room_id:options.room,member_id:options.to,caller_member_id:options.member}));return;}
   if(command==='mcp'){const {runMcp}=require('./mcp.cjs');runMcp(api);return;}
+  if(command==='start'){if(memberScope)throw new RoomError('启动软件服务属于本机用户操作，成员入口不能重新开启已关闭的软件。',403,'resume_scope_mismatch');require('./desktop-lifecycle.cjs').activateDesktop(dir);}
   const control=await ensureServer(dir);
   if(command==='auto-connect'){
     if(entry)throw new RoomError('接入成员是用户初始化操作，不能从成员业务入口执行。',403);

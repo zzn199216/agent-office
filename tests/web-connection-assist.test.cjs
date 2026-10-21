@@ -5,17 +5,19 @@ function section(start,end){const first=source.indexOf(start),last=source.indexO
 const plain=value=>JSON.parse(JSON.stringify(value));
 function fixture(){
   const message={id:'human-task',room_id:'room',sender_id:'user',to_member_id:'assistant',kind:'message',text:'把豆包拉进来'},members=[{id:'assistant',name:'负责接入的秘书',adapter:'codex'},{id:'target',name:'豆包',adapter:'doubao-desktop'}];
+  const reply={id:'actual-reply',room_id:'room',sender_id:'assistant',kind:'reply',reply_to:message.id,text:'接入结果已整理。'};
   const calls={copy:[],toast:[],api:[],refresh:0,avatars:[],blobs:[],revoked:[],anchors:[]};
-  const context=vm.createContext({roomId:'room',history:{messages:[message],participants:members,connection_assists:[]},memberById:id=>members.find(member=>member.id===id),
+  const context=vm.createContext({roomId:'room',history:{messages:[message,reply],participants:members,connection_assists:[]},memberById:id=>members.find(member=>member.id===id),senderName:id=>id==='user'?'你':members.find(member=>member.id===id)?.name||id,
+    desktop:null,messageContent:message=>`<div class="fixture-content">${message.text}</div>`,messageImages:()=>'',messageCanReconcile:()=>false,nativeConnectionMessage:()=>'',pill:()=>'',plainMarkdown:text=>text,
     avatar:(...args)=>{calls.avatars.push(args);return '<span class="fixture-avatar"></span>';},time:value=>String(value||''),
     navigator:{clipboard:{writeText:async text=>calls.copy.push(text)}},toast:text=>calls.toast.push(text),refresh:async()=>{calls.refresh++;},
     api:async(...args)=>{calls.api.push(args);return {text:'# Scoped connection instructions',filename:'agent-office-connect.md'};},
     Blob:class{constructor(parts,options){calls.blobs.push({parts,options});}},URL:{createObjectURL:()=> 'blob:fixture-document',revokeObjectURL:url=>calls.revoked.push(url)},
     document:{body:{append:link=>{link.appended=true;}},createElement:tag=>{assert.equal(tag,'a');const link={click(){this.clicked=true;},remove(){this.removed=true;}};calls.anchors.push(link);return link;}}
   });
-  vm.runInContext(section('const escape =','const time =')+section('function renderConnectionAssists(', 'function renderTyping('),context);
+  vm.runInContext(section('const escape =','const time =')+section('function renderMessage(', 'function renderTyping('),context);
   const assist=values=>({id:'assist',message_id:message.id,room_id:'room',member_id:'assistant',target_member_id:'target',provider:'doubao-desktop',name:'豆包',status:'needs_action',ready_for_office:values?.status==='ready',action_kind:values?.status==='ready'?'ready':values?.status==='running'?'wait':'manual_handoff',can_wake:false,summary:'需要本人窗口完成一步',copy_sentence:'请读取这台电脑上的接入文档 C:\\AO\\connect.md，按说明完成连接。',document_path:'C:\\AO\\connect.md',...values});
-  return {context,message,members,calls,assist,render:()=>context.renderConnectionAssists(message),action:dataset=>context.connectionAssistAction({dataset})};
+  return {context,message,reply,members,calls,assist,render:()=>context.renderConnectionAssists(reply),action:dataset=>context.connectionAssistAction({dataset})};
 }
 test('connection cards distinguish verified automatic delivery, manual inbox and an unfinished connection',()=>{
   const f=fixture();f.context.history.connection_assists=[f.assist({status:'ready',can_wake:true})];let html=f.render();assert.match(html,/已自动接通/);assert.match(html,/可以直接在 AO 给它发消息/);assert.doesNotMatch(html,/data-assist-copy|本人窗口信箱/);
@@ -23,11 +25,33 @@ test('connection cards distinguish verified automatic delivery, manual inbox and
   f.context.history.connection_assists=[f.assist({status:'ready',can_wake:'true'})];assert.doesNotMatch(f.render(),/已自动接通/);
   f.context.history.connection_assists=[f.assist({status:'running',copy_sentence:null})];html=f.render();assert.match(html,/正在连接/);assert.doesNotMatch(html,/已自动接通|本人入口已接通|data-assist-copy/);
 });
+test('connection actions stay inside the real reply in durable message order with one grouped layout',()=>{
+  const f=fixture(),later={id:'later-user',seq:3,room_id:'room',sender_id:'user',to_member_id:'assistant',kind:'message',text:'下一条工作消息'};
+  Object.assign(f.message,{seq:1,created:'2026-10-21T01:01:00Z'});Object.assign(f.reply,{seq:2,created:'2026-10-21T01:02:00Z'});
+  f.context.history.messages=[f.message,f.reply,later];f.context.history.connection_assists=[f.assist({id:'doubao'}),f.assist({id:'grok',provider:'grok-bot',name:'Grok Bot',target_member_id:null,action_kind:'unsupported',summary:'暂不可用',updated:'2026-10-22T01:00:00Z'})];
+  const user=f.context.renderMessage(f.message,f.context.history.messages),reply=f.context.renderMessage(f.reply,f.context.history.messages),html=f.context.history.messages.map(message=>f.context.renderMessage(message,f.context.history.messages)).join('');
+  assert.doesNotMatch(user,/connection-assist|data-assist-/);assert.equal((reply.match(/<article /g)||[]).length,1);assert.equal((reply.match(/class="message-header"/g)||[]).length,1);assert.equal((reply.match(/class="connection-assist-group"/g)||[]).length,1);assert.equal((reply.match(/data-connection-assist=/g)||[]).length,2);
+  assert.ok(reply.indexOf('接入结果已整理。')<reply.indexOf('接入进度与下一步'));assert.ok(reply.indexOf('data-connection-assist="grok"')<reply.lastIndexOf('</article>'));assert.doesNotMatch(reply,/接入进度 · AO 核对|2026-10-22/);
+  assert.ok(html.indexOf('id="message-human-task"')<html.indexOf('id="message-actual-reply"'));assert.ok(html.indexOf('id="message-actual-reply"')<html.indexOf('id="message-later-user"'));
+  assert.equal((html.match(/data-connection-assist="doubao"/g)||[]).length,1);assert.equal((html.match(/data-assist-copy=/g)||[]).length,1);
+});
+test('a pending source shows compact progress until its own actor replies, without a synthetic agent message',()=>{
+  const f=fixture();f.context.history.connection_assists=[f.assist()];f.context.history.messages=[f.message];
+  let html=f.context.renderMessage(f.message,f.context.history.messages);assert.match(html,/class="connection-assist-pending"/);assert.match(html,/data-assist-open/);assert.doesNotMatch(html,/class="connection-assist-group"|data-assist-copy|接入进度 · AO 核对/);assert.equal((html.match(/<article /g)||[]).length,1);
+  for(const invalid of [{...f.reply,sender_id:'target'},{...f.reply,room_id:'foreign'},{...f.reply,reply_to:'unrelated'},{...f.reply,kind:'message'}]){f.context.history.messages=[f.message,invalid];assert.equal(f.context.renderConnectionAssists(invalid),'');assert.match(f.context.renderConnectionAssists(f.message),/connection-assist-pending/);}
+  f.context.history.messages=[f.message,f.reply];assert.equal(f.context.renderConnectionAssists(f.message),'');assert.match(f.render(),/connection-assist-group/);
+  const duplicate={...f.reply,id:'second-actual-reply'};f.context.history.messages.push(duplicate);assert.equal(f.context.renderConnectionAssists(duplicate),'','a second reply must not duplicate the same action set');
+  f.context.history.messages=[f.message];f.message.status='failed';assert.match(f.context.renderConnectionAssists(f.message),/接入进度已保留/);assert.doesNotMatch(f.context.renderConnectionAssists(f.message),/正在整理|详细步骤会与回复/);
+});
+test('unsupported Grok never shows a stale copy instruction even if old metadata claims a handoff',()=>{
+  const f=fixture();f.context.history.connection_assists=[f.assist({provider:'grok-bot',action_kind:'unsupported',stage:'unsupported',next_step:'点击复制并发送已有 Grok Bot 对话',summary:'复制旧说明',copy_sentence:'old-copy'})];
+  const html=f.render();assert.match(html,/尚未找到这个客户端当前可用的接入入口/);assert.match(html,/查看支持情况/);assert.doesNotMatch(html,/点击复制|复制旧说明|old-copy|data-assist-copy/);
+});
 test('manual fallback escapes every display field and attributes the dialogue to the actual recipient agent',()=>{
   const f=fixture();f.members[0].name='秘书 <script>';const name='豆包 <img src=x>',sentence='读取 "C:\\个人资料\\A&B<connect>.md" 后继续',documentPath='C:\\个人资料\\A&B<connect>.md';
   f.context.history.connection_assists=[f.assist({id:'assist/"one',name,summary:'需要 <approval>',error:'failed <unsafe>',copy_sentence:sentence,document_path:documentPath})];const html=f.render();
   assert.match(html,/秘书 &lt;script&gt;/);assert.match(html,/豆包 &lt;img src=x&gt;/);assert.match(html,/需要 &lt;approval&gt;/);assert.match(html,/failed &lt;unsafe&gt;/);assert.match(html,/A&amp;B&lt;connect&gt;\.md/);assert.match(html,/&quot;C:/);assert.match(html,/data-assist-copy="assist\/&quot;one"/);assert.doesNotMatch(html,/<script>|<img src=x>|<approval>|<unsafe>|<connect>/);
-  assert.equal(f.calls.avatars[0][0],'秘书 <script>');assert.equal(f.calls.avatars[0][1],'codex');assert.equal(f.calls.avatars[0][3],'assistant');
+  assert.match(html,/aria-label="秘书 &lt;script&gt; 核对的接入进度"/);assert.deepEqual(f.calls.avatars,[],'embedded progress never creates another agent header');
   assert.equal((html.match(/data-assist-copy=/g)||[]).length,1);assert.equal((html.match(/data-assist-document=/g)||[]).length,1);assert.equal((html.match(/data-assist-check=/g)||[]).length,1);
 });
 test('historical ready assist metadata cannot announce connection before current attempt acceptance',()=>{

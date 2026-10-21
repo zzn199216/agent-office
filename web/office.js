@@ -298,11 +298,11 @@
     floor.append(backdrop,wall,outdoor,light,door,doorLabel,entry,clock,seats,plantHolder,empty);camera.append(floor);worldBounds.append(camera);scroll.append(worldBounds);
     scene.append(scroll,top);container.append(scene);
     const items = new Map();
-    let current = {roomId:'',members:[],online:false,lastMessage:null}, destroyed=false, initialized=false, timer=null, clockTimer=null, intersecting=true, slots=new Map(), layout=null, config=normalizeScene(),cameraState=null;
+    let current = {roomId:'',members:[],online:false,lastMessage:null}, destroyed=false, suspended=false, initialized=false, timer=null, clockTimer=null, intersecting=true, slots=new Map(), layout=null, config=normalizeScene(),cameraState=null;
     const selected = new Set();
     const reducedMotion=typeof view.matchMedia==='function'?view.matchMedia('(prefers-reduced-motion: reduce)'):null;
     function paused() {
-      let hidden = document.hidden || !intersecting || !current.online;
+      let hidden = suspended || document.hidden || !intersecting || !current.online;
       for (let element=container; !hidden && element; element=element.parentElement) hidden = element.hidden || element.classList?.contains('hidden') || element.getAttribute?.('aria-hidden') === 'true';
       scene.classList.toggle('ao-paused',!!hidden);
       scene.classList.toggle('ao-still',!config.motion||!!reducedMotion?.matches);
@@ -320,7 +320,7 @@
       clock.setAttribute('aria-label',clock.title);
       // The clock remains accurate with the room service off. Environmental
       // animation stays paused, and hidden views need no interval work.
-      if(clockTimer===null&&!document.hidden&&intersecting)clockTimer=view.setTimeout(()=>{clockTimer=null;updateClock();},15000);
+      if(clockTimer===null&&!suspended&&!document.hidden&&intersecting)clockTimer=view.setTimeout(()=>{clockTimer=null;updateClock();},15000);
     }
     function updateWorld() {
       scene.style.setProperty('--ao-wall-color',config.wall_color);scene.style.setProperty('--ao-floor-color',config.floor_color);
@@ -509,7 +509,7 @@
     if(typeof view.MutationObserver==='function'){mutation=new view.MutationObserver(onVisibility);for(let element=container;element&&element!==document.body;element=element.parentElement)mutation.observe(element,{attributes:true,attributeFilter:['class','hidden','aria-hidden']});}
     let resize=null;
     if(typeof view.ResizeObserver==='function'){resize=new view.ResizeObserver(()=>{if(!destroyed){applyLayout();onVisibility();}});resize.observe(scroll);}
-    return Object.freeze({update,destroy(){if(destroyed)return;destroyed=true;cancelEntrances();if(timer!==null)view.clearTimeout(timer);if(clockTimer!==null)view.clearTimeout(clockTimer);document.removeEventListener('visibilitychange',onVisibility);if(reducedMotion?.removeEventListener)reducedMotion.removeEventListener('change',onVisibility);else reducedMotion?.removeListener?.(onVisibility);observer?.disconnect();mutation?.disconnect();resize?.disconnect();scene.remove();items.clear();slots.clear();}});
+    return Object.freeze({update,setSuspended(value){if(destroyed)return;suspended=!!value;onVisibility();},destroy(){if(destroyed)return;destroyed=true;cancelEntrances();if(timer!==null)view.clearTimeout(timer);if(clockTimer!==null)view.clearTimeout(clockTimer);document.removeEventListener('visibilitychange',onVisibility);if(reducedMotion?.removeEventListener)reducedMotion.removeEventListener('change',onVisibility);else reducedMotion?.removeListener?.(onVisibility);observer?.disconnect();mutation?.disconnect();resize?.disconnect();scene.remove();items.clear();slots.clear();}});
   }
   // `members` (optional) is the room roster, used to give same-model colleagues distinct accessories.
   function avatarSource(member = {}, appearances, members) {return appearance(member,appearances,members?autoVariants(members,appearances).get(member.id)||0:0).avatar;}

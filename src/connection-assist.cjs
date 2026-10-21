@@ -153,9 +153,11 @@ class ConnectionAssist{
       actionKind==='reauthorize'?'这位同事的原连接已撤销，请在 AO 明确重新授权原人物。':actionKind==='managed'?'这位同事使用 AO 后台接入，请在原接入进度继续处理，无需向外部窗口粘贴配置。':actionKind==='unsupported'?'当前尚无可用的接入入口，请查看这位同事的支持情况。':
       ['interrupted','error','cancelled','failed'].includes(status)?(documentPath?'接入未完成；请查看接入说明和原有进度，没有自动重试。':'接入已中断或失败；请查看原有进度，没有自动重试。'):
       status==='running'?'正在接入选定成员。':documentPath?'需要在对应 AI 窗口完成一步连接，请复制接入句并交给它。':this.jobs.has(row.id)?'正在准备接入帮助；未宣称成员已连接。':'接入需要处理；请查看原有进度，没有自动重试。';
-    const guidedGrok=row.provider==='grok-bot'&&!!state?.member_id&&!automatic,targetWindow=guidedGrok?'已有 Grok Bot 对话':`${names.get(row.provider)||row.provider} 的本人对话`;
+    const guidedGrok=row.provider==='grok-bot'&&actionKind==='manual_handoff'&&!!documentPath,targetWindow=guidedGrok?'已有 Grok Bot 对话':`${names.get(row.provider)||row.provider} 的本人对话`;
     const nextStep=protectedConnection?'无需重复登录或重新配置 MCP。请查看连接保护说明，或使用其他已接通的成员。':recheck?'点击「沿用已有登录，重新验证」。AO 会检查原人物的真实通信，成功后进入办公室。':automatic?'已连接，可以直接在 AO 给这位同事发消息。':ready?'已接通本机入口，可以在 AO 留消息；当前需由本人窗口处理，自动接手尚未验证。':row.status==='needs_reauthorization'||stage==='awaiting_credential'?'请打开原接入步骤，明确重新授权这位同事；原消息和人物保留。':
-      guidedGrok?'点击这条消息下方「查看连接步骤」，复制连接说明并发到已有 Grok Bot 对话。AO 会继续检查真实连接，不需要创建群聊。':
+      actionKind==='unsupported'?'尚未找到这个客户端当前可用的接入入口。请查看支持情况，或选择已适配的成员；原人物和配置保留。':
+      actionKind==='native_connect'?'点击「查看连接步骤」，继续连接这位成员的本人对话；原有配置保留。':
+      guidedGrok?'点击下方「复制给 Grok Bot」，把说明发到已有 Grok Bot 对话。AO 会继续检查真实连接，不需要创建群聊。':
       documentPath?`将下方接入句发到${targetWindow}，让它按文档完成连接；AO 会继续显示实际进度。`:
       status==='running'?'AO 正在接入选定成员，保留当前进度等待结果，不重复发起。':'请打开这条消息的原有接入进度，处理提示的下一步；原人物和连接保留。';
     return {id:row.id,room_id:row.room_id,message_id:row.message_id,member_id:row.member_id,provider:row.provider,name:names.get(row.provider)||row.provider,
@@ -217,9 +219,9 @@ class ConnectionAssist{
     let timer;try{await Promise.race([work,new Promise(resolve=>{timer=setTimeout(resolve,timeout);})]);}finally{clearTimeout(timer);}
     const snapshots=this.snapshotForMessage(messageId).map(item=>({name:item.name,provider:item.provider,can_wake:item.can_wake,progress:item.summary,connection_ready:item.ready_for_office===true,automatic_ready:item.ready_for_office===true&&item.can_wake===true,
       reused_connection:item.reused_connection,verification_scope:item.verification_scope,action_kind:item.action_kind,target_window:item.target_window,next_step:item.next_step,copy_sentence:item.copy_sentence,document_path:item.document_path,document_url:item.document_url}));
-    return '\n以下接入步骤由 AO 控制器处理，你不需要管理工具。请帮助用户继续完成接入，不能只回答“工具不支持”“权限不足”或“接入失败”就结束。只根据真实进度回答：\n'+
+    return '\n以下接入步骤由 AO 控制器处理，你不需要管理工具。请在一条回复内按成员分成简短段落，每位只说明当前结果和用户需要做的下一步；AO 会把对应操作嵌在这条回复里，不要另发多条进度或重复长配置。请帮助用户继续完成接入，不能只回答“工具不支持”“权限不足”或“接入失败”就结束。只根据真实进度回答：\n'+
       '1. connection_ready 为 true 时，简短确认已经接通；can_wake 为 false 时补充消息需要由本人窗口处理，不声称自动接手，也不继续输出安装步骤。\n'+
-      '2. 需要本人窗口连接时，先用一句话说明还差哪一步，再告诉用户 next_step 和准确的 target_window；存在 copy_sentence 时逐字给用户这句可复制的内容及接入文档。引导按钮会提供这位同事的专属说明，不要求用户提供房间 ID、路径或新配置。\n'+
+      '2. 需要本人窗口连接时，用一句话说明还差哪一步和准确的 target_window。AO 会在同一条回复里提供复制说明与查看步骤按钮，不重复输出长安装说明、本地文档路径或配置。不要求用户提供房间 ID、路径或新配置。仅当 action_kind 为 manual_handoff 且存在 copy_sentence 时才说可以复制说明；unsupported 只能引导查看支持情况或选择已适配成员。\n'+
       '3. 原入口已撤销、服务中断或仍等待时，说明原进度保留，并给出已有接入步骤中的下一步；不自行重复扫描、重试、重建人物或重签凭据。\n'+
       '4. action_kind 为 connection_repair 时，说明 AO 为保护现有桌面登录已暂停后台连接，原人物和聊天保留；不要让用户再次登录、重新配置 MCP、复制认证或重试，可查看保护说明或选择其他已接通成员。\n'+
       '5. action_kind 为 connection_recheck 时，说明新版可以沿用原 Codex 登录，让用户点击「沿用已有登录，重新验证」，原人物和聊天继续使用；还未验证成功，不要求额外登录或复制配置。\n'+

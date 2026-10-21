@@ -6,7 +6,7 @@ const SDK_SHA256='56f7f4b8bf9aee4b8efefbbdd4f67d5f74ebd1b100ed0806da71bf76af481a
 const SDK_URL=`https://api.nuget.org/v3-flatcontainer/microsoft.web.webview2/${SDK_VERSION}/microsoft.web.webview2.${SDK_VERSION}.nupkg`;
 const REQUIRED_FILES=['AgentRoom.Desktop.exe','AgentRoom.Desktop.exe.config','Microsoft.Web.WebView2.Core.dll','Microsoft.Web.WebView2.WinForms.dll','WebView2Loader.dll','WEBVIEW2_LICENSE.txt'];
 const OFFICE_ASSETS=require('../src/office-assets.cjs').OFFICE_FILES.map(name=>name.replace('assets/office/',''));
-const ASSETS=['desktop-web/index.html','desktop-web/app.js','desktop-web/style.css','desktop-web/desktop.js','desktop-web/office.js','desktop-web/office.css',...OFFICE_ASSETS.map(name=>'desktop-web/assets/office/'+name)];
+const ASSETS=['desktop-web/index.html','desktop-web/app.js','desktop-web/style.css','desktop-web/desktop.js','desktop-web/page-activity.js','desktop-web/office.js','desktop-web/office.css',...OFFICE_ASSETS.map(name=>'desktop-web/assets/office/'+name)];
 function sha(file){return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');}
 function applicationIcon(file){
   // Original AO office mark, stored in the executable; no downloaded artwork.

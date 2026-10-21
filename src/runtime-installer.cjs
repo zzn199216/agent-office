@@ -157,6 +157,7 @@ class RuntimeInstaller{
     }throw new RoomError('官方运行时下载跳转过多。',503,'runtime_download_failed');
   }
   install(input={}){
+    if(this.closing)return Promise.reject(new RoomError('本机服务正在停止，没有开始新的安装。',503,'service_stopping'));
     if(!['qwen-code','claude-code','gemini-cli'].includes(input.provider))return Promise.reject(new RoomError('这个 agent 没有受支持的官方运行时安装器。',409,'runtime_provider_unsupported'));
     if(this.jobs.has(input.provider)){this.jobOwners.get(input.provider)?.rooms.add(input.room_id||'*');return this.jobs.get(input.provider);}
     const owner={abort:new AbortController(),rooms:new Set([input.room_id||'*'])};this.jobOwners.set(input.provider,owner);
@@ -326,6 +327,6 @@ class RuntimeInstaller{
       try{fs.rmSync(target,{recursive:true,force:true});}catch{}throw failure;
     }
   }
-  async close(){await Promise.allSettled([...this.jobs.values()]);}
+  async close(){this.closing=true;for(const owner of this.jobOwners.values())owner.abort.abort();await Promise.allSettled([...this.jobs.values()]);}
 }
 module.exports={RuntimeInstaller,zipEntries,tarEntries,validOfficialUrl,GEMINI_VERSION,NODE_VERSION,GEMINI_RELEASE,NODE_RELEASE};
