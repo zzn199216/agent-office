@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { QwenClient, detectQwen, MIN_VERSION, ROOM_TOOLS, READ_TOOLS, BLOCKED_TOOLS, versionSupported } = require('../src/qwen.cjs');
 const { COMMON_OPERATION_INSTRUCTIONS } = require('../src/operation-policy.cjs');
-const { fixture } = require('./helpers.cjs');
+const { fixture, providerTestEnv } = require('./helpers.cjs');
 const { id, normalizePath } = require('../src/util.cjs');
 const SESSION = '4ca2b4d5-8a9f-4f54-a9aa-ec5ad0b44d43';
 const EXPECTED_ROOM_TOOLS = [
@@ -62,7 +62,7 @@ process.exit(mode==='denied'?1:0);
 function clientFixture(t, options = {}) {
   const f = fixture(), fake = path.join(f.root, 'fake-qwen.cjs'), log = path.join(f.root, 'argv.jsonl');
   fs.writeFileSync(fake, FAKE);
-  const environment = { ...process.env, FAKE_QWEN_LOG: log, USERPROFILE: f.root, OPENAI_API_KEY: 'sk-provider-test-secret', ...options.env };
+  const environment = { ...providerTestEnv(), FAKE_QWEN_LOG: log, USERPROFILE: f.root, OPENAI_API_KEY: 'sk-provider-test-secret', ...options.env };
   const client = new QwenClient({ executable: process.execPath, args: [fake], dataDir: f.data, homeDir: f.root, mcpEnvironment: { AGENTROOM_MEMBER_ID: 'fixture-member' }, env: environment });
   t.after(() => client.close());
   const project = { id: id(), name: '中文测试项目', path: f.project, canonical: normalizePath(f.project), access: 'read-only' };

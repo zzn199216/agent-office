@@ -2,6 +2,7 @@
 const test=require('node:test'),assert=require('node:assert/strict');
 const fs=require('node:fs'),path=require('node:path'),os=require('node:os');
 const {OnboardingActions,launchInteractive}=require('../src/onboarding-actions.cjs');
+const {providerTestEnv}=require('./helpers.cjs');
 function fixture(t){
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'agentoffice-login-action-')),node=path.join(root,'node.exe'),script=path.join(root,'node_modules','@google','gemini-cli','bundle','gemini.js');
   fs.mkdirSync(path.dirname(script),{recursive:true});fs.writeFileSync(node,'metadata fixture; never executed');fs.writeFileSync(script,'metadata fixture; never executed');
@@ -27,7 +28,7 @@ test('manual clients and arbitrary scripts cannot be used as background login en
   f.job.next_actions=[];await assert.rejects(f.actions.perform({operation:'login_client',run_id:f.job.id}),error=>error.code==='onboarding_action_unavailable');assert.equal(f.launched.length,0);
 });
 test('synthetic login launcher receives only the explicitly supplied private environment',async t=>{
-  const f=fixture(t),executable=path.join(f.root,'codex.exe'),home=path.join(f.root,'private-codex'),parent=process.env.CODEX_HOME;fs.writeFileSync(executable,'metadata only');f.job.provider='codex';f.service.store.setting=()=>({executable,executable_args:[]});let prepared=0,invalidated=0;f.service.codex={authenticationEnvironment:async()=>{prepared++;return {...process.env,CODEX_HOME:home};},invalidateAuthentication:()=>{invalidated++;},workspace:{home}};
+  const f=fixture(t),executable=path.join(f.root,'codex.exe'),home=path.join(f.root,'private-codex'),parent=process.env.CODEX_HOME;fs.writeFileSync(executable,'metadata only');f.job.provider='codex';f.service.store.setting=()=>({executable,executable_args:[]});let prepared=0,invalidated=0;f.service.codex={authenticationEnvironment:async()=>{prepared++;return {...providerTestEnv(),CODEX_HOME:home};},invalidateAuthentication:()=>{invalidated++;},workspace:{home}};
   f.actions.options.launcher=async request=>{f.launched.push(request);return {pid:process.pid,nonce:request.nonce,process_identity:'fixture-birth',phase:'completed',exit_code:0};};
   await f.actions.perform({run_id:f.job.id,operation:'login_client'});assert.equal(prepared,1);assert.equal(invalidated,1);assert.equal(f.launched[0].options.env.CODEX_HOME,home);assert.equal(process.env.CODEX_HOME,parent);assert.match(Buffer.from(f.launched[0].args.at(-1),'base64').toString('utf16le'),/login/);
 });
@@ -63,7 +64,7 @@ test('concurrent first-configuration clicks share one verified launch and reject
 
 test('the interactive script confirms a console before its receipt and completed login invalidates only matching Codex homes',async t=>{
   const f=fixture(t),executable=path.join(f.root,'codex.exe'),home=path.join(f.root,'private-codex');fs.writeFileSync(executable,'metadata only');f.job.provider='codex';f.service.store.setting=()=>({executable,executable_args:[]});
-  const calls=[];f.service.codex={workspace:{home},authenticationEnvironment:async()=>({...process.env,CODEX_HOME:home}),invalidateAuthentication:()=>calls.push('global')};f.service.chat.clients=new Map([['same',{workspace:{home},invalidateAuthentication:()=>calls.push('same')}],['other',{workspace:{home:path.join(f.root,'other')},invalidateAuthentication:()=>calls.push('other')}] ]);
+  const calls=[];f.service.codex={workspace:{home},authenticationEnvironment:async()=>({...providerTestEnv(),CODEX_HOME:home}),invalidateAuthentication:()=>calls.push('global')};f.service.chat.clients=new Map([['same',{workspace:{home},invalidateAuthentication:()=>calls.push('same')}],['other',{workspace:{home:path.join(f.root,'other')},invalidateAuthentication:()=>calls.push('other')}] ]);
   f.actions.options.launcher=async request=>{f.launched.push(request);return {pid:process.pid,nonce:request.nonce,process_identity:'fixture-birth',phase:'completed',exit_code:0};};
   await f.actions.perform({run_id:f.job.id,operation:'login_client'});assert.deepEqual(calls,['global','same']);const request=f.launched[0],code=Buffer.from(request.args.at(-1),'base64').toString('utf16le');
   assert.equal(request.options.detached,false);assert.equal(request.options.stdio,'inherit');assert.ok(code.indexOf('IsInputRedirected')<code.indexOf("Write-LoginReceipt 'ready'"));assert.match(code,/Write-LoginReceipt 'failed'/);assert.match(code,/Write-LoginReceipt 'completed'/);assert.match(code,/LASTEXITCODE/);

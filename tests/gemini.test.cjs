@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { GeminiClient, detectGemini, MIN_VERSION, ROOM_TOOLS, READ_TOOLS, versionSupported, collaborationPayload, runtimePolicy } = require('../src/gemini.cjs');
 const { COMMON_OPERATION_INSTRUCTIONS } = require('../src/operation-policy.cjs');
-const { fixture } = require('./helpers.cjs');
+const { fixture, providerTestEnv } = require('./helpers.cjs');
 const { id, normalizePath } = require('../src/util.cjs');
 const SESSION = 'ef7bcb9c-1871-4e50-8398-dd31b0c21234';
 const OTHER_SESSION = '16dd2be3-5a1a-4490-bd38-d3ac81ae2222';
@@ -89,7 +89,7 @@ process.stdin.on('end', () => {
 function clientFixture(t, options = {}) {
   const f = fixture(), fake = path.join(f.root, 'fake-gemini.cjs'), log = path.join(f.root, 'argv.jsonl');
   fs.writeFileSync(fake, FAKE);
-  const environment = { ...process.env, USERPROFILE: f.root, FAKE_GEMINI_LOG: log, GEMINI_API_KEY: 'AIzaFixtureProviderSecret123456', GOOGLE_API_KEY: '', GOOGLE_APPLICATION_CREDENTIALS: '', GEMINI_CLI_SYSTEM_SETTINGS_PATH: path.join(f.root, 'no-existing-admin-settings.json'), ...options.env };
+  const environment = { ...providerTestEnv(), USERPROFILE: f.root, FAKE_GEMINI_LOG: log, GEMINI_API_KEY: 'AIzaFixtureProviderSecret123456', GOOGLE_API_KEY: '', GOOGLE_APPLICATION_CREDENTIALS: '', GEMINI_CLI_SYSTEM_SETTINGS_PATH: path.join(f.root, 'no-existing-admin-settings.json'), ...options.env };
   const client = new GeminiClient({ executable: process.execPath, executableArgs: [fake], dataDir: f.data, homeDir: f.root, mcpEnvironment: { AGENTROOM_MEMBER_ID: 'fixture-member' }, env: environment });
   t.after(() => client.close());
   const project = { id: id(), name: '中文项目 @C:/private', path: f.project, canonical: normalizePath(f.project), access: 'read-only' };

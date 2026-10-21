@@ -1,13 +1,13 @@
 'use strict';
 const {test}=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),os=require('node:os');
-const {fixture}=require('./helpers.cjs'),{CodexClient}=require('../src/codex.cjs'),{CodexWorkspace,workspaceConfig}=require('../src/codex-workspace.cjs'),{id,normalizePath}=require('../src/util.cjs');
+const {fixture,providerTestEnv}=require('./helpers.cjs'),{CodexClient}=require('../src/codex.cjs'),{CodexWorkspace,workspaceConfig}=require('../src/codex-workspace.cjs'),{id,normalizePath}=require('../src/util.cjs');
 async function setup(t){
   const f=fixture(),legacyHome=path.join(f.root,'personal'),script=path.join(__dirname,'fake-persistent-app-server.cjs');fs.mkdirSync(legacyHome);
   const project={id:id(),name:'项目',path:f.project,canonical:normalizePath(f.project),access:'read-only'},discussion={id:id(),title:'秘书',thread_id:null,binding_state:'new'},client=new CodexClient({executable:process.execPath,args:[script],dataDir:f.data,legacyHome});
   await client.workspace.prepare(async()=>({model:'fixture-model',model_provider:'fixture-provider',model_providers:{'fixture-provider':{name:'Fixture',base_url:'http://127.0.0.1:1',env_key:'FIXTURE_KEY',wire_api:'responses',requires_openai_auth:false}}}));
   // Exercise the migration protocol against synthetic rollouts only. Production
   // legacyClient() refuses to launch the personal authentication owner.
-  const protocolLegacy=()=>{const value=new CodexClient({executable:process.execPath,args:[script],legacyHome});value.workspace={home:legacyHome,migrationState:()=>null,legacyVisibleCount:()=>0};value.authOwnershipStatus=()=>({blocked:false});value.authenticationEnvironment=async()=>({...process.env,CODEX_HOME:legacyHome});return value;};
+  const protocolLegacy=()=>{const value=new CodexClient({executable:process.execPath,args:[script],legacyHome});value.workspace={home:legacyHome,migrationState:()=>null,legacyVisibleCount:()=>0};value.authOwnershipStatus=()=>({blocked:false});value.authenticationEnvironment=async()=>({...providerTestEnv(),CODEX_HOME:legacyHome});return value;};
   client.legacyClient=protocolLegacy;const legacy=protocolLegacy();
   t.after(async()=>{await client.close();await legacy.close();});return {...f,legacyHome,project,discussion,client,legacy};
 }

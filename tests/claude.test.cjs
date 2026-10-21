@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { ClaudeClient, detectClaude, MIN_VERSION, ROOM_TOOLS, versionSupported } = require('../src/claude.cjs');
 const { COMMON_OPERATION_INSTRUCTIONS } = require('../src/operation-policy.cjs');
-const { fixture } = require('./helpers.cjs');
+const { fixture, providerTestEnv } = require('./helpers.cjs');
 const { id, normalizePath } = require('../src/util.cjs');
 const SESSION = '4ca2b4d5-8a9f-4f54-a9aa-ec5ad0b44d43';
 const OTHER_SESSION = '34e8a2f4-2535-495b-b60a-6fdf334bb01a';
@@ -45,7 +45,7 @@ process.exit(mode==='denied'?1:0);
 function clientFixture(t, options = {}) {
   const f = fixture(), fake = path.join(f.root, 'fake-claude.cjs'), log = path.join(f.root, 'argv.jsonl');
   fs.writeFileSync(fake, FAKE);
-  const environment = { ...process.env, CLAUDE_CONFIG_DIR: path.join(f.root, '.claude'), FAKE_CLAUDE_LOG: log, ...options.env };
+  const environment = { ...providerTestEnv(), CLAUDE_CONFIG_DIR: path.join(f.root, '.claude'), FAKE_CLAUDE_LOG: log, ...options.env };
   const client = new ClaudeClient({ executable: process.execPath, args: [fake], dataDir: f.data, mcpEnvironment: { AGENTROOM_MEMBER_ID: 'fixture-member' }, env: environment });
   t.after(() => client.close());
   const project = { id: id(), name: '中文测试项目', path: f.project, canonical: normalizePath(f.project), access: 'read-only' };

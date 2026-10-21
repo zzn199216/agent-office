@@ -1,6 +1,7 @@
 'use strict';
 const fs=require('node:fs'),os=require('node:os'),path=require('node:path');
 const {id,sleep}=require('../src/util.cjs');
+function providerTestEnv(inherited=process.env){return Object.fromEntries(Object.entries(inherited).filter(([key])=>!/^(ANTHROPIC_|CLAUDE_CODE_|OPENAI_|GEMINI_|GOOGLE_|QWEN_)/i.test(key)));}
 function fixture(){const root=fs.mkdtempSync(path.join(os.tmpdir(),'agentroom-test-'));const project=path.join(root,'project');fs.mkdirSync(project);fs.writeFileSync(path.join(project,'README.md'),'A local test project.');return {root,project,data:path.join(root,'data')};}
 class FakeCodex{
   constructor(){this.executable='test-fixture-only';this.calls=[];this.concurrent=0;this.maxConcurrent=0;this.reads=new Map();}
@@ -21,4 +22,4 @@ class FakeCodex{
   async close(){}
 }
 class FakeVault{constructor(){this.value={url:'https://api2.cursor.sh/test-fixture',key:'crsr_test_fixture_only'};}get(){return this.value;}status(){return{configured:!!this.value,host:'api2.cursor.sh'};}}
-module.exports={fixture,FakeCodex,FakeVault};
+module.exports={fixture,FakeCodex,FakeVault,providerTestEnv};
