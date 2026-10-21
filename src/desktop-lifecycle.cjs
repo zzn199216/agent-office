@@ -1,6 +1,6 @@
 'use strict';
 const fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypto');
-const {RoomError,atomicWrite}=require('./util.cjs');
+const {RoomError}=require('./util.cjs');
 const MARKER='desktop-lifecycle.json',MUTEX='desktop-lifecycle-mutex.sqlite';
 const UUID=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 const invalid=cause=>{const error=new RoomError('软件服务状态记录无法核对，已保留原记录；请查看本机诊断，没有启动或关闭其他服务。',409,'desktop_lifecycle_invalid');if(cause)error.cause=cause;return error;};
@@ -70,6 +70,26 @@ function commitIntent(db){
     }
   }
 }
+function writeMarker(root,value){
+  const file=path.join(root,MARKER),temp=`${file}.${process.pid}.${crypto.randomUUID()}.tmp`;let fd,owned=false;
+  try{
+    fd=fs.openSync(temp,'wx',0o600);owned=true;
+    fs.writeFileSync(fd,JSON.stringify(value));fs.closeSync(fd);fd=undefined;
+    const end=Date.now()+1500,waiter=new Int32Array(new SharedArrayBuffer(4));
+    for(;;){
+      try{fs.renameSync(temp,file);owned=false;return;}catch(error){
+        // Windows readers can briefly deny replacement. Keep the old marker
+        // and retry this one staged rename, never the surrounding CAS callback.
+        if(process.platform!=='win32'||!['EPERM','EACCES','EBUSY'].includes(error.code))throw error;
+        const remaining=end-Date.now();if(remaining<=0)throw error;
+        Atomics.wait(waiter,0,0,Math.min(25,remaining));
+      }
+    }
+  }finally{
+    if(fd!==undefined)try{fs.closeSync(fd);}catch{}
+    if(owned)try{fs.unlinkSync(temp);}catch{}
+  }
+}
 function writeIntent(root,callback){
   const mutex=path.join(root,MUTEX);let db,begun=false;
   try{
@@ -105,7 +125,7 @@ function activateDesktop(dir,requestedId){
     if(requestedId&&current?.state==='closed'&&current.activation_id===requestedId)throw new RoomError('这个软件窗口已经关闭，没有重新开启旧的启动操作。',503,'desktop_application_closed');
     if(requestedId&&current?.state==='active'&&current.id===requestedId)return descriptor(current);
     const value={schema:'agentoffice.desktop-lifecycle',version:1,id:requestedId||crypto.randomUUID(),state:'active',updated_at:new Date().toISOString()};
-    atomicWrite(path.join(root,MARKER),JSON.stringify(value));return descriptor(value);
+    writeMarker(root,value);return descriptor(value);
   });
 }
 function markDesktopClosed(dir,{expectedActivation,control}={}){
@@ -116,7 +136,7 @@ function markDesktopClosed(dir,{expectedActivation,control}={}){
     if(current?.state==='closed'&&current.activation_id===expectedActivation)return descriptor(current);
     if(current?.state!=='active'||current.id!==expectedActivation)throw new RoomError('另一个软件窗口已更新服务状态，没有关闭新的服务。',409,'desktop_service_changed');
     const value={schema:'agentoffice.desktop-lifecycle',version:1,id:crypto.randomUUID(),activation_id:expectedActivation,state:'closed',updated_at:new Date().toISOString(),control:pinned};
-    atomicWrite(path.join(root,MARKER),JSON.stringify(value));return descriptor(value);
+    writeMarker(root,value);return descriptor(value);
   });
 }
 module.exports={desktopIntent,assertBackgroundAllowed,assertClosedIntent,activateDesktop,markDesktopClosed};

@@ -105,6 +105,30 @@ test('sidecar errors other than disappearance remain typed failures with their o
   try{assert.throws(()=>activateDesktop(f.dir),error=>error.code==='desktop_lifecycle_unavailable'&&error.cause?.code==='EACCES');assert.equal(fs.readFileSync(f.marker,'utf8'),bytes);assert.deepEqual(desktopIntent(f.dir),active);}finally{fs.realpathSync.native=native;fs.unlinkSync(sidecar);}
 });
 
+test('Windows sharing failures retry only the same staged marker rename and write the lifecycle value once',{skip:process.platform!=='win32'},t=>{
+  const f=setup(t);activateDesktop(f.dir);
+  for(const code of ['EPERM','EACCES','EBUSY']){
+    const bytes=fs.readFileSync(f.marker,'utf8'),rename=fs.renameSync,write=fs.writeFileSync,stages=[];let writes=0;
+    fs.writeFileSync=function(...args){writes++;return write.apply(this,args);};
+    fs.renameSync=function(from,to,...args){if(to===f.marker){stages.push(from);if(stages.length<3){assert.equal(fs.readFileSync(f.marker,'utf8'),bytes);throw Object.assign(new Error('Synthetic Windows sharing violation'),{code});}}return rename.call(this,from,to,...args);};
+    try{const active=activateDesktop(f.dir);assert.deepEqual(desktopIntent(f.dir),active);assert.equal(stages.length,3);assert.equal(new Set(stages).size,1);assert.equal(writes,1);assert.equal(fs.readdirSync(f.dir).some(name=>name.endsWith('.tmp')),false);}finally{fs.renameSync=rename;fs.writeFileSync=write;}
+  }
+});
+
+test('persistent Windows sharing failures stop at the rename deadline, preserve the closed marker and remove only their staging file',{skip:process.platform!=='win32'},t=>{
+  const f=setup(t),active=activateDesktop(f.dir);markDesktopClosed(f.dir,{expectedActivation:active.id});const bytes=fs.readFileSync(f.marker,'utf8'),rename=fs.renameSync,write=fs.writeFileSync,unlink=fs.unlinkSync,clock=Date.now,stages=[],removed=[];let simulated=clock(),writes=0;
+  Date.now=()=>simulated;fs.writeFileSync=function(...args){writes++;return write.apply(this,args);};
+  fs.renameSync=function(from,to,...args){if(to===f.marker){stages.push(from);simulated+=1000;throw Object.assign(new Error('Synthetic persistent Windows sharing violation'),{code:'EPERM'});}return rename.call(this,from,to,...args);};
+  fs.unlinkSync=function(file,...args){removed.push(file);return unlink.call(this,file,...args);};
+  try{assert.throws(()=>activateDesktop(f.dir),error=>error.code==='desktop_lifecycle_unavailable'&&error.cause?.code==='EPERM');assert.equal(stages.length,2);assert.equal(new Set(stages).size,1);assert.equal(writes,1);assert.equal(fs.readFileSync(f.marker,'utf8'),bytes);assert.throws(()=>assertBackgroundAllowed(f.dir),{code:'desktop_application_closed'});assert.deepEqual(removed,[stages[0]]);assert.equal(fs.readdirSync(f.dir).some(name=>name.endsWith('.tmp')),false);}finally{Date.now=clock;fs.renameSync=rename;fs.writeFileSync=write;fs.unlinkSync=unlink;}
+});
+
+test('nonsharing marker rename errors do not retry and preserve the old marker while cleaning staging',t=>{
+  const f=setup(t);activateDesktop(f.dir);const bytes=fs.readFileSync(f.marker,'utf8'),rename=fs.renameSync,stages=[];
+  fs.renameSync=function(from,to,...args){if(to===f.marker){stages.push(from);throw Object.assign(new Error('Synthetic marker rename I/O failure'),{code:'EIO'});}return rename.call(this,from,to,...args);};
+  try{assert.throws(()=>activateDesktop(f.dir),error=>error.code==='desktop_lifecycle_unavailable'&&error.cause?.code==='EIO');assert.equal(stages.length,1);assert.equal(fs.readFileSync(f.marker,'utf8'),bytes);assert.equal(fs.readdirSync(f.dir).some(name=>name.endsWith('.tmp')),false);}finally{fs.renameSync=rename;}
+});
+
 function worker(dir,activation,operation){
   const source=path.resolve(__dirname,'../src/desktop-lifecycle.cjs'),code="const m=require(process.argv[1]);function detail(e){return e?{code:e.code,name:e.name,message:e.message,stack:e.stack,cause:e.cause?detail(e.cause):undefined}:undefined;}try{const result=process.argv[4]==='activate'?m.activateDesktop(process.argv[2]):m.markDesktopClosed(process.argv[2],{expectedActivation:process.argv[3]});process.stdout.write(JSON.stringify({result}));}catch(error){process.stdout.write(JSON.stringify({error:error.code,detail:detail(error)}));}";
   return new Promise((resolve,reject)=>{const child=spawn(process.execPath,['-e',code,source,dir,activation,operation],{windowsHide:true,stdio:['ignore','pipe','pipe']});let out='',err='';const timer=setTimeout(()=>{child.kill();reject(Error('Owned lifecycle worker timed out'));},10000);child.stdout.on('data',part=>out+=part);child.stderr.on('data',part=>err+=part);child.once('error',error=>{clearTimeout(timer);reject(error);});child.once('exit',status=>{clearTimeout(timer);try{assert.equal(status,0,err);resolve(JSON.parse(out));}catch(error){reject(error);}});});
