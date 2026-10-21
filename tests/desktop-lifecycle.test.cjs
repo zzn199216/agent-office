@@ -37,7 +37,7 @@ test('unknown or malformed markers fail closed without replacing their contents'
   const f=setup(t),active=activateDesktop(f.dir),valid=JSON.parse(fs.readFileSync(f.marker,'utf8'));
   for(const value of ['broken json',null,[],{...valid,schema:'foreign'},{...valid,version:2},{...valid,id:'not-an-id'},{...valid,state:'unknown'},{...valid,updated_at:'invalid'},{...valid,token:'unexpected'},{...valid,state:'closed'},{...valid,state:'closed',activation_id:active.id,control:{...control(),token:'must-not-load'}}]){
     const text=typeof value==='string'?value:JSON.stringify(value);fs.writeFileSync(f.marker,text);
-    for(const operation of [()=>desktopIntent(f.dir),()=>assertBackgroundAllowed(f.dir),()=>activateDesktop(f.dir),()=>markDesktopClosed(f.dir,{expectedActivation:active.id})])assert.throws(operation,{code:'desktop_lifecycle_invalid'});
+    for(const operation of [()=>desktopIntent(f.dir),()=>assertBackgroundAllowed(f.dir),()=>markDesktopClosed(f.dir,{expectedActivation:active.id})])assert.throws(operation,{code:'desktop_lifecycle_invalid'});
     assert.equal(fs.readFileSync(f.marker,'utf8'),text);
   }
 });
@@ -53,18 +53,45 @@ test('a missing daemon may still close its own activation and legacy null owner 
   const f=setup(t),active=activateDesktop(f.dir);markDesktopClosed(f.dir,{expectedActivation:active.id,control:null});assert.equal(JSON.parse(fs.readFileSync(f.marker,'utf8')).control,null);assert.throws(()=>assertBackgroundAllowed(f.dir),{code:'desktop_application_closed'});
   const reopened=activateDesktop(f.dir);markDesktopClosed(f.dir,{expectedActivation:reopened.id,control:{...control(),owner_id:null,instance_id:null}});assert.equal(desktopIntent(f.dir).state,'closed');
 });
-test('linked markers and mutex files cannot redirect lifecycle state writes',t=>{
-  const f=setup(t),outside=path.join(f.root,'outside.json');fs.writeFileSync(outside,'preserve external fixture');fs.linkSync(outside,f.marker);
-  for(const operation of [()=>assertBackgroundAllowed(f.dir),()=>activateDesktop(f.dir)])assert.throws(operation,{code:'desktop_lifecycle_invalid'});assert.equal(fs.readFileSync(outside,'utf8'),'preserve external fixture');fs.unlinkSync(f.marker);
-  fs.linkSync(outside,path.join(f.dir,'desktop-lifecycle-mutex.sqlite'));assert.throws(()=>activateDesktop(f.dir),{code:'desktop_lifecycle_invalid'});assert.equal(fs.readFileSync(outside,'utf8'),'preserve external fixture');assert.equal(fs.existsSync(f.marker),false);
+test('explicit activation quarantines hardlinked markers without changing the linked file and still rejects linked mutexes',t=>{
+  const f=setup(t),outside=path.join(f.root,'outside.json'),initial=activateDesktop(f.dir),bytes=fs.readFileSync(f.marker,'utf8');fs.renameSync(f.marker,outside);fs.linkSync(outside,f.marker);
+  assert.throws(()=>assertBackgroundAllowed(f.dir),{code:'desktop_lifecycle_invalid'});const active=activateDesktop(f.dir);assert.equal(active.state,'active');assert.notEqual(active.id,initial.id);assert.equal(fs.readFileSync(outside,'utf8'),bytes);assert.equal(fs.statSync(f.marker).nlink,1);
+  const archive=fs.readdirSync(f.dir).find(name=>/^desktop-lifecycle\.invalid-\d+\.json$/.test(name));assert.ok(archive);assert.equal(fs.statSync(path.join(f.dir,archive)).nlink,2);assert.equal(fs.readFileSync(path.join(f.dir,archive),'utf8'),bytes);fs.unlinkSync(f.marker);
+  const mutex=path.join(f.dir,'desktop-lifecycle-mutex.sqlite');fs.unlinkSync(mutex);fs.linkSync(outside,mutex);assert.throws(()=>activateDesktop(f.dir),{code:'desktop_lifecycle_invalid'});assert.equal(fs.readFileSync(outside,'utf8'),bytes);assert.equal(fs.existsSync(f.marker),false);
 });
 test('oversized and directory markers fail closed before native work can start',t=>{
   const f=setup(t);fs.writeFileSync(f.marker,' '.repeat(4097));assert.throws(()=>assertBackgroundAllowed(f.dir),{code:'desktop_lifecycle_invalid'});fs.unlinkSync(f.marker);fs.mkdirSync(f.marker);assert.throws(()=>assertBackgroundAllowed(f.dir),{code:'desktop_lifecycle_invalid'});
 });
-test('symbolic or reparse marker paths are rejected without following the target',t=>{
+test('background paths reject reparse markers and explicit activation quarantines the link without following its target',t=>{
   const f=setup(t),target=path.join(f.root,'linked-directory');fs.mkdirSync(target);fs.writeFileSync(path.join(target,'preserved'),'keep');
   try{fs.symlinkSync(target,f.marker,process.platform==='win32'?'junction':'dir');}catch(error){if(['EPERM','EACCES','ENOTSUP'].includes(error.code)){t.skip('Fixture symlink permission unavailable');return;}throw error;}
-  for(const operation of [()=>assertBackgroundAllowed(f.dir),()=>activateDesktop(f.dir)])assert.throws(operation,{code:'desktop_lifecycle_invalid'});assert.equal(fs.readFileSync(path.join(target,'preserved'),'utf8'),'keep');
+  assert.throws(()=>assertBackgroundAllowed(f.dir),{code:'desktop_lifecycle_invalid'});assert.equal(activateDesktop(f.dir).state,'active');assert.equal(fs.readFileSync(path.join(target,'preserved'),'utf8'),'keep');
+  const archive=fs.readdirSync(f.dir).find(name=>/^desktop-lifecycle\.invalid-\d+\.json$/.test(name));assert.equal(fs.lstatSync(path.join(f.dir,archive)).isSymbolicLink(),true);
+});
+
+for(const [name,bytes] of [['corrupt JSON','{broken private fixture'],['oversized marker',JSON.stringify({schema:'agentoffice.desktop-lifecycle',version:1,id:crypto.randomUUID(),state:'active',updated_at:new Date().toISOString()})+' '.repeat(4097)]])test(`explicit activation recovers a ${name}, preserves its bytes and records a diagnostic`,t=>{
+  const f=setup(t),epoch=crypto.randomUUID();fs.writeFileSync(f.marker,bytes);
+  for(const operation of [()=>desktopIntent(f.dir),()=>assertBackgroundAllowed(f.dir),()=>markDesktopClosed(f.dir,{expectedActivation:epoch})])assert.throws(operation,{code:'desktop_lifecycle_invalid'});
+  assert.deepEqual(fs.readdirSync(f.dir),['desktop-lifecycle.json']);
+  const active=activateDesktop(f.dir,epoch);assert.equal(active.id,epoch);assert.equal(active.state,'active');assert.deepEqual(assertBackgroundAllowed(f.dir),active);
+  const archives=fs.readdirSync(f.dir).filter(name=>/^desktop-lifecycle\.invalid-\d+\.json$/.test(name));assert.equal(archives.length,1);assert.equal(fs.readFileSync(path.join(f.dir,archives[0]),'utf8'),bytes);
+  const diagnosticFile=fs.readdirSync(f.dir).find(name=>/^desktop-lifecycle-recovery-\d+\.json$/.test(name)),diagnostic=JSON.parse(fs.readFileSync(path.join(f.dir,diagnosticFile),'utf8'));
+  assert.equal(diagnostic.code,'desktop_lifecycle_invalid');assert.equal(diagnostic.preserved_marker,archives[0]);assert.equal(diagnostic.reason,'explicit_desktop_activation');assert.doesNotMatch(JSON.stringify(diagnostic),/private fixture/);
+  activateDesktop(f.dir,epoch);assert.equal(fs.readdirSync(f.dir).filter(name=>/^desktop-lifecycle\.invalid-/.test(name)).length,1);
+});
+
+test('recovery never overwrites a historical quarantine with the same timestamp',t=>{
+  const f=setup(t),timestamp=Date.now(),clock=Date.now,archive=path.join(f.dir,`desktop-lifecycle.invalid-${timestamp}.json`);fs.writeFileSync(archive,'keep original archive');fs.writeFileSync(f.marker,'broken current marker');Date.now=()=>timestamp;
+  try{assert.equal(activateDesktop(f.dir).state,'active');}finally{Date.now=clock;}
+  assert.equal(fs.readFileSync(archive,'utf8'),'keep original archive');assert.equal(fs.readFileSync(path.join(f.dir,`desktop-lifecycle.invalid-${timestamp+1}.json`),'utf8'),'broken current marker');
+});
+
+test('an interrupted recovery stays fail closed and a later explicit start can finish without deleting the archive',t=>{
+  const f=setup(t),rename=fs.renameSync;fs.writeFileSync(f.marker,'broken marker');
+  fs.renameSync=function(from,to,...args){if(to===f.marker)throw Object.assign(new Error('Synthetic fresh marker write failure'),{code:'EIO'});return rename.call(this,from,to,...args);};
+  try{assert.throws(()=>activateDesktop(f.dir),{code:'desktop_lifecycle_unavailable'});}finally{fs.renameSync=rename;}
+  assert.equal(fs.existsSync(f.marker),false);assert.throws(()=>assertBackgroundAllowed(f.dir),{code:'desktop_lifecycle_invalid'});assert.throws(()=>markDesktopClosed(f.dir,{expectedActivation:crypto.randomUUID()}),{code:'desktop_lifecycle_invalid'});
+  assert.equal(activateDesktop(f.dir).state,'active');const archives=fs.readdirSync(f.dir).filter(name=>/^desktop-lifecycle\.invalid-\d+\.json$/.test(name));assert.equal(archives.length,1);assert.equal(fs.readFileSync(path.join(f.dir,archives[0]),'utf8'),'broken marker');
 });
 
 test('a peer deleting a transient SQLite sidecar between lstat and realpath does not fail activation',t=>{

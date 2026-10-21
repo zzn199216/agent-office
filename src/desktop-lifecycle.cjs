@@ -32,7 +32,11 @@ function readIntent(root){
   for(let attempt=0;attempt<3;attempt++){
     try{
       const stat=regular(file,root);
-      if(!stat){if(!observed)return null;if(attempt<2)continue;throw changing();}
+      if(!stat){
+        // A recovery interrupted after quarantine must not look unmanaged.
+        if(!observed){if(fs.readdirSync(root).some(name=>/^desktop-lifecycle\.invalid-\d+\.json$/.test(name)))throw invalid();return null;}
+        if(attempt<2)continue;throw changing();
+      }
       observed=true;if(stat.size>4096)throw invalid();
       value=JSON.parse(fs.readFileSync(file,'utf8'));break;
     }catch(error){
@@ -90,16 +94,36 @@ function writeMarker(root,value){
     if(owned)try{fs.unlinkSync(temp);}catch{}
   }
 }
-function writeIntent(root,callback){
+function quarantineInvalidMarker(root){
+  let timestamp=Date.now(),archive,diagnostic;
+  for(;;timestamp++){
+    archive=path.join(root,`desktop-lifecycle.invalid-${timestamp}.json`);
+    diagnostic=path.join(root,`desktop-lifecycle-recovery-${timestamp}.json`);
+    const exists=file=>{try{fs.lstatSync(file);return true;}catch(error){if(error.code==='ENOENT')return false;throw error;}};
+    if(!exists(archive)&&!exists(diagnostic))break;
+  }
+  try{fs.renameSync(path.join(root,MARKER),archive);}catch(error){
+    if(error.code!=='ENOENT')throw error;
+    // A previous explicit activation may have quarantined the marker before
+    // its fresh write failed. Preserve that archive and retry activation.
+    const previous=fs.readdirSync(root).filter(name=>/^desktop-lifecycle\.invalid-\d+\.json$/.test(name)).sort((a,b)=>Number(a.match(/\d+/)[0])-Number(b.match(/\d+/)[0])).at(-1);
+    if(!previous)throw error;archive=path.join(root,previous);
+  }
+  fs.writeFileSync(diagnostic,JSON.stringify({schema:'agentoffice.desktop-lifecycle-recovery',at:new Date().toISOString(),code:'desktop_lifecycle_invalid',reason:'explicit_desktop_activation',preserved_marker:path.basename(archive)}),{flag:'wx',mode:0o600});
+}
+function writeIntent(root,callback,{recoverInvalid=false}={}){
   const mutex=path.join(root,MUTEX);let db,begun=false;
+  const readCurrent=()=>{try{return readIntent(root);}catch(error){if(recoverInvalid&&error.code==='desktop_lifecycle_invalid')return undefined;throw error;}};
   try{
-    // Fail before creating a mutex if the existing marker cannot be trusted.
-    readIntent(root);
+    // Only an explicit user activation can recover an invalid marker. Mutex
+    // files still fail closed, and quarantine occurs only while holding it.
+    readCurrent();
     for(const suffix of ['','-journal','-wal','-shm'])regular(mutex+suffix,root,suffix!=='');
     const {DatabaseSync}=require('node:sqlite');
     db=new DatabaseSync(mutex);db.exec('PRAGMA busy_timeout=1000; BEGIN IMMEDIATE;');begun=true;
     for(const suffix of ['','-journal','-wal','-shm'])regular(mutex+suffix,root,suffix!=='');
-    const result=callback(readIntent(root));commitIntent(db);begun=false;return result;
+    let current=readCurrent();if(current===undefined){quarantineInvalidMarker(root);current=null;}
+    const result=callback(current);commitIntent(db);begun=false;return result;
   }catch(error){
     if(begun)try{db.exec('ROLLBACK');}catch{}
     if(error instanceof RoomError)throw error;
@@ -126,7 +150,7 @@ function activateDesktop(dir,requestedId){
     if(requestedId&&current?.state==='active'&&current.id===requestedId)return descriptor(current);
     const value={schema:'agentoffice.desktop-lifecycle',version:1,id:requestedId||crypto.randomUUID(),state:'active',updated_at:new Date().toISOString()};
     writeMarker(root,value);return descriptor(value);
-  });
+  },{recoverInvalid:true});
 }
 function markDesktopClosed(dir,{expectedActivation,control}={}){
   if(!UUID.test(expectedActivation||''))throw new RoomError('缺少当前软件窗口的服务状态标识，没有关闭其他窗口的服务。',409,'desktop_service_changed');
