@@ -44,6 +44,7 @@ class CodexClient extends EventEmitter {
     if(this.pooled){for(const name of ['pending','nextId','child']){let local=this[name];Object.defineProperty(this,name,{configurable:true,get:()=>this.transport?this.transport.owner[name]:local,set:value=>{if(this.transport)this.transport.owner[name]=value;else local=value;}});}}
   }
   legacyClient(){throw new RoomError('为保护已登录的 Codex，AO 不会启动个人登录目录的后台连接。原会话绑定已保留。',409,'codex_personal_auth_owner_conflict');}
+  diagnostics(){return this.workspace?.diagnostics?.()||null;}
   authOwnershipStatus(){
     try{
       if(!this.workspace)throw new RoomError('为保护已登录的 Codex，AO 不会启动个人登录目录的后台连接。原聊天和成员已保留。',409,'codex_personal_auth_owner_conflict');
@@ -156,7 +157,7 @@ class CodexClient extends EventEmitter {
   async status() {
     const info = await this.ready();
     const account = await this.call('account/read', { refreshToken: false });
-    return { connected: true, executable: this.executable, userAgent: info.userAgent, signedIn: !!account.account,requiresOpenaiAuth:account.requiresOpenaiAuth!==false,readyForRequests:account.requiresOpenaiAuth===false||!!account.account, authType: account.account?.type || null,sessionMode:this.authenticationMode==='shared-cache'?'shared-login-background':this.workspace?'isolated-background':'native',authenticationMode:this.authenticationMode,...this.workspace?{sessionDirectory:this.workspace.home,legacyVisibleCount:this.workspace.legacyVisibleCount()}:{} };
+    return { connected: true, executable: this.executable, userAgent: info.userAgent, signedIn: !!account.account,requiresOpenaiAuth:account.requiresOpenaiAuth!==false,readyForRequests:account.requiresOpenaiAuth===false||!!account.account, authType: account.account?.type || null,sessionMode:this.authenticationMode==='shared-cache'?'shared-login-background':this.workspace?'isolated-background':'native',authenticationMode:this.authenticationMode,...this.workspace?{sessionDirectory:this.workspace.home,legacyVisibleCount:this.workspace.legacyVisibleCount(),diagnostics:this.diagnostics()}:{} };
   }
   async list(project) {
     await this.ready();

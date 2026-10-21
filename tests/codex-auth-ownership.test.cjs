@@ -44,6 +44,23 @@ async function noAuthenticationIO(work){
 }
 function request(f){return {project:{id:'fixture-project',name:'Fixture',path:f.project,canonical:f.project,access:'read-only'},discussion:{id:'fixture-room',title:'Fixture person',thread_id:'11111111-2222-4333-8444-555555555555',binding_state:'bound'},invitation:{id:'fixture-invitation',nonce:'fixture-nonce'},request:{id:'fixture-request',sender:'user',prompt:'Must never reach a model'},signal:new AbortController().signal,onBinding:()=>assert.fail('A blocked owner cannot change a binding'),onTurn:()=>assert.fail('A blocked owner cannot start a turn'),onProgress:()=>{},onApproval:()=>assert.fail('A blocked owner cannot request permission')};}
 
+test('workspace diagnostics report only private legacy auth existence for manual removal without authentication IO or process starts',async t=>{
+  for(const privateAuth of [undefined,'SYNTHETIC SEEDED AUTH - NEVER READ']){
+    const f=fixture(t,{seeded:true,privateAuth}),client=f.client(),before=bytes(f.root),start=spawnAttempts,auth=path.join(f.home,'auth.json'),lstat=fs.lstatSync,observed=[];
+    fs.lstatSync=function(file,...args){if(typeof file==='string'&&path.basename(file).toLowerCase()==='auth.json'){assert.equal(file,auth);observed.push(file);}return lstat.call(this,file,...args);};
+    try{await noAuthenticationIO(async()=>{assert.deepEqual(client.diagnostics(),{legacySeededAuth:{path:auth,present:privateAuth!==undefined,manualRemovalRequired:privateAuth!==undefined}});});}finally{fs.lstatSync=lstat;}
+    assert.deepEqual(observed,[auth]);assert.equal(spawnAttempts,start);assert.deepEqual(bytes(f.root),before);
+  }
+});
+
+test('workspace diagnostics report unknown for linked homes and inaccessible auth metadata without following credential targets',async t=>{
+  const f=fixture(t),auth=path.join(f.home,'auth.json'),lstat=fs.lstatSync;
+  fs.lstatSync=function(file,...args){if(file===auth)throw Object.assign(new Error('Synthetic metadata denied'),{code:'EACCES'});return lstat.call(this,file,...args);};
+  try{await noAuthenticationIO(async()=>{assert.deepEqual(f.client().diagnostics().legacySeededAuth,{path:auth,present:null,manualRemovalRequired:null,error:'EACCES'});});}finally{fs.lstatSync=lstat;}
+  const linked=fixture(t,{prepared:false});fs.symlinkSync(linked.personal,linked.home,'junction');
+  await noAuthenticationIO(async()=>{assert.deepEqual(linked.client().diagnostics().legacySeededAuth,{path:path.join(linked.home,'auth.json'),present:null,manualRemovalRequired:null,error:'codex_workspace_path'});});
+});
+
 test('a previously seeded workspace is rejected without reading source or private authentication or changing durable files',async t=>{
   const f=fixture(t,{seeded:true}),before=bytes(f.root),start=spawnAttempts,workspace=new CodexWorkspace(f.data,{legacyHome:f.personal});let configReads=0;
   await noAuthenticationIO(async()=>{assert.throws(()=>workspace.assertAuthenticationOwner(),typed('codex_auth_ownership_required'));await assert.rejects(workspace.prepare(async()=>{configReads++;return{};}),typed('codex_auth_ownership_required'));});

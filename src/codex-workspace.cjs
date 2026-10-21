@@ -85,7 +85,8 @@ class CodexWorkspace{
   }
   assertSharedCache(){
     // Authentication stays in the original native cache. The old private
-    // auth.json is deliberately not inspected, loaded, copied or overwritten.
+    // auth.json contents are never loaded, copied or overwritten. Diagnostics
+    // may report the private path's existence for manual removal.
     if(!fs.existsSync(this.legacyHome)||!fs.statSync(this.legacyHome).isDirectory())throw new RoomError('尚未找到原 Codex 环境。请先打开已安装的 Codex 完成首次设置，再检查连接。',409,'codex_login_required');
     if(entryExists(path.join(this.legacyHome,'agentoffice-workspace.json')))throw new RoomError('选中的 Codex 环境是 AO 的旧工作副本，不能当作原登录缓存。原连接已保留，请检查连接诊断。',409,'codex_auth_ownership_required');
     if(entryExists(this.home)){
@@ -96,6 +97,17 @@ class CodexWorkspace{
       if(entryExists(marker)){if(!workspaceOwner(readWorkspaceMarker(marker,this.home),this.legacyHome))throw new RoomError('后台协作目录身份不匹配。',409,'codex_workspace_owner');}
       else if(fs.readdirSync(this.home).length)throw new RoomError('后台协作目录已有未登记文件，原记录已保留。',409,'codex_workspace_owner');
     }
+  }
+  diagnostics(){
+    const file=path.join(this.home,'auth.json');let present=false;
+    try{
+      if(entryExists(this.home)){
+        const stat=fs.lstatSync(this.home);
+        if(!stat.isDirectory()||stat.isSymbolicLink())return {legacySeededAuth:{path:file,present:null,manualRemovalRequired:null,error:'codex_workspace_path'}};
+        present=entryExists(file); // lstat only; never open or follow auth.json.
+      }
+      return {legacySeededAuth:{path:file,present,manualRemovalRequired:present}};
+    }catch(error){return {legacySeededAuth:{path:file,present:null,manualRemovalRequired:null,error:error.code||'codex_workspace_path'}};}
   }
   async sharedEnvironment(){
     this.assertSharedCache();fs.mkdirSync(this.home,{recursive:true,mode:0o700});this.assertSharedCache();

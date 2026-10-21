@@ -42,6 +42,7 @@ class RoomService extends EventEmitter {
   async health() {
     try { this.codexHealth = await this.codex.status(); }
     catch (e) { this.codexHealth = { connected: false, executable: this.codex.executable || null, error: readableError(e) }; }
+    const diagnostics=this.codex.diagnostics?.();if(diagnostics)this.codexHealth.diagnostics=diagnostics;
     this.changed(); return this.codexHealth;
   }
   addProject(input) { const p = this.store.addProject(input.name, input.path, input.access); this.changed(); return p; }

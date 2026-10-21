@@ -37,6 +37,7 @@ test('shared-cache health and two members coalesce one process with native auth 
   assert.equal(f.startups().length,1);const startup=f.startups()[0];assert.equal(startup.auth_home,f.authHome);assert.equal(startup.sqlite_home,f.sqliteHome);
   assert.equal(a.client.child.pid,b.client.child.pid);assert.equal(health.client.child.pid,a.client.child.pid);assert.equal(a.client.transport.owner,b.client.transport.owner);
   assert.ok(states.every(state=>state.connected&&state.readyForRequests&&state.authenticationMode==='shared-cache'&&state.sessionMode==='shared-login-background'));
+  assert.ok(states.every(state=>state.diagnostics.legacySeededAuth.present===false&&state.diagnostics.legacySeededAuth.path===path.join(f.sqliteHome,'auth.json')));
   const flags=startup.args.join('\n');assert.match(flags,/sqlite_home=/);assert.match(flags,/notify=\[\]/);assert.match(flags,/features\.hooks=false/);assert.match(flags,/features\.plugins=false/);
   assert.equal(f.calls().filter(call=>call.method==='initialize').length,1);const accounts=f.calls().filter(call=>call.method==='account/read');assert.equal(accounts.length,3);assert.ok(accounts.every(call=>call.params.refreshToken===false));
   assert.equal(f.calls().some(call=>/login|logout|refresh/.test(call.method)),false);assert.equal(fs.existsSync(path.join(f.authHome,'rpc.jsonl')),false);
@@ -57,7 +58,7 @@ test('shared-cache startup never reads copies or overwrites either synthetic aut
   const guard=(name,original)=>(...args)=>{if(isAuth(args[0])||name==='copy'&&isAuth(args[1])){authCalls.push(name);throw Error('AO must not access authentication fixture contents');}return original(...args);};
   t.mock.method(fs,'readFileSync',guard('read',read));t.mock.method(fs,'writeFileSync',guard('write',write));t.mock.method(fs,'copyFileSync',guard('copy',copy));t.mock.method(fs,'openSync',guard('open',open));
   const beforeMarker=read(path.join(f.sqliteHome,'agentoffice-workspace.json'),'utf8');
-  try{assert.deepEqual(a.client.authOwnershipStatus(),{blocked:false,mode:'shared-cache',revision:'native-shared-cache-v1'});await a.client.status();await f.bind(a);await a.client.close();assert.deepEqual(authCalls,[]);}
+  try{assert.deepEqual(a.client.authOwnershipStatus(),{blocked:false,mode:'shared-cache',revision:'native-shared-cache-v1'});const status=await a.client.status();assert.deepEqual(status.diagnostics.legacySeededAuth,{path:path.join(f.sqliteHome,'auth.json'),present:true,manualRemovalRequired:true});await f.bind(a);await a.client.close();assert.deepEqual(authCalls,[]);}
   finally{t.mock.restoreAll();}
   assert.equal(read(path.join(f.authHome,'auth.json'),'utf8'),'SYNTHETIC NATIVE LOGIN - NEVER LOAD');assert.equal(read(path.join(f.sqliteHome,'auth.json'),'utf8'),'SYNTHETIC STALE COPY - NEVER LOAD');
   assert.equal(read(path.join(f.authHome,'config.toml'),'utf8'),f.nativeConfig);assert.equal(read(path.join(f.sqliteHome,'config.toml'),'utf8'),'model = "old-private-model"\n');assert.equal(read(path.join(f.sqliteHome,'agentoffice-workspace.json'),'utf8'),beforeMarker);
