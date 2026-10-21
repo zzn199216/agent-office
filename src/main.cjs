@@ -3,22 +3,47 @@
 const fs=require('node:fs');const path=require('node:path');const crypto=require('node:crypto');
 const {spawn}=require('node:child_process');const {isSea}=require('node:sea');
 const {dataDirectory,atomicWrite,sleep,RoomError,readableError,ownCommand,livePid,VERSION}=require('./util.cjs');
+const {acquireDaemonLock,releaseDaemonLock,isControlProcessAlive}=require('./daemon-owner.cjs');
 
 function argumentsOf(args){const options={},pos=[];for(let i=0;i<args.length;i++){const a=args[i];if(a.startsWith('--')){const name=a.slice(2);options[name]=args[i+1]&&!args[i+1].startsWith('--')?args[++i]:true;}else pos.push(a);}return {options,pos};}
-function readControl(dir){try{const r=JSON.parse(fs.readFileSync(path.join(dir,'control.json'),'utf8'));const u=new URL(r.url);if(u.protocol!=='http:'||u.hostname!=='127.0.0.1'||!livePid(r.pid))return null;return r;}catch{return null;}}
-async function apiCall(dir,endpoint,input,timeout=35000){
+function readControl(dir){try{const r=JSON.parse(fs.readFileSync(path.join(dir,'control.json'),'utf8'));const u=new URL(r.url);if(u.protocol!=='http:'||u.hostname!=='127.0.0.1'||u.username||u.password||u.pathname!=='/'||u.search||u.hash||!Number.isSafeInteger(r.pid)||r.pid<=0||!livePid(r.pid))return null;if(r.owner_id){const lock=JSON.parse(fs.readFileSync(path.join(dir,'daemon.lock'),'utf8'));if(lock.owner_id!==r.owner_id||lock.pid!==r.pid)return null;}return r;}catch{return null;}}
+async function apiCall(dir,endpoint,input,timeout=35000,expectedControl){
   const control=readControl(dir);if(!control)throw new RoomError('AgentRoom 尚未启动。',503,'not_running');
+  if(expectedControl&&['pid','url','token','owner_id','instance_id'].some(key=>control[key]!==expectedControl[key]))throw new RoomError('本机服务身份已经变化，请重新检查状态；没有操作接管后的服务。',409,'desktop_service_changed');
   const res=await fetch(control.url+endpoint,{method:input===undefined?'GET':'POST',headers:{Authorization:`Bearer ${control.token}`,...input===undefined?{}:{'Content-Type':'application/json'}},...input===undefined?{}:{body:JSON.stringify(input)},signal:AbortSignal.timeout(timeout),redirect:'error'});
   const value=await res.json();if(!res.ok)throw new RoomError(value.error || '请求失败。',res.status,value.code);return value;
 }
-async function ensureServer(dir){
-  if(readControl(dir)){try{const state=await apiCall(dir,'/api/state',undefined,3000);let expected;const file=path.join(dir,'room.sqlite');if(fs.existsSync(file)){const {DatabaseSync}=require('node:sqlite');const db=new DatabaseSync(file,{readOnly:true});try{const row=db.prepare("SELECT value FROM settings WHERE key='instance_fingerprint'").get();expected=row?JSON.parse(row.value):null;}finally{db.close();}}if(expected&&state.instance_id!==expected)throw new RoomError('处理程序与磁盘实例不匹配，没有连接另一空聊天室。',409,'instance_control_mismatch');return readControl(dir);}catch(e){if(e.code==='instance_control_mismatch')throw e;if(e.status===401||e.status===403)throw new RoomError('已有处理程序身份不匹配，没有另建替代实例。',409,'instance_control_mismatch');}}
+async function ensureServer(dir,options={}){
+  const deadline=Math.min(options.deadline||Infinity,Date.now()+(options.timeout??20000)),read=options.readControl||readControl,call=options.call||apiCall;
+  const remaining=max=>Math.max(1,Math.min(max,deadline-Date.now()));
+  const ready=async()=>{
+    if(!read(dir))return null;
+    try{
+      const state=await call(dir,'/api/state',undefined,remaining(1500));let expected;const file=path.join(dir,'room.sqlite');
+      if(fs.existsSync(file)){const {DatabaseSync}=require('node:sqlite');const db=new DatabaseSync(file,{readOnly:true});try{const row=db.prepare("SELECT value FROM settings WHERE key='instance_fingerprint'").get();expected=row?JSON.parse(row.value):null;}finally{db.close();}}
+      const control=read(dir);if(!control)return null;
+      if((expected&&state.instance_id!==expected)||(control.instance_id&&control.instance_id!==state.instance_id))throw new RoomError('处理程序与磁盘实例不匹配，没有连接另一空聊天室。',409,'instance_control_mismatch');return control;
+    }catch(e){if(e.code==='instance_control_mismatch')throw e;if(e.status===401||e.status===403)throw new RoomError('已有处理程序身份不匹配，没有另建替代实例。',409,'instance_control_mismatch');return null;}
+  };
+  const current=await ready();if(current)return current;
+  if(Date.now()>=deadline)throw new RoomError('本机服务检查超时，请重新检查状态后再试。',503,'start_timeout');
   fs.mkdirSync(dir,{recursive:true});const own=ownCommand();
   if(isSea()){const current=require('./install.cjs').activeRuntime(dir);if(current)own.command=current;}
+  const attempt=crypto.randomUUID();let spawnError=null,exitCode=null;
   const log=fs.openSync(path.join(dir,'daemon.log'),'a');
-  const child=spawn(own.command,[...own.args,'serve','--data-dir',dir],{detached:true,windowsHide:true,stdio:['ignore',log,log],env:{...process.env,AGENTROOM_DATA_DIR:dir}});child.unref();fs.closeSync(log);
-  for(let i=0;i<80;i++){await sleep(250);if(readControl(dir)){try{await apiCall(dir,'/api/state',undefined,2000);return readControl(dir);}catch{}}}
-  throw new RoomError(`启动未完成，请查看 ${path.join(dir,'daemon.log')}。`,503,'start_timeout');
+  try{const child=(options.spawn||spawn)(own.command,[...own.args,'serve','--data-dir',dir,'--startup-id',attempt],{detached:true,windowsHide:true,stdio:['ignore',log,log],env:{...process.env,AGENTROOM_DATA_DIR:dir}});child.once('error',e=>{spawnError=e;});child.once('exit',(code,signal)=>{exitCode=code??(signal?1:0);});child.unref();}catch(e){spawnError=e;}finally{fs.closeSync(log);}
+  while(Date.now()<deadline){
+    if(spawnError)throw new RoomError('无法打开本机服务程序，请确认安装文件仍在后重试。',503,'service_spawn_failed');
+    const control=await ready();if(control)return control;
+    if(exitCode!==null&&exitCode!==0){
+      let failure;try{failure=JSON.parse(fs.readFileSync(path.join(dir,'startup-error.json'),'utf8'));}catch{}
+      if(failure?.attempt_id===attempt&&failure.code==='service_start_busy'){await sleep(remaining(150));continue;}
+      if(failure?.attempt_id===attempt)throw new RoomError(failure.error,503,failure.code||'service_start_failed');
+      throw new RoomError(`本机服务未能启动，请查看 ${path.join(dir,'daemon.log')} 后重试。`,503,'service_start_failed');
+    }
+    await sleep(remaining(150));
+  }
+  throw new RoomError(`本机服务在限定时间内未就绪。房间和连接已保留，请重新检查状态或查看 ${path.join(dir,'daemon.log')}。`,503,'start_timeout');
 }
 function createRecoveringApi(dir,options={}){
   const ensure=options.ensure||ensureServer,call=options.call||apiCall;
@@ -38,35 +63,27 @@ function openBrowser(url){
   else{const p=spawn(process.platform==='darwin'?'open':'xdg-open',[url],{stdio:'ignore'});p.unref();}
 }
 async function serve(dir,options={}){
-  fs.mkdirSync(dir,{recursive:true});const lock=path.join(dir,'daemon.lock');
-  let fd;
-  try{fd=fs.openSync(lock,'wx');}catch(e){
-    if(e.code!=='EEXIST')throw e;
-    let old;try{old=JSON.parse(fs.readFileSync(lock,'utf8'));}catch{throw new RoomError('已有程序正在启动，请稍后重试。',409);}
-    if(livePid(old.pid))return;
-    fs.unlinkSync(lock);fd=fs.openSync(lock,'wx');
-  }
-  fs.writeFileSync(fd,JSON.stringify({pid:process.pid}));fs.closeSync(fd);
-  const {RoomService}=require('./service.cjs');
-  const service=new RoomService(dir);let server;let stopped=false;
+  const recordFailure=e=>{if(typeof options['startup-id']==='string')try{atomicWrite(path.join(dir,'startup-error.json'),JSON.stringify({attempt_id:options['startup-id'],at:new Date().toISOString(),error:readableError(e),code:e.code||'service_start_failed'}));}catch{}};
+  let owner;try{owner=await acquireDaemonLock(dir);}catch(e){recordFailure(e);throw e;}if(!owner)return;
+  let service,server;let stopped=false;
   const stop=async()=>{
     if(stopped)return;stopped=true;
-    try{await server?.close();await service.close();}finally{
-      try{const c=JSON.parse(fs.readFileSync(path.join(dir,'control.json'),'utf8'));if(c.pid===process.pid)fs.unlinkSync(path.join(dir,'control.json'));}catch{}
-      try{fs.unlinkSync(lock);}catch{}
-    }
+    try{try{await server?.close();}finally{await service?.close();}}finally{await releaseDaemonLock(dir,owner);}
   };
   try{
+    const {RoomService}=require('./service.cjs');service=options.serviceFactory?options.serviceFactory(dir):new RoomService(dir);
     const token=crypto.randomBytes(32).toString('hex');
     const listener=await require('./http-listener.cjs').listenLocal(service,{token,port:options.port,onShutdown:()=>stop().then(()=>process.exit(0))});
     server=listener.server;const port=listener.port;
-    atomicWrite(path.join(dir,'control.json'),JSON.stringify({pid:process.pid,url:`http://127.0.0.1:${port}`,token,version:VERSION,instance_id:service.runtime.instanceId}));
+    atomicWrite(path.join(dir,'control.json'),JSON.stringify({...owner,url:`http://127.0.0.1:${port}`,token,version:VERSION,instance_id:service.runtime.instanceId}));
     if(options.project)service.addProject({path:options.project,name:options.name});
     if(options['import-grok']){service.vault.import(path.resolve(options['import-grok']));service.changed();}
     service.start();console.log(`Agent Office ${VERSION} · http://127.0.0.1:${port}`);
-    process.once('SIGINT',()=>stop().then(()=>process.exit(0)));process.once('SIGTERM',()=>stop().then(()=>process.exit(0)));
-    return {service,server,stop};
-  }catch(e){await stop();throw e;}
+    const interrupt=()=>stop().then(()=>process.exit(0));process.once('SIGINT',interrupt);process.once('SIGTERM',interrupt);
+    const close=stop;const removeListeners=()=>{process.removeListener('SIGINT',interrupt);process.removeListener('SIGTERM',interrupt);};
+    server?.server?.once?.('close',removeListeners);
+    return {service,server,stop:async()=>{try{await close();}finally{removeListeners();}}};
+  }catch(e){recordFailure(e);await stop().catch(()=>{});throw e;}
 }
 async function stdinText(){const chunks=[];let size=0;for await(const chunk of process.stdin){size+=chunk.length;if(size>150000)throw new RoomError('输入过长。');chunks.push(chunk);}return Buffer.concat(chunks).toString('utf8');}
 function fileText(file){
@@ -92,7 +109,7 @@ async function main(args=process.argv.slice(2)){
   if(command==='help'||options.help){console.log('Agent Office (agentroom compatible): work-record --room ID --member ID [--data-dir PATH] (read-only; no service or inference), desktop, desktop-state [--room ID], desktop-start, desktop-stop, scan-agents, connect --provider codex --install-client --wait 90 [--install-runtime], connect-state RUN_ID, connect-retry RUN_ID [--wait 90], auto-connect --providers codex --install-clients --wait 90, group-state, group-sync (disabled), sync-report --paused true, mcp --setup, delegate --entry FILE --file question.md --wait 300, delegate-wait REQUEST_ID --entry FILE; enter --entry FILE, room-state --entry FILE --offline, room-ensure --entry FILE, wake --entry FILE --to PEER_ID; start [--open], status, check, add-project --path PATH, chat-status, chat-room --project ID --title TITLE, chat-member --name NAME --adapter TYPE, chat-connect --room ID --member ID, chat-join --invite ID --nonce VALUE --member ID, chat-history --room ID, chat-post --room ID --member ID --to PEER_ID --file question.md --key UNIQUE [--wait 300], chat-wait MESSAGE_ID, chat-reply MESSAGE_ID --member ID --file answer.md --key UNIQUE, chat-rooms --entry FILE, chat-inbox --entry FILE [--room ID], chat-inbox --member ID, chat-ack MESSAGE_ID --member ID, bridge-request --room ID --member ID --to PEER_ID --file question.md --key UNIQUE [--origin REAL_REF --source-message REAL_MSG] [--wait 300], bridge-result ENTRY_ID --member ID, bridge-wait ENTRY_ID --member ID, bridge-report ENTRY_ID --member ID --origin REAL_REF --reply-ref REAL_REPLY, mcp, stop; legacy: discuss, ask, result, wait, delivery, inbox, reply, ack');return;}
   if(['desktop-state','desktop-start','desktop-stop'].includes(command)){
     if(options.entry)throw new RoomError('桌面服务控制属于本机用户操作，成员入口不能管理服务。',403,'resume_scope_mismatch');
-    const module=require('./desktop-state.cjs'),input={room_id:options.room};print(await module[command==='desktop-state'?'desktopState':command==='desktop-start'?'desktopStart':'desktopStop'](dir,input,{main:{readControl,ensureServer,apiCall}}));return;
+    const module=require('./desktop-state.cjs'),input={room_id:options.room};print(await module[command==='desktop-state'?'desktopState':command==='desktop-start'?'desktopStart':'desktopStop'](dir,input,{main:{readControl,ensureServer,apiCall,isControlProcessAlive}}));return;
   }
   if(command==='desktop'){
     if(options.entry)throw new RoomError('成员入口不用于打开桌面管理窗口。',403,'resume_scope_mismatch');
@@ -222,4 +239,4 @@ async function waitBridge(api,entryId,seconds,memberId){if(!memberId)throw new R
 async function waitDelegate(api,result,seconds,options){const end=Date.now()+Math.min(3600,Math.max(0,seconds||0))*1000;while(!['answered','delivered','failed','uncertain','cancelled'].includes(result.status)&&Date.now()<end)result=await api('/api/launch/wait',{request_id:result.request_id,member_id:options.member,room_id:options.room,seconds:Math.min(25,Math.max(0,(end-Date.now())/1000))});return result;}
 async function waitConnect(api,job,seconds){const end=Date.now()+Math.min(300,Math.max(0,seconds||0))*1000;while(job.status==='running'&&Date.now()<end){await sleep(700);job=await api('/api/onboarding/jobs/'+encodeURIComponent(job.id));}return job;}
 if(isSea() || require.main===module)main().catch(e=>{console.error(JSON.stringify({error:readableError(e),code:e.code || 'operation_failed'}));process.exitCode=1;});
-module.exports={main,serve,apiCall,ensureServer,createRecoveringApi,readControl,argumentsOf,waitLong,fileText};
+module.exports={main,serve,apiCall,ensureServer,createRecoveringApi,readControl,isControlProcessAlive,argumentsOf,waitLong,fileText};

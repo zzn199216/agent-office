@@ -18,6 +18,7 @@ const approvalResponding=new Set();
 let onboardingTimer = null, onboardingFetching = false, onboardingSignature = '';
 const desktop = window.AgentRoomDesktop || null;
 let desktopState = null, desktopBusy = false, desktopReady = false, desktopProbe = null;
+let desktopOperation = null, desktopError = '', desktopErrorSource = null;
 let inspectorOpen = false, inspectorTab = 'members', inspectorMemberId = null, officeView = (()=>{try{return localStorage.getItem('agentoffice-room-view') !== 'chat';}catch{return true;}})(), officeScene = null, appearanceDraft = null, appearanceDirty = false, appearanceBusy = false, appearanceUploading = false, appearanceUploadVersion = 0;
 let officeComposerOpen = false;
 let connectionDoctor = null, connectionDoctorBusy = false, connectionDoctorError = '', connectionDoctorRoom = null, connectionDoctorSequence = 0;
@@ -438,23 +439,38 @@ async function api(path, input, method = input === undefined ? 'GET' : 'POST') {
   }
   if (input !== undefined && !webConnected && desktopReady) throw new Error('本机服务未连接。请先开启或检查服务，再操作。');
   const options = {method, credentials:'same-origin',headers:input === undefined ? {} : {'Content-Type':'application/json'}, ...(input === undefined ? {} : {body:JSON.stringify(input)})};
+  // Bound observations so a lost local HTTP response cannot lock every future
+  // refresh. Business writes keep their existing no-replay/uncertain contract.
+  if(method==='GET'&&typeof AbortSignal!=='undefined'&&typeof AbortSignal.timeout==='function')options.signal=AbortSignal.timeout(15000);
+  try {
   let response = await fetch(path,options);
   // Only an explicit 401 proves the request was rejected before processing.
   // A transport failure may have accepted a POST and must never be replayed.
   if (response.status === 401) {
-    if (!authRenewal) authRenewal = fetch('/',{credentials:'same-origin',cache:'no-store',redirect:'error'}).then(result => { if (!result.ok) throw new Error('本机连接凭据更新未完成。'); }).finally(() => { authRenewal = null; });
+    if (!authRenewal) authRenewal = fetch('/',{credentials:'same-origin',cache:'no-store',redirect:'error',...(typeof AbortSignal!=='undefined'&&typeof AbortSignal.timeout==='function'?{signal:AbortSignal.timeout(15000)}:{})}).then(result => { if (!result.ok) throw new Error('本机连接凭据更新未完成。'); }).finally(() => { authRenewal = null; });
     await authRenewal; response = await fetch(path,options);
     if (response.status === 401) throw new Error('本机连接尚未恢复，请使用成员入口检查原实例。');
   }
   const value = await response.json(); if (!response.ok) throw Object.assign(new Error(value.error || '操作失败'),{status:response.status,code:value.code,details:value.details}); return value;
+  } catch(error){if(method==='GET'&&['TimeoutError','AbortError'].includes(error.name))throw Object.assign(new Error('读取本机服务超时。请重新检查服务状态，原任务没有重发。'),{code:'local_read_timeout'});throw error;}
 }
 function toast(text) { $('toast').textContent = text; $('toast').classList.remove('hidden'); clearTimeout(toastTimer); toastTimer = setTimeout(() => $('toast').classList.add('hidden'), 6000); }
-async function action(fn) { try { return await fn(); } catch (error) { const networkFailure = /^(Failed to fetch|Load failed|NetworkError)/i.test(error.message || ''); if (networkFailure) {setWebConnected(false);checkDesktopTransport();} toast(networkFailure ? '本机处理程序未连接。已有成员入口可以恢复同一个房间。' : error.message); } }
-function checkDesktopTransport() {
-  if (!desktop || desktop.offline || desktopProbe) return;
+async function action(fn) { try { return await fn(); } catch (error) { const networkFailure = error.code==='local_read_timeout'||/^(Failed to fetch|Load failed|NetworkError)/i.test(error.message || ''); if (networkFailure) {setWebConnected(false);checkDesktopTransport();} toast(error.code==='local_read_timeout'?error.message:networkFailure ? '本机处理程序未连接。已有成员入口可以恢复同一个房间。' : error.message); } }
+function checkDesktopTransport({initial=false}={}) {
+  if (!desktop) return Promise.resolve(null);
+  if (desktopProbe) return desktopProbe;
   // This is an observation, never a retry of the failed message or a service start.
-  desktopProbe=desktop.command('state',roomId ? {room_id:roomId} : {}).then(value=>{desktopState=value;desktopReady=true;renderService();}).catch(()=>{}).finally(()=>{desktopProbe=null;});
+  desktopProbe=Promise.resolve().then(()=>desktop.command('state',!initial&&roomId ? {room_id:roomId} : {})).then(value=>{
+    desktopState=value;desktopReady=true;
+    const serviceError=value.service_error||value.connection_error;
+    if(serviceError&&(value.service_error||!desktopError||desktopErrorSource==='state')){desktopError=serviceError;desktopErrorSource='state';}
+    else if(desktopErrorSource==='state'||value.running===true&&desktopErrorSource==='start_service'){desktopError='';desktopErrorSource=null;}
+    if(value.running!==true&&webConnected)setWebConnected(false);
+    return value;
+  }).catch(error=>{if(!desktopError||desktopErrorSource==='state'){desktopError=error.message||'无法读取本机服务状态。';desktopErrorSource='state';}return null;}).finally(()=>{desktopProbe=null;renderService();});
+  renderService();return desktopProbe;
 }
+async function checkServiceState(){const value=await checkDesktopTransport();if(value)await refresh();return value;}
 function memberById(id) { return state?.chat?.members?.find(member => member.id === id) || history?.participants?.find(member => member.id === id); }
 function senderName(id) { return id === 'user' ? '你' : memberById(id)?.name || (id === 'system' ? '房间' : id || '成员'); }
 function memberStatus(member) {
@@ -506,7 +522,9 @@ function renderRoomActions(){
   $('room-actions-name').textContent=target.title;$('room-actions-archive').textContent=target.archived?'恢复到常用列表':'归档房间';
   $('room-actions-archive').disabled=managingRoom||!webConnected;$('room-actions-delete').disabled=managingRoom||!webConnected;
   $('room-actions-note').textContent=webConnected?'归档只收起列表，历史、成员入口和已有协作继续保留；删除会使原入口失效。':'本机服务未连接。归档和删除入口仍在这里，开启服务后可操作。';
-  $('room-actions-start').classList.toggle('hidden',webConnected||!desktop);$('room-actions-start').disabled=desktopBusy;
+  $('room-actions-service-error').textContent=desktopError;$('room-actions-service-error').classList.toggle('hidden',!desktopError);
+  $('room-actions-start').classList.toggle('hidden',webConnected||!desktop);$('room-actions-start').disabled=desktopBusy||!!desktopProbe;
+  $('room-actions-start').textContent=desktopBusy?desktopOperation==='stopping'?'正在关闭服务…':desktopOperation==='updating'?'正在更新服务…':'正在开启服务…':desktopProbe?'正在检查服务…':desktopReady?'开启本机服务':'重新检查服务状态';
 }
 async function toggleRoomArchive(){
   const id=managedRoomId,target=state?.chat?.rooms?.find(room=>room.id===id);if(!target||managingRoom||!webConnected)return;
@@ -1012,19 +1030,22 @@ function renderMentions() { mentionIndex = 0; const text = $('prompt').value.sli
 function installDesktopChrome() {
   if (!desktop) return;
   const card = document.createElement('section'); card.id = 'desktop-service'; card.className = 'desktop-service'; card.setAttribute('aria-label','协作服务');
-  card.innerHTML = '<div class="service-status-heading"><span id="service-dot" class="service-dot"></span><strong id="service-label">正在检查服务</strong><span class="service-local-label">本机</span></div><p id="service-detail">房间与消息保存在这台电脑。</p><button id="service-toggle" type="button" class="secondary" disabled>检查状态</button><small>关窗口后，服务继续运行</small>';
+  card.innerHTML = '<div class="service-status-heading"><span id="service-dot" class="service-dot"></span><strong id="service-label">正在检查服务</strong><span class="service-local-label">本机</span></div><p id="service-detail">房间与消息保存在这台电脑。</p><p id="service-error" class="error-note hidden" role="alert"></p><button id="service-toggle" type="button" class="secondary" disabled>检查状态</button><button id="service-check" type="button" class="text-button hidden">重新检查状态</button><small>关窗口后，服务继续运行</small>';
   document.querySelector('.sidebar-footer').before(card);
   const alert = document.createElement('div'); alert.id = 'desktop-offline-banner'; alert.className = 'desktop-offline-banner hidden'; alert.setAttribute('role','status');
   alert.innerHTML = '<span>服务已关闭，你仍可查看本机历史。</span><button id="offline-start-service" class="text-button">开启服务，继续交流 ↗</button>';
   document.querySelector('.content').prepend(alert);
-  $('service-toggle').onclick = () => action(() => desktopState?.update_available || desktop?.offline || !webConnected ? changeService('start_service') : showServiceStop());
-  $('offline-start-service').onclick = () => action(() => changeService('start_service'));
+  $('service-toggle').onclick = () => action(() => !desktopReady?checkServiceState():desktopState?.update_available || desktop?.offline || !webConnected ? changeService('start_service') : showServiceStop());
+  $('service-check').onclick=()=>action(checkServiceState);
+  $('offline-start-service').onclick = () => action(() => desktopReady?changeService('start_service'):checkServiceState());
   $('service-stop-confirm').onclick = () => action(() => changeService('stop_service'));
   document.querySelector('.local-indicator').innerHTML = '<i id="top-service-dot"></i><span id="top-service-label">本机服务</span>';
 }
 function currentServiceBusy() {
-  const details = desktopState?.busy || {};
-  return details.is_busy === true || !!state?.activeRequest || !!state?.chat?.activeMessages?.length || !!state?.approvals?.length || Object.values(state?.activeSetup || {}).some(Number) || (state?.chat?.members || []).some(member => member.status === 'connecting');
+  // An online API snapshot supersedes a previous host observation. Offline
+  // persisted member labels are history, not proof of a live task.
+  if(webConnected&&state)return !!state.activeRequest || !!state.chat?.activeMessages?.length || !!state.approvals?.length || Object.values(state.activeSetup || {}).some(Number) || (state.chat?.members || []).some(member => member.status === 'connecting');
+  return desktopState?.running===true&&desktopState?.busy?.is_busy===true;
 }
 function renderVersion() {
   const label=$('app-version');if(!label)return;
@@ -1048,18 +1069,22 @@ function renderService() {
   }
   if (!desktop) return;
   const running = webConnected, busy = currentServiceBusy();
-  $('service-label').textContent = desktopBusy ? '正在更新服务…' : running ? busy ? '服务运行中 · 工作进行中' : '服务运行中' : desktopReady ? '服务已关闭' : '正在检查服务';
+  const operationLabel=desktopOperation==='stopping'?'正在关闭服务…':desktopOperation==='updating'?'正在更新服务…':'正在开启服务…';
+  $('service-label').textContent = desktopBusy ? operationLabel : desktopProbe?'正在检查服务…':running ? busy ? '服务运行中 · 工作进行中' : '服务运行中' : desktopReady ? '服务已关闭' : desktopError?'服务状态未确认':'正在检查服务';
   $('service-detail').textContent = running ? '消息可处理，成员可按需协作。' : '历史与成员已保留；开启后继续交流。';
+  $('service-error').textContent=desktopError;$('service-error').classList.toggle('hidden',!desktopError);
   $('service-dot').classList.toggle('online',running); $('service-dot').classList.toggle('busy',running && busy);
-  $('service-toggle').disabled = desktopBusy || !desktopReady;
-  $('service-toggle').textContent = desktopBusy ? '请稍候…' : running ? '关闭服务' : '开启服务';
-  if(desktopState?.update_available){$('service-label').textContent='后台版本待更新';$('service-detail').textContent=`后台 ${desktopState.snapshot?.version||'旧版本'} · 软件 ${desktopState.client_version}。${busy?'当前工作结束后再更新。':'更新后接入修复才会生效。'}`;$('service-toggle').textContent='更新后台';$('service-toggle').disabled=desktopBusy||!desktopReady||busy;}
+  $('service-toggle').disabled = desktopBusy || !!desktopProbe;
+  $('service-toggle').textContent = desktopBusy ? operationLabel : desktopProbe?'正在检查…':!desktopReady?'重新检查状态':running ? '关闭服务' : '开启服务';
+  if(desktopState?.update_available&&!desktopBusy&&!desktopProbe){$('service-label').textContent='后台版本待更新';$('service-detail').textContent=`后台 ${desktopState.snapshot?.version||'旧版本'} · 软件 ${desktopState.client_version}。${busy?'当前工作结束后再更新。':'更新后接入修复才会生效。'}`;$('service-toggle').textContent='更新后台';$('service-toggle').disabled=busy;}
+  $('service-check').classList.toggle('hidden',!desktopError&&desktopReady&&running&&!desktopBusy);$('service-check').disabled=!!desktopProbe;
   $('desktop-service').querySelector('small').textContent=running ? '关窗口后，服务继续运行' : '关窗口不会删除房间';
   $('top-service-label').textContent = running ? busy ? '成员正在工作' : '服务运行中' : '历史浏览';
   $('top-service-dot').classList.toggle('stopped',!running);
   const footer = document.querySelector('.sidebar-footer'); footer.querySelector('.local-dot').classList.toggle('stopped',!running); footer.querySelector('span:not(.local-dot)').textContent='记录保存在这台电脑';
   $('desktop-offline-banner').classList.toggle('hidden',running);
-  $('offline-start-service').disabled = desktopBusy || !desktopReady;
+  $('offline-start-service').disabled = desktopBusy || !!desktopProbe;
+  $('offline-start-service').textContent=!desktopReady?'重新检查服务状态 ↗':desktopBusy?operationLabel:'开启服务，继续交流 ↗';
   $('composer').classList.toggle('read-only',readOnly);
   $('prompt').placeholder = readOnly ? '开启协作服务后，就可以继续发送消息…' : '说点什么…选择成员，或 @成员 提问';
 }
@@ -1070,13 +1095,19 @@ async function showServiceStop() {
   $('service-stop-confirm').disabled = busy; $('service-stop-dialog').showModal(); renderService();
 }
 async function changeService(operation) {
-  if (!desktop || desktopBusy) return; desktopBusy = true; renderService();
+  if (!desktop || desktopBusy || desktopProbe) return;
+  desktopBusy = true;desktopOperation=operation==='stop_service'?'stopping':desktopState?.update_available?'updating':'starting';desktopError='';desktopErrorSource=null;renderService();
   try {
-    desktopState = await desktop.command(operation,roomId ? {room_id:roomId} : {}); desktopReady = true;
+    const result=await desktop.command(operation,roomId ? {room_id:roomId} : {});desktopState=result;desktopReady=true;
+    if(result.service_error)throw Object.assign(new Error(result.service_error),{code:result.service_error_code||'desktop_service_failed'});
+    if(operation==='start_service'&&result.running!==true)throw Object.assign(new Error(result.connection_error||'本机服务尚未启动成功。请重新检查状态或查看启动日志；房间与历史仍保留。'),{code:'desktop_start_unconfirmed'});
+    if(operation==='start_service'&&result.update_available===true)throw Object.assign(new Error('后台仍为旧版本，更新尚未完成。请检查原有服务状态，没有自动重试。'),{code:'desktop_update_incomplete'});
+    if(operation==='stop_service'&&result.running!==false)throw Object.assign(new Error('服务关闭结果尚未确认。请重新检查状态，不要重复关闭。'),{code:'desktop_stop_unconfirmed'});
     if ($('service-stop-dialog').open) $('service-stop-dialog').close();
     if (operation === 'stop_service') {events?.close();setWebConnected(false);toast('服务已关闭，房间和消息仍保留。');}
-    else toast('正在打开协作服务…');
-  } finally {desktopBusy=false;renderService();}
+    else {toast('协作服务已开启。');if(!desktop.offline)scheduleRefresh();}
+  } catch(error){desktopError=error.message||'本机服务操作未完成。';desktopErrorSource=operation;throw error;}
+  finally {desktopBusy=false;desktopOperation=null;renderService();}
 }
 function applyInspector() {
   const visible = inspectorOpen && professionalView;
@@ -1702,7 +1733,7 @@ const onRoomListClick = event => { const manage=event.target.closest('[data-room
 $('rooms').onclick=onRoomListClick;$('archived-rooms-list').onclick=onRoomListClick;
 $('room-actions-archive').onclick=()=>action(toggleRoomArchive);
 $('room-actions-delete').onclick=()=>{const id=managedRoomId;$('room-actions-dialog').close();managedRoomId=null;showDeleteRoom(id);};
-$('room-actions-start').onclick=()=>action(()=>changeService('start_service'));
+$('room-actions-start').onclick=()=>action(()=>desktopReady?changeService('start_service'):checkServiceState());
 $('delete-room-confirm').onclick=()=>action(confirmDeleteRoom);
 $('delete-room-blockers').onclick=event=>action(async()=>{const button=event.target.closest('[data-delete-blocker]'),target=state?.chat?.rooms?.find(room=>room.id===deleteRoomId);if(!button||!target)return;const kind=button.dataset.blockerKind,id=button.dataset.deleteBlocker;$('delete-room-dialog').close();roomId=target.id;projectId=target.project_id;legacyId=null;setReply(null);await refresh();if(kind==='message'){selectRoomView(false);requestAnimationFrame(()=>$('message-'+id)?.scrollIntoView({block:'center'}));}else openInspector(kind==='binding'?'connections':'team',kind==='binding'?id:undefined);});
 $('discussions').onclick = event => { const button = event.target.closest('[data-discussion]'); if (button) { secretaryNavigation=null;legacyId = button.dataset.discussion; setReply(null); action(refresh); } };
@@ -1905,7 +1936,7 @@ if (!desktop?.offline) connectEvents();
 setInterval(() => { if (!document.hidden && (webConnected || desktop?.offline)) action(refresh); },15000);
 document.addEventListener('visibilitychange',() => { if (!document.hidden) action(refresh); });
 if (desktop) action(async () => {
-  desktopState=await desktop.command('state'); desktopReady=true;
+  const initial=await checkDesktopTransport({initial:true});if(!initial)return;
   const selected=desktopState?.snapshot?.chat?.rooms?.find(room=>room.id===desktopState.selected_room_id);
   if (selected) {roomId=selected.id;projectId=selected.project_id;}
   renderService(); await refresh();

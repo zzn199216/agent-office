@@ -19,22 +19,45 @@ function validateWebhook(url, key) {
   return { url: u.href, key };
 }
 class Vault {
-  constructor(dir) { this.file = path.join(dir, 'grok-vault.json'); this.cached = undefined; }
-  get() {
-    if (this.cached !== undefined) return this.cached;
-    if (!fs.existsSync(this.file)) return this.cached = null;
-    const r = JSON.parse(fs.readFileSync(this.file, 'utf8'));
-    if (r.mode === 'dpapi') return this.cached = JSON.parse(dpapi(r.value, true));
-    if (process.platform !== 'win32' && r.mode === 'user-file') return this.cached = r.value;
-    throw new RoomError('凭据存储格式无效。', 500);
+  constructor(dir,options={}) { this.file = path.join(dir, 'grok-vault.json'); this.cached = undefined;this.stamp=undefined;this.record=null;this.failure=null;this.crypt=options.dpapi||dpapi;this.platform=options.platform||process.platform; }
+  readRecord() {
+    let stamp,stat;
+    try{stat=fs.statSync(this.file,{bigint:true});stamp=`${stat.mtimeNs}:${stat.ctimeNs}:${stat.size}`;}
+    catch(error){stamp=error.code==='ENOENT'?'missing':`unavailable:${error.code||'unknown'}`;}
+    if(stamp===this.stamp)return this.record;
+    this.stamp=stamp;this.cached=undefined;this.record=null;this.failure=null;
+    if(stamp==='missing'){this.cached=null;return null;}
+    try{
+      if(!stat?.isFile() || stat.size>65536n)throw Error('invalid record');
+      const record=JSON.parse(fs.readFileSync(this.file,'utf8'));
+      if(record.mode==='dpapi' && typeof record.value==='string' && record.value || record.mode==='user-file' && this.platform!=='win32' && record.value && typeof record.value==='object')this.record=record;
+      else throw Error('invalid record');
+    }catch{this.failure=new RoomError('本机凭据存储暂不可用，请核对已保存配置。',503,'vault_unavailable');}
+    return this.record;
+  }
+  get({retry=false}={}) {
+    const record=this.readRecord();
+    if(retry && record)this.failure=null;
+    if(this.failure)throw this.failure;
+    if(this.cached!==undefined)return this.cached;
+    if(!record)return null;
+    try{
+      const value=record.mode==='dpapi'?JSON.parse(this.crypt(record.value,true)):record.value;
+      this.cached=validateWebhook(value.url,value.key);return this.cached;
+    }catch{this.failure=new RoomError('无法访问本机凭据存储，请检查当前用户权限；没有发送通知。',503,'vault_unavailable');throw this.failure;}
   }
   set(url, key) {
     const value = validateWebhook(url, key);
-    const record = process.platform === 'win32' ? { mode: 'dpapi', value: dpapi(JSON.stringify(value)) } : { mode: 'user-file', value };
-    atomicWrite(this.file, JSON.stringify(record)); this.cached = value;
+    const record = this.platform === 'win32' ? { mode: 'dpapi', value: this.crypt(JSON.stringify(value)),host:new URL(value.url).hostname } : { mode: 'user-file', value,host:new URL(value.url).hostname };
+    atomicWrite(this.file, JSON.stringify(record));this.readRecord();this.cached = value;this.failure=null;
     return this.status();
   }
-  status() { const r = this.get(); return { configured: !!r, host: r ? new URL(r.url).hostname : null, protection: process.platform === 'win32' ? 'Windows DPAPI' : 'user-only file' }; }
+  status() {
+    const record=this.readRecord(),host=this.cached?new URL(this.cached.url).hostname:typeof record?.host==='string'&&/^(api2\.cursor\.sh|([a-z0-9-]+\.)*x\.ai)$/.test(record.host)?record.host:null;
+    // Status is configuration metadata, never a credential-unlock operation.
+    // A saved encrypted record remains unverified until an actual delivery.
+    return {configured:!!record,host,protection:this.platform==='win32'?'Windows DPAPI':'user-only file',usable:this.failure?false:this.cached?true:record?null:false,...this.failure?{error:this.failure.message,code:this.failure.code}:{}};
+  }
   import(file) {
     if (this.get()) return false;
     const r = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''));

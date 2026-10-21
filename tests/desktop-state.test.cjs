@@ -23,6 +23,57 @@ test('busy and newer backends cannot be interrupted or downgraded by a desktop s
   const files=fixture(),v=await seed(files);t.after(()=>cleanup(files));let version='0.14.3',busy=true,stops=0,starts=0;const main={readControl:()=>({pid:12345,url:'http://127.0.0.1:1234',instance_id:v.instance}),apiCall:async(_dir,route)=>{if(route==='/api/state')return {...offlineState(files.data,v.first.id).snapshot,version,activeRequest:busy?'active-turn':null};if(route==='/api/shutdown'){stops++;throw Error('must not stop');}if(route.startsWith('/api/chat/rooms/'))return offlineState(files.data,v.first.id).history;if(route.startsWith('/api/team'))return offlineState(files.data,v.first.id).team;throw Error(route);},ensureServer:async()=>{starts++;}};
   await assert.rejects(desktopStart(files.data,{room_id:v.first.id},{main}),{code:'desktop_update_busy'});assert.equal(stops,0);assert.equal(starts,0);version='99.0.0';busy=false;assert.equal((await desktopStart(files.data,{room_id:v.first.id},{main})).update_available,false);assert.equal(stops,0);assert.equal(starts,1);
 });
+test('a completed startup command must still prove a running service rather than return offline success',async t=>{
+  const files=fixture();t.after(()=>cleanup(files));let starts=0,calls=0;
+  const main={readControl:()=>null,ensureServer:async()=>{starts++;return {pid:12345,url:'http://127.0.0.1:1'};},apiCall:async()=>{calls++;throw Error('No authenticated service');}};
+  await assert.rejects(desktopStart(files.data,{}, {main}),error=>error.code==='desktop_start_unconfirmed'&&error.status===503);
+  assert.equal(starts,1);assert.equal(calls,0);assert.equal(fs.existsSync(files.data),false);
+});
+test('startup cannot report success when its returned control still fails the authenticated state probe',async t=>{
+  const files=fixture(),saved=await seed(files);t.after(()=>cleanup(files));let started=false,starts=0;
+  const main={readControl:()=>started?{pid:12345,url:'http://127.0.0.1:1',instance_id:saved.instance}:null,ensureServer:async()=>{starts++;started=true;},apiCall:async()=>{throw Error('fixture service never became reachable');}};
+  await assert.rejects(desktopStart(files.data,{room_id:saved.first.id},{main}),error=>error.code==='desktop_start_unconfirmed'&&error.status===503);
+  assert.equal(starts,1);assert.equal(offlineState(files.data,saved.first.id).snapshot.instance_id,saved.instance);
+});
+
+test('desktop start passes one total deadline to startup and cannot report success after its budget expires',async t=>{
+  const files=fixture();t.after(()=>cleanup(files));let time=1000,starts=0;
+  const main={readControl:()=>null,apiCall:async()=>assert.fail('there is no service'),ensureServer:async(_dir,options)=>{starts++;assert.equal(options.deadline,31000);time=31001;}};
+  await assert.rejects(desktopStart(files.data,{}, {main,clock:()=>time}),{code:'desktop_operation_timeout'});
+  assert.equal(starts,1);assert.equal(fs.existsSync(files.data),false);
+  time=1000;await assert.rejects(desktopStart(files.data,{}, {main,clock:()=>time,deadline:999}),{code:'desktop_operation_timeout'});assert.equal(starts,1);
+});
+
+function authenticatedState(control){return {running:true,url:control.url,service_pid:control.pid,service_owner_id:control.owner_id||null,snapshot:{instance_id:control.instance_id},busy:{is_busy:false}};}
+test('desktop stop refuses a changed or unowned control before posting shutdown',async t=>{
+  const files=fixture();t.after(()=>cleanup(files));const control={pid:12345,url:'http://127.0.0.1:1234',instance_id:id(),owner_id:id()},state=authenticatedState(control);let shutdowns=0,ownerChecks=0,current={...control,owner_id:id()},owned=true;
+  const main={readControl:()=>current,isControlProcessAlive:async()=>{ownerChecks++;return owned;},apiCall:async()=>{shutdowns++;assert.fail('must not stop a changed or unowned process');}};
+  await assert.rejects(desktopStop(files.data,{}, {main,authenticatedState:state}),{code:'desktop_service_changed'});assert.equal(ownerChecks,0);
+  current=control;owned=false;await assert.rejects(desktopStop(files.data,{}, {main,authenticatedState:state}),{code:'desktop_service_changed'});assert.equal(ownerChecks,1);assert.equal(shutdowns,0);
+});
+
+test('desktop stop tracks the original owner rather than a live reused PID and never claims its replacement stopped',async t=>{
+  const files=fixture();t.after(()=>cleanup(files));const control={pid:process.pid,url:'http://127.0.0.1:1234',instance_id:id(),owner_id:id()},state=authenticatedState(control);let shutdowns=0,ownerChecks=0,current=control,originalAlive=true,replace=false;
+  const main={readControl:()=>current,isControlProcessAlive:async(_dir,target)=>{assert.deepEqual(target,control);ownerChecks++;return originalAlive;},apiCall:async(_dir,route,input)=>{assert.equal(route,'/api/shutdown');assert.deepEqual(input,{idle_only:true});shutdowns++;originalAlive=false;current=replace?{...control,owner_id:id()}:null;return {ok:true};}};
+  const stopped=await desktopStop(files.data,{}, {main,authenticatedState:state});assert.equal(stopped.running,false);assert.equal(shutdowns,1);assert.equal(ownerChecks,2);
+  current=control;originalAlive=true;replace=true;await assert.rejects(desktopStop(files.data,{}, {main,authenticatedState:state}),{code:'desktop_service_changed'});assert.equal(shutdowns,2);assert.equal(ownerChecks,4);
+});
+
+test('desktop stop uses the remaining request budget and stops waiting at its deadline without replay',async t=>{
+  const files=fixture();t.after(()=>cleanup(files));const control={pid:12345,url:'http://127.0.0.1:1234',instance_id:id(),owner_id:id()},state=authenticatedState(control);let time=1000,shutdowns=0,checks=0;
+  const main={readControl:()=>control,isControlProcessAlive:async()=>{checks++;return true;},apiCall:async(_dir,route,input,timeout)=>{assert.equal(route,'/api/shutdown');assert.equal(timeout,150);shutdowns++;time+=100;return{ok:true};}};
+  await assert.rejects(desktopStop(files.data,{}, {main,authenticatedState:state,clock:()=>time,deadline:1150,sleep:async duration=>{assert.equal(duration,50);time+=duration;}}),{code:'desktop_operation_timeout'});
+  assert.equal(shutdowns,1);assert.equal(checks,2);
+});
+
+test('desktop stop cannot send shutdown to a replacement that takes over during the asynchronous owner check',async t=>{
+  const files=fixture();let posts=0;const server=http.createServer((_req,res)=>{posts++;res.setHeader('Content-Type','application/json');res.end('{"ok":true}');});
+  t.after(async()=>{await new Promise(resolve=>server.close(resolve));cleanup(files);});await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));fs.mkdirSync(files.data,{recursive:true});
+  const control={pid:process.pid,url:`http://127.0.0.1:${server.address().port}`,instance_id:id(),owner_id:id(),token:'fixture-original-private-token'};
+  const write=value=>{fs.writeFileSync(path.join(files.data,'control.json'),JSON.stringify(value));fs.writeFileSync(path.join(files.data,'daemon.lock'),JSON.stringify({pid:value.pid,owner_id:value.owner_id}));};write(control);
+  const main={readControl,apiCall,isControlProcessAlive:async()=>{write({...control,owner_id:id(),token:'fixture-replacement-private-token'});return true;}};
+  await assert.rejects(desktopStop(files.data,{}, {main,authenticatedState:authenticatedState(control)}),{code:'desktop_service_changed'});assert.equal(posts,0);
+});
 
 function cleanup(files){
   const root=path.resolve(files.root);assert.equal(path.dirname(root),path.resolve(os.tmpdir()));assert.match(path.basename(root),/^agentroom-test-/);

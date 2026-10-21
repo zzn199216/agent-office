@@ -182,6 +182,12 @@ namespace AgentRoomDesktop
         }
     }
 
+    internal sealed class DesktopOperationException : InvalidOperationException
+    {
+        internal readonly string Code;
+        internal DesktopOperationException(string message, string code) : base(message) { Code = code; }
+    }
+
     internal sealed class DesktopCli
     {
         private readonly string executable;
@@ -214,7 +220,22 @@ namespace AgentRoomDesktop
             }
             result.Append('\\', slashes * 2); result.Append('"'); return result.ToString();
         }
-        public async Task<Dictionary<string, object>> Invoke(string command, string roomId)
+        internal const int TimeoutMilliseconds = 35000;
+        private static void StopOwnedProcess(Process process)
+        {
+            // Only the CLI wrapper returned by our own Process.Start is owned.
+            // Its detached service and any other process must keep running.
+            try { if (!process.HasExited) process.Kill(); } catch { }
+        }
+        private static void ObserveFailure(Task task)
+        {
+            task.ContinueWith(failed => { var observed = failed.Exception; }, TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously);
+        }
+        public Task<Dictionary<string, object>> Invoke(string command, string roomId)
+        {
+            return Invoke(command, roomId, CancellationToken.None, TimeoutMilliseconds);
+        }
+        internal async Task<Dictionary<string, object>> Invoke(string command, string roomId, CancellationToken cancellationToken, int timeoutMilliseconds)
         {
             if (command != "desktop-state" && command != "desktop-start" && command != "desktop-stop") throw new ArgumentException("不支持的桌面操作。");
             Guid room;
@@ -224,25 +245,110 @@ namespace AgentRoomDesktop
             info.WorkingDirectory = AppDomain.CurrentDomain.BaseDirectory;
             info.UseShellExecute = false; info.CreateNoWindow = true; info.RedirectStandardOutput = true; info.RedirectStandardError = true;
             info.StandardOutputEncoding = Encoding.UTF8; info.StandardErrorEncoding = Encoding.UTF8;
-            using (Process process = Process.Start(info))
+            cancellationToken.ThrowIfCancellationRequested();
+            using (CancellationTokenSource deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
             {
-                Task<string> stdout = process.StandardOutput.ReadToEndAsync(), stderr = process.StandardError.ReadToEndAsync();
-                Task exited = Task.Run(delegate { process.WaitForExit(); });
-                if (await Task.WhenAny(exited, Task.Delay(command == "desktop-start" ? 45000 : 20000)) != exited)
+                deadline.CancelAfter(timeoutMilliseconds);
+                Task expired = Task.Delay(Timeout.Infinite, deadline.Token);
+                Task<Process> starting = Task.Run(() => Process.Start(info));
+                if (await Task.WhenAny(starting, expired) != starting)
                 {
-                    try { process.Kill(); } catch { }
+                    // Process.Start can itself stall. A late-created wrapper is
+                    // still ours, but it must never run an expired operation.
+                    starting.ContinueWith(completed => {
+                        if (completed.Status == TaskStatus.RanToCompletion) using (Process late = completed.Result) StopOwnedProcess(late);
+                        else { var observed = completed.Exception; }
+                    }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+                    cancellationToken.ThrowIfCancellationRequested();
                     throw new TimeoutException("本机服务操作超时；请刷新状态后再试。");
                 }
-                string output = await stdout, error = await stderr;
-                if (process.ExitCode != 0)
+                using (Process process = await starting)
                 {
-                    Dictionary<string, object> failure = Json.ParseCliError(error) ?? Json.ParseCliError(output);
-                    string message = Json.Text(failure, "error");
-                    throw new InvalidOperationException(message ?? "本机服务未完成操作，请检查安装目录或稍后重试。");
+                    try
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        Task<string> stdout = process.StandardOutput.ReadToEndAsync(), stderr = process.StandardError.ReadToEndAsync();
+                        Task exited = Task.Run(delegate { process.WaitForExit(); });
+                        // A wrapper may exit while a child still holds its pipe.
+                        // Exit and both redirected streams share one deadline.
+                        Task complete = Task.WhenAll(exited, stdout, stderr);
+                        ObserveFailure(complete);
+                        if (await Task.WhenAny(complete, expired) != complete)
+                        {
+                            cancellationToken.ThrowIfCancellationRequested();
+                            throw new TimeoutException("本机服务操作超时；请刷新状态后再试。");
+                        }
+                        await complete;
+                        string output = await stdout, error = await stderr;
+                        if (process.ExitCode != 0)
+                        {
+                            Dictionary<string, object> failure = Json.ParseCliError(error) ?? Json.ParseCliError(output);
+                            string message = Json.Text(failure, "error");
+                            throw new DesktopOperationException(message ?? "本机服务未完成操作，请检查安装目录或稍后重试。", Json.Text(failure, "code") ?? "desktop_operation_failed");
+                        }
+                        if (output.Length > 32 * 1024 * 1024) throw new InvalidOperationException("本机服务返回的数据过大。");
+                        return Json.Parse(output.Trim());
+                    }
+                    catch { StopOwnedProcess(process); throw; }
+                    finally { deadline.Cancel(); }
                 }
-                if (output.Length > 32 * 1024 * 1024) throw new InvalidOperationException("本机服务返回的数据过大。");
-                return Json.Parse(output.Trim());
             }
+        }
+    }
+
+    internal sealed class DesktopCommandQueue
+    {
+        internal const int QueueTimeoutMilliseconds = 5000;
+        internal const int OperationTimeoutMilliseconds = 40000;
+        private readonly SemaphoreSlim gate = new SemaphoreSlim(1, 1);
+        internal async Task<T> Run<T>(Func<CancellationToken, Task<T>> operation, CancellationToken cancellationToken, int queueTimeoutMilliseconds, int operationTimeoutMilliseconds)
+        {
+            bool acquired = false;
+            using (CancellationTokenSource deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
+            {
+                deadline.CancelAfter(operationTimeoutMilliseconds);
+                try
+                {
+                    acquired = await gate.WaitAsync(queueTimeoutMilliseconds, deadline.Token);
+                    if (!acquired) throw new TimeoutException("已有本机服务操作正在进行，当前请求未执行。请稍后刷新状态。");
+                    deadline.Token.ThrowIfCancellationRequested();
+                    return await operation(deadline.Token);
+                }
+                catch (OperationCanceledException) { throw new TimeoutException("桌面操作已结束或超过等待期限，未继续执行过期请求。请刷新服务状态。"); }
+                finally { if (acquired) gate.Release(); }
+            }
+        }
+    }
+
+    internal static class DesktopServiceState
+    {
+        internal static string ErrorCode(Exception error)
+        {
+            DesktopOperationException operation = error as DesktopOperationException;
+            return operation != null ? operation.Code : error is TimeoutException ? "desktop_operation_timeout" : "desktop_operation_failed";
+        }
+        internal static Dictionary<string, object> WithError(Dictionary<string, object> state, string error, string code)
+        {
+            if (!String.IsNullOrEmpty(error)) { state["service_error"] = error; state["service_error_code"] = code; }
+            return state;
+        }
+        internal static async Task<Dictionary<string, object>> UpdateIfAvailable(Dictionary<string, object> state, string roomId, Func<string, string, Task<Dictionary<string, object>>> invoke)
+        {
+            if (!Json.Flag(state, "can_update")) return state;
+            Exception updateError;
+            try { return await invoke("desktop-start", roomId); }
+            catch (Exception error) { updateError = error; }
+            string detail = updateError.Message;
+            try { state = await invoke("desktop-state", roomId); }
+            catch (Exception refreshError)
+            {
+                // Preserve the saved history if even the follow-up CLI
+                // cannot return. Do not leave an old running flag visible.
+                state = new Dictionary<string, object>(state);
+                state["running"] = false; state["url"] = null;
+                detail += " 状态检查也未完成：" + refreshError.Message;
+            }
+            return WithError(state, detail, ErrorCode(updateError));
         }
     }
 
@@ -253,12 +359,15 @@ namespace AgentRoomDesktop
         private readonly DesktopCli cli;
         private readonly WebView2 view = new WebView2();
         private readonly System.Windows.Forms.Timer activationTimer = new System.Windows.Forms.Timer();
-        private readonly SemaphoreSlim commandLock = new SemaphoreSlim(1, 1);
+        private readonly DesktopCommandQueue commandQueue = new DesktopCommandQueue();
+        private readonly CancellationTokenSource windowLifetime = new CancellationTokenSource();
         private readonly HashSet<string> pending = new HashSet<string>();
         private readonly Dictionary<string, Dictionary<string, object>> smokeReplies = new Dictionary<string, Dictionary<string, object>>();
         private Uri onlineOrigin;
         private string selectedRoom;
         private Dictionary<string, object> latest;
+        private string serviceError;
+        private string serviceErrorCode;
         private int rejectedNavigations;
         private int rejectedMessages;
         private int bridgeCommands;
@@ -282,7 +391,7 @@ namespace AgentRoomDesktop
             ResizeEnd += delegate { SaveWindow(); };
             Resize += delegate { if (WindowState != FormWindowState.Minimized) lastMaximized = WindowState == FormWindowState.Maximized; };
             FormClosing += delegate { SaveWindow(); };
-            FormClosed += delegate { activationTimer.Stop(); view.Dispose(); };
+            FormClosed += delegate { windowLifetime.Cancel(); activationTimer.Stop(); view.Dispose(); };
         }
         private float WindowDpi()
         {
@@ -355,13 +464,9 @@ namespace AgentRoomDesktop
                 };
                 core.WebMessageReceived += async delegate(object sender, CoreWebView2WebMessageReceivedEventArgs e) { await Receive(e); };
                 latest = await cli.Invoke("desktop-state", null); selectedRoom = Json.Text(latest, "selected_room_id");
-                if (Json.Flag(latest, "can_update"))
-                {
-                    bool updateFailed = false;
-                    try { latest = await cli.Invoke("desktop-start", selectedRoom); }
-                    catch { updateFailed = true; }
-                    if (updateFailed) latest = await cli.Invoke("desktop-state", selectedRoom);
-                }
+                latest = await DesktopServiceState.UpdateIfAvailable(latest, selectedRoom, cli.Invoke);
+                serviceError = Json.Text(latest, "service_error");
+                serviceErrorCode = Json.Text(latest, "service_error_code");
                 NavigateForState(latest);
                 if (options.DiagnosticsDirectory != null)
                 {
@@ -444,27 +549,30 @@ namespace AgentRoomDesktop
             catch (Exception ex)
             {
                 if (options.Smoke && id != null && id.StartsWith("smoke-", StringComparison.Ordinal)) smokeReplies[id] = new Dictionary<string, object> { { "error", ex.Message } };
-                if (id != null) Reply(id, null, ex.Message);
+                if (id != null) Reply(id, null, ex.Message, DesktopServiceState.ErrorCode(ex));
             }
             finally { if (id != null) pending.Remove(id); }
         }
         private async Task<Dictionary<string, object>> Perform(string operation, string roomId)
         {
-            await commandLock.WaitAsync();
             try
             {
-                string selected = roomId ?? selectedRoom;
-                string command = operation == "start_service" ? "desktop-start" : operation == "stop_service" ? "desktop-stop" : "desktop-state";
-                Dictionary<string, object> result = await cli.Invoke(command, selected);
-                selectedRoom = Json.Text(result, "selected_room_id"); latest = result; return result;
+                return await commandQueue.Run(async cancellationToken => {
+                    string selected = roomId ?? selectedRoom;
+                    string command = operation == "start_service" ? "desktop-start" : operation == "stop_service" ? "desktop-stop" : "desktop-state";
+                    Dictionary<string, object> result = await cli.Invoke(command, selected, cancellationToken, DesktopCli.TimeoutMilliseconds);
+                    if (operation == "start_service" || operation == "stop_service") { serviceError = null; serviceErrorCode = null; }
+                    result = DesktopServiceState.WithError(result, serviceError, serviceErrorCode);
+                    selectedRoom = Json.Text(result, "selected_room_id"); latest = result; return result;
+                }, windowLifetime.Token, DesktopCommandQueue.QueueTimeoutMilliseconds, DesktopCommandQueue.OperationTimeoutMilliseconds);
             }
-            finally { commandLock.Release(); }
+            catch (Exception error) { serviceError = error.Message; serviceErrorCode = DesktopServiceState.ErrorCode(error); if (latest != null) DesktopServiceState.WithError(latest, serviceError, serviceErrorCode); throw; }
         }
-        private void Reply(string id, Dictionary<string, object> result, string error)
+        private void Reply(string id, Dictionary<string, object> result, string error, string errorCode = null)
         {
             if (view.IsDisposed || view.CoreWebView2 == null) return;
             Dictionary<string, object> response = new Dictionary<string, object> { { "source", "agentroom-desktop" }, { "type", "desktop-result" }, { "id", id } };
-            if (error == null) response.Add("result", result); else response.Add("error", error);
+            if (error == null) response.Add("result", result); else { response.Add("error", error); response.Add("code", errorCode); }
             view.CoreWebView2.PostWebMessageAsJson(Json.Encode(response));
         }
         private async Task Capture(string filename)
