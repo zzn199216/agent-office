@@ -1,6 +1,10 @@
 .local/
 node_modules/
 dist/
+dev/
+dev.previous/
+# Historical design references remain recoverable from Git history.
+/design/
 release/
 output/
 .playwright-cli/
@@ -14,9 +18,11 @@ Concord-测试/
 *.sqlite
 *.sqlite-wal
 *.sqlite-shm
+*.sqlite-journal
 *.db
 *.db-wal
 *.db-shm
+*.db-journal
 coverage/
 *.dmp
 *.tmp

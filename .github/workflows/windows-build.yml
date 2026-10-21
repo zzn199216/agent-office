@@ -2,7 +2,7 @@ name: Windows build
 on:
   workflow_dispatch:
   pull_request:
-    paths: ['src/**', 'web/**', 'tests/**', 'scripts/**', 'integrations/**', 'package*.json', '.github/workflows/**']
+    paths: ['src/**', 'web/**', 'desktop/**', 'docs/**', 'tests/**', 'scripts/**', 'integrations/**', 'package*.json', '.github/workflows/**']
 permissions:
   contents: read
 jobs:
@@ -16,10 +16,11 @@ jobs:
           cache: npm
       - run: npm ci --no-audit --no-fund
       - run: npm run check
+      - run: npm run prepare:desktop
       - run: npm test
       - run: npm run build
       - uses: actions/upload-artifact@v4
         with:
-          name: AgentOffice-windows-x64
-          path: release/AgentOffice-*-windows-x64.zip
+          name: AgentOffice-dev-windows-x64
+          path: dev/
           if-no-files-found: error

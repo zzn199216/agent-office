@@ -4,6 +4,8 @@ const ROOT=path.resolve(__dirname,'..');
 const SDK_VERSION='1.0.4258.31';
 const SDK_SHA256='56f7f4b8bf9aee4b8efefbbdd4f67d5f74ebd1b100ed0806da71bf76af481aa9';
 const SDK_URL=`https://api.nuget.org/v3-flatcontainer/microsoft.web.webview2/${SDK_VERSION}/microsoft.web.webview2.${SDK_VERSION}.nupkg`;
+const SDK_HOSTS=new Set(['api.nuget.org','globalcdn.nuget.org','nuget.azure.cn']);
+const SDK_REDIRECT_STATUSES=new Set([301,302,303,307,308]),SDK_MAX_REDIRECTS=5,SDK_MAX_BYTES=16*1024*1024;
 const REQUIRED_FILES=['AgentRoom.Desktop.exe','AgentRoom.Desktop.exe.config','Microsoft.Web.WebView2.Core.dll','Microsoft.Web.WebView2.WinForms.dll','WebView2Loader.dll','WEBVIEW2_LICENSE.txt'];
 const OFFICE_ASSETS=require('../src/office-assets.cjs').OFFICE_FILES.map(name=>name.replace('assets/office/',''));
 const ASSETS=['desktop-web/index.html','desktop-web/app.js','desktop-web/style.css','desktop-web/desktop.js','desktop-web/page-activity.js','desktop-web/office.js','desktop-web/office.css',...OFFICE_ASSETS.map(name=>'desktop-web/assets/office/'+name)];
@@ -25,12 +27,40 @@ function applicationIcon(file){
   const payload=Buffer.concat([bitmap,pixels,mask]),header=Buffer.alloc(22);header.writeUInt16LE(1,2);header.writeUInt16LE(1,4);header[6]=size;header[7]=size;header.writeUInt16LE(1,10);header.writeUInt16LE(32,12);header.writeUInt32LE(payload.length,14);header.writeUInt32LE(22,18);fs.writeFileSync(file,Buffer.concat([header,payload]));
 }
 function run(command,args,options={}){const result=spawnSync(command,args,{cwd:ROOT,encoding:'utf8',windowsHide:true,...options});if(result.status!==0)throw new Error((result.stderr||result.stdout||'Desktop build failed').slice(0,2500));return result.stdout;}
+function sdkSourceUrl(value,base){
+  let url;try{url=new URL(value,base);}catch{throw new Error('Official WebView2 SDK source URL is invalid.');}
+  if(url.protocol!=='https:'||url.username||url.password||url.port||url.hash||!SDK_HOSTS.has(url.hostname))throw new Error('Official WebView2 SDK refused an untrusted download URL.');
+  return url;
+}
+async function requestSdkPackage({fetchImpl=fetch,signal=AbortSignal.timeout(120000)}={}){
+  let url=sdkSourceUrl(SDK_URL);const visited=new Set();
+  for(let redirects=0;;redirects++){
+    if(visited.has(url.href))throw new Error('Official WebView2 SDK download redirect loop.');visited.add(url.href);
+    let response;try{response=await fetchImpl(url.href,{redirect:'manual',credentials:'omit',signal});}catch(error){throw new Error('Official WebView2 SDK request failed at '+url.hostname+': '+(error.cause?.code||error.cause?.message||error.message),{cause:error});}
+    if(response.redirected)throw new Error('Official WebView2 SDK unexpectedly followed a redirect.');
+    if(SDK_REDIRECT_STATUSES.has(response.status)){
+      const location=response.headers.get('location');await response.body?.cancel();
+      if(!location)throw new Error('Official WebView2 SDK redirect has no Location header.');
+      if(redirects>=SDK_MAX_REDIRECTS)throw new Error('Official WebView2 SDK download exceeded '+SDK_MAX_REDIRECTS+' redirects.');
+      url=sdkSourceUrl(location,url);continue;
+    }
+    if(!response.ok){await response.body?.cancel();throw new Error('Official WebView2 SDK download failed: HTTP '+response.status);}
+    return response;
+  }
+}
+async function downloadSdkPackage(options){
+  const response=await requestSdkPackage(options),length=response.headers.get('content-length');
+  if(length!==null&&(!/^\d+$/.test(length)||Number(length)>SDK_MAX_BYTES)){await response.body?.cancel();throw new Error('Unexpected WebView2 SDK package size.');}
+  const chunks=[];let size=0;
+  if(response.body)for await(const chunk of response.body){size+=chunk.byteLength;if(size>SDK_MAX_BYTES)throw new Error('Unexpected WebView2 SDK package size.');chunks.push(Buffer.from(chunk));}
+  const bytes=Buffer.concat(chunks,size);
+  if(crypto.createHash('sha256').update(bytes).digest('hex')!==SDK_SHA256)throw new Error('WebView2 SDK SHA256 mismatch.');
+  return bytes;
+}
 async function sdkPackage(){
   const dir=path.join(ROOT,'dist','webview2-sdk',SDK_VERSION),file=path.join(dir,'webview2.nupkg');fs.mkdirSync(dir,{recursive:true});
   if(!fs.existsSync(file)||sha(file)!==SDK_SHA256){
-    const response=await fetch(SDK_URL,{redirect:'error',signal:AbortSignal.timeout(120000)});if(!response.ok)throw new Error('Official WebView2 SDK download failed: '+response.status);
-    const length=Number(response.headers.get('content-length'));if(length>16*1024*1024)throw new Error('Unexpected WebView2 SDK package size.');
-    const bytes=Buffer.from(await response.arrayBuffer());if(bytes.length>16*1024*1024||crypto.createHash('sha256').update(bytes).digest('hex')!==SDK_SHA256)throw new Error('WebView2 SDK SHA256 mismatch.');
+    const bytes=await downloadSdkPackage();
     fs.writeFileSync(file,bytes);
   }
   return file;
@@ -58,5 +88,5 @@ async function buildDesktop({outputDir=path.join(ROOT,'dist','desktop'),version=
   const manifest={directory:outputDir,requiredFiles:REQUIRED_FILES.slice(),assets:ASSETS.slice(),version,sdk_version:SDK_VERSION,sdk_sha256:SDK_SHA256,sdk_source:SDK_URL,files:[...REQUIRED_FILES,...ASSETS].map(name=>({path:name,sha256:sha(path.join(outputDir,name)),bytes:fs.statSync(path.join(outputDir,name)).size}))};
   fs.writeFileSync(path.join(outputDir,'desktop-build.json'),JSON.stringify(manifest,null,2)+'\n');return manifest;
 }
-module.exports={buildDesktop,SDK_VERSION,SDK_SHA256,REQUIRED_FILES,ASSETS,OFFICE_ASSETS};
+module.exports={buildDesktop,SDK_VERSION,SDK_SHA256,REQUIRED_FILES,ASSETS,OFFICE_ASSETS,requestSdkPackage,downloadSdkPackage};
 if(require.main===module)buildDesktop().then(result=>console.log(JSON.stringify(result,null,2))).catch(e=>{console.error(e.message);process.exitCode=1;});

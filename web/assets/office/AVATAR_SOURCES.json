@@ -891,7 +891,7 @@
   "office_art": {
     "generated_on": "2026-10-13",
     "source": "built-in imagegen",
-    "reference": "design/concepts/2026-10-13/06-minimal-editorial-office.png",
+    "reference": "https://github.com/zzn199216/agent-office/blob/6268b1731c37fc23645af809d0de48d6c066a2c9/design/concepts/2026-10-13/06-minimal-editorial-office.png",
     "runtime_network_required": false,
     "assets": [
       {

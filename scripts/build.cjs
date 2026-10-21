@@ -1,8 +1,63 @@
 'use strict';
 const fs=require('node:fs'),path=require('node:path'),{spawnSync}=require('node:child_process');
-const {buildSync}=require('esbuild');const{inject}=require('postject');
-const root=path.resolve(__dirname,'..'),outputOption=process.argv.indexOf('--output-root'),outputRoot=outputOption<0?root:path.resolve(process.argv[outputOption+1]||(()=>{throw new Error('--output-root requires a directory');})()),dist=path.join(outputRoot,'dist'),expectedVersion=require('../package.json').version;
-const {sourceState,sha,atomicJson}=require('./release-common.cjs');
+const root=path.resolve(__dirname,'..'),expectedVersion=require('../package.json').version;
+const {sourceState,sha,atomicJson,acquireLock,regularFile}=require('./release-common.cjs');
+function parseArgs(args){
+  const options={dev:false,localOnly:false,outputRoot:root};
+  for(let index=0;index<args.length;index++){
+    const flag=args[index];
+    if(flag==='--dev')options.dev=true;
+    else if(flag==='--local-only')options.localOnly=true;
+    else if(flag==='--output-root'){
+      if(!args[index+1]||args[index+1].startsWith('--'))throw new Error('--output-root requires a directory');
+      options.outputRoot=path.resolve(args[++index]);
+    }else throw new Error('Unknown build option: '+flag);
+  }
+  return options;
+}
+function developmentDirectory(directory){
+  if(!fs.existsSync(directory))return false;
+  if(!fs.lstatSync(directory).isDirectory()||fs.lstatSync(directory).isSymbolicLink())throw new Error('Development output must be a regular directory: '+directory);
+  const manifest=JSON.parse(fs.readFileSync(regularFile(directory,'release-manifest.json'),'utf8'));
+  if(manifest.schema!=='agentoffice.release'||typeof manifest.version!=='string'||!Array.isArray(manifest.files))throw new Error('Refusing to replace an unrecognized development directory: '+directory);
+  regularFile(directory,'AgentOffice.exe');return true;
+}
+function publishDevelopment(outputRoot,directory,{rename=fs.renameSync}={}){
+  outputRoot=path.resolve(outputRoot);directory=path.resolve(directory);
+  const stageRoot=path.dirname(path.dirname(directory)),stageParent=path.join(outputRoot,'output');
+  if(path.dirname(stageRoot)!==stageParent||!path.basename(stageRoot).startsWith('dev-build-')||path.basename(path.dirname(directory))!=='release')throw new Error('Development package is outside its owned build stage.');
+  const manifest=JSON.parse(fs.readFileSync(regularFile(directory,'release-manifest.json'),'utf8'));
+  require('./release-artifacts.cjs').readManifest(directory,manifest.version,manifest.source);
+  const destination=path.join(outputRoot,'dev'),previous=path.join(outputRoot,'dev.previous'),retired=path.join(stageRoot,'previous-retired');
+  const currentExists=developmentDirectory(destination),previousExists=developmentDirectory(previous);
+  let retiredPrevious=false,movedCurrent=false;
+  try{
+    if(currentExists&&previousExists){rename(previous,retired);retiredPrevious=true;}
+    if(currentExists){rename(destination,previous);movedCurrent=true;}
+    rename(directory,destination);
+  }catch(error){
+    try{
+      if(movedCurrent)rename(previous,destination);
+      if(retiredPrevious)rename(retired,previous);
+    }catch(rollback){
+      error.preserveStage=true;error.message+='; recovery files were kept in '+stageRoot+': '+rollback.message;
+    }
+    error.message='Development update failed; close Agent Office and retry. '+error.message;throw error;
+  }
+  return {executable:path.join(destination,'AgentOffice.exe'),release:destination,previous:fs.existsSync(previous)?previous:null,version:manifest.version,bytes:fs.statSync(path.join(destination,'AgentOffice.exe')).size};
+}
+async function buildDevelopment({outputRoot=root,build=buildPackage}={}){
+  outputRoot=path.resolve(outputRoot);const stageParent=path.join(outputRoot,'output');fs.mkdirSync(stageParent,{recursive:true});
+  const unlock=acquireLock(path.join(stageParent,'dev-build.lock'));let stage,preserveStage=false;
+  try{
+    stage=fs.mkdtempSync(path.join(stageParent,'dev-build-'));
+    const result=await build({outputRoot:stage,localOnly:true});
+    return publishDevelopment(outputRoot,result.release);
+  }catch(error){preserveStage=!!error.preserveStage;throw error;}
+  finally{
+    try{if(stage&&!preserveStage){const cleanup=path.resolve(stage);if(path.dirname(cleanup)!==stageParent||!path.basename(cleanup).startsWith('dev-build-'))throw new Error('Refusing to remove a development stage outside output.');fs.rmSync(cleanup,{recursive:true,force:true});}}finally{unlock();}
+  }
+}
 function run(command,args){const r=spawnSync(command,args,{cwd:root,encoding:'utf8',windowsHide:true});if(r.status!==0)throw new Error((r.stderr || r.stdout || 'Build command failed').slice(0,2000));return r.stdout;}
 function copyReferences(source,destination){
   const sourceRoot=fs.realpathSync.native(source),files=[];
@@ -17,8 +72,9 @@ function copyReferences(source,destination){
   }
   walk(source);return files;
 }
-async function main(){
+async function buildPackage({outputRoot=root,localOnly=false}={}){
   if(process.platform!=='win32'||process.arch!=='x64')throw new Error('Windows x64 release must be built on Windows x64.');
+  const {buildSync}=require('esbuild'),{inject}=require('postject'),dist=path.join(outputRoot,'dist');
   const source=sourceState(root);
   fs.mkdirSync(dist,{recursive:true});const bundle=path.join(dist,'bundle.cjs');
   buildSync({entryPoints:[path.join(root,'src/main.cjs')],bundle:true,platform:'node',target:'node22',format:'cjs',outfile:bundle,minify:false});
@@ -57,7 +113,7 @@ async function main(){
   if(!referenceFiles.includes('legacy-communication.md'))throw new Error('The legacy communication reference is missing.');
   fs.writeFileSync(path.join(release,'README.md'),`# Agent Office ${expectedVersion} · Agent 办公室
 
-保留整个安装包，双击 AgentOffice.exe 打开独立桌面窗口。文字聊天和办公室画面可切换；角色、头像、颜色可在右侧外观页替换。成员、资料与连接详情在右侧抽屉。窗口内可启停本机服务，关闭窗口保留服务，停止服务仍可查看历史。无需 Node/Python、管理员权限或自己的服务器；模型使用各工具原有服务和计费方式。桌面窗口需要微软 WebView2 Runtime，缺失时会显示官方安装入口。
+保留整个安装包，双击 AgentOffice.exe 打开独立桌面窗口。文字聊天和办公室画面可切换；角色、头像、颜色可在右侧外观页替换。成员、资料与连接详情在右侧抽屉。打开软件自动启动本机服务，关闭软件停止服务；最小化时服务继续运行，页面暂停刷新与动画，恢复后同步最新进度。无需 Node/Python、管理员权限或自己的服务器；模型使用各工具原有服务和计费方式。桌面窗口需要微软 WebView2 Runtime，缺失时会显示官方安装入口。
 
 接入时 AO 自动核对这位同事的真实回复，验证通过后进入办公室。重复检查沿用同一条验证记录；结果不明时保留原请求核对。已有自动连接断线后会逐步恢复原人物对话，版本或授权需要处理时显示具体原因。已授权的日常读取和办公室协作自动处理，需要本人决定的操作在对应成员最新对话中选择；无需回到聊天顶部。详见 OPERATION_POLICY.md。
 
@@ -96,7 +152,7 @@ Grok 可先连接一个 Bot，直接在当前对话桥接外部成员；群聊�
   if(sourceState(root).fingerprint!==source.fingerprint)throw new Error('Source changed during the build; the package was not accepted.');
   atomicJson(path.join(release,'release-manifest.json'),{schema:'agentoffice.release',version:expectedVersion,source,files:publicFiles.map(name=>({path:name,sha256:sha(path.join(release,...name.split('/'))),bytes:fs.statSync(path.join(release,...name.split('/'))).size}))});names.push('release-manifest.json');
   try{
-    if(process.argv.includes('--local-only')){console.log(JSON.stringify({executable:path.join(release,'AgentOffice.exe'),release,version,bytes:fs.statSync(executable).size},null,2));return;}
+    if(localOnly)return {executable:path.join(release,'AgentOffice.exe'),release,version,bytes:fs.statSync(executable).size};
     for(const name of names)fs.copyFileSync(path.join(release,name),path.join(stage,name));
     copyReferences(referenceSource,path.join(stage,'references'));
     for(const item of [...desktop.files.map(file=>file.path),'desktop-manifest.json']){const target=path.join(stage,'desktop',...item.split('/'));fs.mkdirSync(path.dirname(target),{recursive:true});fs.copyFileSync(path.join(desktop.directory,...item.split('/')),target);}
@@ -107,6 +163,11 @@ Grok 可先连接一个 Bot，直接在当前对话桥接外部成员；群聊�
     const cleanup=path.resolve(stage);if(path.dirname(cleanup)!==dist||!path.basename(cleanup).startsWith('zip-stage-'))throw new Error('Refusing to remove a ZIP stage outside dist.');
     fs.rmSync(cleanup,{recursive:true,force:true});
   }
-  console.log(JSON.stringify({executable,zip,version,bytes:fs.statSync(executable).size},null,2));
+  return {executable,release,zip,version,bytes:fs.statSync(executable).size};
 }
-main().catch(e=>{console.error(e.message);process.exitCode=1;});
+async function main(args=process.argv.slice(2)){
+  const options=parseArgs(args),result=await(options.dev?buildDevelopment(options):buildPackage(options));
+  console.log(JSON.stringify(result,null,2));return result;
+}
+module.exports={parseArgs,buildPackage,buildDevelopment,publishDevelopment};
+if(require.main===module)main().catch(e=>{console.error(e.message);process.exitCode=1;});

@@ -41,7 +41,7 @@ Grok 进程存在不证明账号已配置 webhook、MCP 或本机访问权限。
 | 侧边栏分组 | `threadSection/create`、`thread/section/move` 等 | 本机协议 |
 | 创建桌面项目 | 当前导出的客户端方法中没有项目创建接口 | 待验证 |
 
-完整字段及 schema 哈希见 [本机证据](evidence/local-capabilities.json)。元数据中的 `notLoaded` 是本轮独立 App Server 的观察，不能据此认定桌面中的同一聊天空闲或没有其他写入者。
+完整字段及 schema 哈希记录在可选本机报告 `docs/evidence/local-capabilities.json`（不随源码提交）。元数据中的 `notLoaded` 是本轮独立 App Server 的观察，不能据此认定桌面中的同一聊天空闲或没有其他写入者。
 
 本机 schema 没有在 `ThreadStartParams` 中提供 `projectId` 字段。设置 `cwd` 不等于验证了桌面项目归属。侧边栏 section 也不等于 project。当前项目已有登记，第一版应优先绑定它，之后验收新聊天的可见性。
 
@@ -90,7 +90,7 @@ Codex 有 `SessionStart`、`UserPromptSubmit`、`Stop` 等生命周期钩子，�
 - `/hooks/grokbot` 存储入站事件；可选回调是收件确认，不能作为 Codex 已回答的证据。
 - 检查的源文件没有 Codex 执行适配器，也没有原生 Grok 对话 ID 的创建或续聊逻辑。
 
-详见 [源码证据](evidence/bridge-review.json)。没有运行安装脚本、部署服务或调用真实 webhook。
+对应的可选本机报告为 `docs/evidence/bridge-review.json`（不随源码提交）。没有运行安装脚本、部署服务或调用真实 webhook。
 
 ## 决策
 
