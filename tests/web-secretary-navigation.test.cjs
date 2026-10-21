@@ -44,6 +44,11 @@ test('automatic verification progress remains in setup and never assigns a secre
   const f=fixture();connectFlow(f,'picker',{id:'job',room_id:'room',member_id:'member',provider:'qwen-desktop',status:'running',stage:'verifying_reply',can_wake:true,ready_for_office:false});
   await f.context.returnSecretaryAfterOnboarding();assert.equal(f.calls.length,0);assert.equal(f.navigation.length,0);assert.equal(f.$('secretary-connect-dialog').open,true);
 });
+
+test('cached-login recheck never closes setup or assigns a secretary using historical ready flags',async()=>{
+  const f=fixture();connectFlow(f,'picker',{id:'job',room_id:'room',member_id:'member',provider:'codex',status:'ready_automatic',stage:'connection_recheck_available',auth_mode:'shared-cache',recheck_auth_revision:'native-shared-cache-v1',can_wake:true,ready_for_office:true,automatic_reply_verified:true});
+  await f.context.returnSecretaryAfterOnboarding();assert.equal(f.calls.length,0);assert.equal(f.navigation.length,0);assert.equal(f.$('secretary-connect-dialog').open,true);assert.equal(f.context.state.secretaries.room.member_id,null);
+});
 test('native historical success and missing attempt acceptance cannot close setup',async()=>{
   for(const invalid of [{ready_for_office:undefined,status:'ready_automatic',can_wake:true},{ready_for_office:false,status:'ready_mailbox',can_wake:false},{ready_for_office:true,status:'ready_mailbox',can_wake:false},{ready_for_office:true,status:'ready_automatic',can_wake:false}]){
     const f=fixture();connectFlow(f,'picker',{id:'job',room_id:'room',member_id:'member',provider:'doubao',connection_method:'native_desktop',...invalid});await f.context.returnSecretaryAfterOnboarding();assert.equal(f.$('secretary-connect-dialog').open,true);assert.equal(f.navigation.length,0);assert.equal(f.calls.length,0);

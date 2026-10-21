@@ -83,6 +83,27 @@ class CodexWorkspace{
     // a single-owner authorization flow exists, file-backed logins stay paused.
     if(state?.credential_seeded===true||entryExists(path.join(this.home,'auth.json')))throw new RoomError('为保护已登录的 Codex，AO 已暂停这条后台连接。原聊天和成员已保留；请勿重复登录或复制登录文件。',409,'codex_auth_ownership_required');
   }
+  assertSharedCache(){
+    // Authentication stays in the original native cache. The old private
+    // auth.json is deliberately not inspected, loaded, copied or overwritten.
+    if(!fs.existsSync(this.legacyHome)||!fs.statSync(this.legacyHome).isDirectory())throw new RoomError('尚未找到原 Codex 环境。请先打开已安装的 Codex 完成首次设置，再检查连接。',409,'codex_login_required');
+    if(entryExists(path.join(this.legacyHome,'agentoffice-workspace.json')))throw new RoomError('选中的 Codex 环境是 AO 的旧工作副本，不能当作原登录缓存。原连接已保留，请检查连接诊断。',409,'codex_auth_ownership_required');
+    if(entryExists(this.home)){
+      if(!fs.lstatSync(this.home).isDirectory()||fs.lstatSync(this.home).isSymbolicLink())throw new RoomError('后台协作保存目录不能是链接。',409,'codex_workspace_path');
+      const realHome=fs.realpathSync.native(this.home),source=fs.realpathSync.native(this.legacyHome);
+      if(same(realHome,source)||inside(realHome,source))throw new RoomError('原 Codex 缓存不能指向 AO 的旧认证副本。',409,'codex_auth_ownership_required');
+      const marker=path.join(this.home,'agentoffice-workspace.json');
+      if(entryExists(marker)){if(!workspaceOwner(readWorkspaceMarker(marker,this.home),this.legacyHome))throw new RoomError('后台协作目录身份不匹配。',409,'codex_workspace_owner');}
+      else if(fs.readdirSync(this.home).length)throw new RoomError('后台协作目录已有未登记文件，原记录已保留。',409,'codex_workspace_owner');
+    }
+  }
+  async sharedEnvironment(){
+    this.assertSharedCache();fs.mkdirSync(this.home,{recursive:true,mode:0o700});this.assertSharedCache();
+    const marker=path.join(this.home,'agentoffice-workspace.json');
+    if(!entryExists(marker))try{fs.writeFileSync(marker,JSON.stringify({schema:'agentoffice.codex-workspace',version:1,prepared:true,legacy_home:this.legacyHome,credential_seeded:false,authentication_policy:'native-shared-cache-v1',created:new Date().toISOString()}),{flag:'wx',mode:0o600});}catch(error){if(error.code!=='EEXIST')throw error;this.assertSharedCache();}
+    return {...process.env,CODEX_HOME:this.legacyHome,CODEX_SQLITE_HOME:this.home};
+  }
+  sharedArguments(){return ['-c','sqlite_home='+toml(this.home),'-c','notify=[]','-c','features.hooks=false','-c','features.codex_hooks=false','-c','features.plugins=false','-c','features.apps=false'];}
   async prepare(readConfig){
     this.assertAuthenticationOwner();
     const preparationKey=process.platform==='win32'?this.home.toLowerCase():this.home;

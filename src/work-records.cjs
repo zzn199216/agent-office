@@ -34,7 +34,7 @@ async function exportWorkRecord(store,chat,input,options={}){
   const selected=binding(store,chat,input),{project,discussion,member}=selected;
   if(!discussion.thread_id)throw new RoomError('这个成员还没有保存的 Codex 工作记录。',404,'work_record_missing');
   let client=options.client,owned=false;
-  if(!client){const {CodexClient}=require('./codex.cjs');client=new CodexClient({dataDir:store.dir,executable:member?.config?.executable||store.setting('codex_path')||undefined,args:member?.config?.executable_args||[],legacyHome:options.legacyHome});owned=true;}
+  if(!client){const {CodexClient}=require('./codex.cjs');client=new CodexClient({dataDir:store.dir,executable:member?.config?.executable||store.setting('codex_path')||undefined,args:member?.config?.executable_args||[],legacyHome:options.legacyHome,authenticationMode:'shared-cache'});owned=true;}
   try{
     const thread=client.inspectBound?await client.inspectBound(project,discussion):await client.read(discussion.thread_id);
     if(!thread||thread.id!==discussion.thread_id||!thread.cwd||normalizePath(thread.cwd)!==project.canonical)throw new RoomError('工作记录与已登记项目或会话不匹配。',409,'project_mismatch');

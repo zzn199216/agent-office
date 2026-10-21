@@ -129,6 +129,7 @@ class ConnectionAssist{
   }
   actionKind(row,state){
     if(state?.stage==='connection_repair_required'||['codex_auth_ownership_required','codex_personal_auth_owner_conflict'].includes(state?.error_code))return 'connection_repair';
+    if(state?.stage==='connection_recheck_available')return 'connection_recheck';
     if(state?.stage==='awaiting_credential'||!state&&row.status==='needs_reauthorization')return 'reauthorize';
     if(state?.status==='ready'&&state.ready_for_office===true&&state.local_verified)return 'ready';
     if(state?.status==='running'||row.status==='starting'||row.status==='preparing_document')return 'wait';
@@ -141,28 +142,29 @@ class ConnectionAssist{
   snapshot(row){
     this.source(row.message_id);let state=null,error=row.error;
     try{state=this.state(row);}catch(caught){error=safe(caught.message);}
-    const protectedConnection=state?.stage==='connection_repair_required'||['codex_auth_ownership_required','codex_personal_auth_owner_conflict'].includes(state?.error_code);
-    const runId=state?.run_id||state?.id||row.run_id,accepted=!protectedConnection&&!!runId&&state?.status==='ready'&&state.ready_for_office===true&&state.local_verified===true;
+    const protectedConnection=state?.stage==='connection_repair_required'||['codex_auth_ownership_required','codex_personal_auth_owner_conflict'].includes(state?.error_code),recheck=state?.stage==='connection_recheck_available';
+    const runId=state?.run_id||state?.id||row.run_id,accepted=!protectedConnection&&!recheck&&!!runId&&state?.status==='ready'&&state.ready_for_office===true&&state.local_verified===true;
     const status=state?.status==='ready'&&!accepted?'needs_action':state?.status||(['prepared','document_ready','needs_reauthorization'].includes(row.status)?'needs_action':row.status),stage=state?.stage||(row.status==='needs_reauthorization'?'awaiting_credential':row.status);
     const ready=accepted,automatic=ready&&state?.can_wake===true,actionKind=this.actionKind(row,state),reused=state?.reused_connection===true||!!row.connection_reused;
     const fixed=state?.fixed_proxy||(state?.member_id?require('./connection-target.cjs').fixedProxy(this.service,state.member_id):null);
     const documentPath=actionKind==='manual_handoff'?row.document_path||null:null;
-    const summary=protectedConnection?'为保护已登录的 Codex，AO 已暂停这条后台连接。原聊天和成员已保留。':fixed?'此连接是固定群桥接，原后端路由保留，不能当成独立跨房人物复用。':ready?(automatic?'已接通并验证本次回复，可以直接在 AO 协作。':'本人入口已实际接通；消息由本人窗口处理，AO 自动唤醒尚未验证。'):
+    const summary=protectedConnection?'为保护已登录的 Codex，AO 已暂停这条后台连接。原聊天和成员已保留。':recheck?'已支持沿用原 Codex 登录；请重新验证原人物连接，无需另外登录或重配 MCP。':fixed?'此连接是固定群桥接，原后端路由保留，不能当成独立跨房人物复用。':ready?(automatic?'已接通并验证本次回复，可以直接在 AO 协作。':'本人入口已实际接通；消息由本人窗口处理，AO 自动唤醒尚未验证。'):
       ['interrupted','error','cancelled','failed'].includes(status)?'接入已中断或失败，请查看原有进度继续处理。':
       actionKind==='reauthorize'?'这位同事的原连接已撤销，请在 AO 明确重新授权原人物。':actionKind==='managed'?'这位同事使用 AO 后台接入，请在原接入进度继续处理，无需向外部窗口粘贴配置。':actionKind==='unsupported'?'当前尚无可用的接入入口，请查看这位同事的支持情况。':
       ['interrupted','error','cancelled','failed'].includes(status)?(documentPath?'接入未完成；请查看接入说明和原有进度，没有自动重试。':'接入已中断或失败；请查看原有进度，没有自动重试。'):
       status==='running'?'正在接入选定成员。':documentPath?'需要在对应 AI 窗口完成一步连接，请复制接入句并交给它。':this.jobs.has(row.id)?'正在准备接入帮助；未宣称成员已连接。':'接入需要处理；请查看原有进度，没有自动重试。';
     const guidedGrok=row.provider==='grok-bot'&&!!state?.member_id&&!automatic,targetWindow=guidedGrok?'已有 Grok Bot 对话':`${names.get(row.provider)||row.provider} 的本人对话`;
-    const nextStep=protectedConnection?'无需重复登录或重新配置 MCP。请查看连接保护说明，或使用其他已接通的成员。':automatic?'已连接，可以直接在 AO 给这位同事发消息。':ready?'已接通本机入口，可以在 AO 留消息；当前需由本人窗口处理，自动接手尚未验证。':row.status==='needs_reauthorization'||stage==='awaiting_credential'?'请打开原接入步骤，明确重新授权这位同事；原消息和人物保留。':
+    const nextStep=protectedConnection?'无需重复登录或重新配置 MCP。请查看连接保护说明，或使用其他已接通的成员。':recheck?'点击「沿用已有登录，重新验证」。AO 会检查原人物的真实通信，成功后进入办公室。':automatic?'已连接，可以直接在 AO 给这位同事发消息。':ready?'已接通本机入口，可以在 AO 留消息；当前需由本人窗口处理，自动接手尚未验证。':row.status==='needs_reauthorization'||stage==='awaiting_credential'?'请打开原接入步骤，明确重新授权这位同事；原消息和人物保留。':
       guidedGrok?'点击这条消息下方「查看连接步骤」，复制连接说明并发到已有 Grok Bot 对话。AO 会继续检查真实连接，不需要创建群聊。':
       documentPath?`将下方接入句发到${targetWindow}，让它按文档完成连接；AO 会继续显示实际进度。`:
       status==='running'?'AO 正在接入选定成员，保留当前进度等待结果，不重复发起。':'请打开这条消息的原有接入进度，处理提示的下一步；原人物和连接保留。';
     return {id:row.id,room_id:row.room_id,message_id:row.message_id,member_id:row.member_id,provider:row.provider,name:names.get(row.provider)||row.provider,
       provider_name:names.get(row.provider)||row.provider,run_id:runId,status,stage,summary,error_code:state?.error_code||null,ready_for_office:ready,local_verified:ready,can_wake:ready&&state?.can_wake===true,
+      auth_mode:state?.auth_mode||null,auth_revision:state?.auth_revision||null,recheck_auth_revision:state?.recheck_auth_revision||null,
       handoff_kind:guidedGrok?'grok_guided':documentPath?'connection_document':null,connection_method:guidedGrok?'grok_command_bridge':state?.response_mode||null,target_window:targetWindow,next_step:nextStep,
       action_kind:actionKind,reused_connection:reused,verification_scope:'current_attempt',can_notify:state?.can_notify===true,
       selection_reason:state?.selection_reason||null,fixed_proxy:fixed,
-      recovery_action:actionKind==='reauthorize'&&state?.member_id?{operation:'reauthorize',room_id:row.room_id,provider:row.provider,target_member_id:state.member_id}:actionKind==='managed'&&runId?{operation:'retry',run_id:runId,room_id:row.room_id,provider:row.provider,target_member_id:state?.member_id||row.target_member_id||null}:null,
+      recovery_action:actionKind==='reauthorize'&&state?.member_id?{operation:'reauthorize',room_id:row.room_id,provider:row.provider,target_member_id:state.member_id}:['managed','connection_recheck'].includes(actionKind)&&runId?{operation:'retry',run_id:runId,room_id:row.room_id,provider:row.provider,target_member_id:state?.member_id||row.target_member_id||null}:null,
       protocol_verified:state?.protocol_verified===true,automatic_reply_verified:state?.automatic_reply_verified===true,
       target_member_id:state?.member_id||null,document_path:documentPath,document_url:documentPath?`/api/connection-assists/${row.id}/document?room_id=${encodeURIComponent(row.room_id)}`:null,
       copy_sentence:documentPath?`请读取这台电脑上的接入文档「${documentPath}」，按文档接入 Agent Office；保留已有配置，完成后实际验证连接。`:'',
@@ -220,6 +222,7 @@ class ConnectionAssist{
       '2. 需要本人窗口连接时，先用一句话说明还差哪一步，再告诉用户 next_step 和准确的 target_window；存在 copy_sentence 时逐字给用户这句可复制的内容及接入文档。引导按钮会提供这位同事的专属说明，不要求用户提供房间 ID、路径或新配置。\n'+
       '3. 原入口已撤销、服务中断或仍等待时，说明原进度保留，并给出已有接入步骤中的下一步；不自行重复扫描、重试、重建人物或重签凭据。\n'+
       '4. action_kind 为 connection_repair 时，说明 AO 为保护现有桌面登录已暂停后台连接，原人物和聊天保留；不要让用户再次登录、重新配置 MCP、复制认证或重试，可查看保护说明或选择其他已接通成员。\n'+
+      '5. action_kind 为 connection_recheck 时，说明新版可以沿用原 Codex 登录，让用户点击「沿用已有登录，重新验证」，原人物和聊天继续使用；还未验证成功，不要求额外登录或复制配置。\n'+
       '不要把内部状态码、成员 ID、端口、堆栈或原始错误当作给普通用户的答案；用户主动询问诊断时再解释。文档生成、应用打开和历史握手不代表当前自动连接成功；仅按真实证据确认，不读取其他成员凭据，不扩大用户授权。\n'+JSON.stringify(snapshots);
   }
   document(assistId,roomId){

@@ -13,7 +13,7 @@ const APPROVAL_REVIEW_TTL_MS = 24 * 60 * 60 * 1000;
 class RoomService extends EventEmitter {
   constructor(dir, options = {}) {
     super(); this.store = new Store(dir); this.vault = options.vault || new Vault(dir);
-    this.codex = options.codex || new CodexClient({ executable: this.store.setting('codex_path') || undefined,dataDir:dir });
+    this.codex = options.codex || new CodexClient({ executable: this.store.setting('codex_path') || undefined,dataDir:dir,authenticationMode:'shared-cache' });
     this.fetch = options.fetch || globalThis.fetch; this.active = null; this.approvals = new Map(); this.approvalReviews = new Map(); this.approvalReviewTimes = new WeakMap(); this.revision = 0; this.closing = false; this.pumping = false;
     this.store.recovery(); this.flushExports();
     const {ChatManager}=require('./chat.cjs');this.chat=new ChatManager(this,options.chat||{});
@@ -292,7 +292,7 @@ class RoomService extends EventEmitter {
   async setCodex(executable) {
     if (this.active) throw new RoomError('请等当前任务结束后再修改 Codex 路径。', 409);
     if (!fs.existsSync(executable) || !/[/\\]codex(\.exe)?$/i.test(executable)) throw new RoomError('请选择已安装的 codex 可执行文件。');
-    await this.codex.close(); this.store.setting('codex_path', executable); this.codex = new CodexClient({ executable,dataDir:this.store.dir }); this.codexHealth = null; return this.health();
+    await this.codex.close(); this.store.setting('codex_path', executable); this.codex = new CodexClient({ executable,dataDir:this.store.dir,authenticationMode:'shared-cache' }); this.codexHealth = null; return this.health();
   }
   async close() {
     this.closing = true; this.team.close();this.connectionAssist?.stop?.(); clearInterval(this.exportTimer);clearInterval(this.runtimeTimer);this.runtime.releaseWorker(this.runtimeRef); this.active?.abort.abort();await this.onboarding.close();await this.connectionAssist?.close?.();await this.runtimeInstaller.close();await this.launch.close();await this.bridge.close();await this.desktop.close();await this.chat.close(); await this.codex.close();

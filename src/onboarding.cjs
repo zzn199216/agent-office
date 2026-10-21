@@ -15,6 +15,8 @@ const safeText=value=>redact(value).replace(/https?:\/\/[^\s<>"']+/gi,'[地址�
 const AUTH=/登录|认证|授权|模型服务|API.?key|凭据|login|sign.?in|authentication|auth.?required|unauthenticated/i;
 const CODEX_OWNERSHIP_ERRORS=new Set(['codex_auth_ownership_required','codex_personal_auth_owner_conflict']);
 const CODEX_REPAIR_MESSAGE='为保护已登录的 Codex，AO 已暂停这条后台连接。原聊天和成员已保留。';
+const SHARED_AUTH_REVISION='native-shared-cache-v1';
+function codexActionStage(error){const code=String(error?.code||error?.error_code||''),message=String(error?.message||error||'').replace(/凭据=\[已隐藏\]/g,'');if(code==='codex_login_required')return 'awaiting_auth';if(/quota|rate.?limit|429|额度|配额/i.test(code+' '+message))return 'awaiting_quota';if(/api.?key|api_key|provider|模型服务|提供商|凭据/i.test(code+' '+message))return 'awaiting_provider_action';return AUTH.test(message)||/login|auth/.test(code)?'awaiting_auth':null;}
 const action=(kind,label,extra={})=>({id:kind,kind,label,...extra});
 function providerBlock(provider,error){
   if(provider!=='gemini-cli')return null;
@@ -38,7 +40,7 @@ class OnboardingManager{
     if(!this.db.prepare('PRAGMA table_info(onboarding_runs)').all().some(column=>column.name==='goal'))this.db.exec("ALTER TABLE onboarding_runs ADD COLUMN goal TEXT NOT NULL DEFAULT ''");
     if(!this.db.prepare('PRAGMA table_info(onboarding_runs)').all().some(column=>column.name==='verify_reply'))this.db.exec('ALTER TABLE onboarding_runs ADD COLUMN verify_reply INTEGER NOT NULL DEFAULT 0');
     if(!this.db.prepare('PRAGMA table_info(onboarding_runs)').all().some(column=>column.name==='direct_member_id'))this.db.exec('ALTER TABLE onboarding_runs ADD COLUMN direct_member_id TEXT');
-    for(const [name,type]of [['target_member_id','TEXT'],['connection_reused','INTEGER NOT NULL DEFAULT 0'],['reauthorize','INTEGER NOT NULL DEFAULT 0'],['selection_reason','TEXT'],['connection_method','TEXT'],['started_at','TEXT']])if(!this.db.prepare('PRAGMA table_info(onboarding_runs)').all().some(column=>column.name===name))this.db.exec(`ALTER TABLE onboarding_runs ADD COLUMN ${name} ${type}`);
+    for(const [name,type]of [['target_member_id','TEXT'],['connection_reused','INTEGER NOT NULL DEFAULT 0'],['reauthorize','INTEGER NOT NULL DEFAULT 0'],['selection_reason','TEXT'],['connection_method','TEXT'],['started_at','TEXT'],['auth_mode','TEXT'],['auth_revision','TEXT']])if(!this.db.prepare('PRAGMA table_info(onboarding_runs)').all().some(column=>column.name===name))this.db.exec(`ALTER TABLE onboarding_runs ADD COLUMN ${name} ${type}`);
     this.db.prepare("UPDATE onboarding_runs SET status='interrupted',stage='interrupted',error='接入期间本机处理程序结束。请点击重试；不会重放业务问题。',updated=? WHERE status='running' AND stage<>'verifying_reply'").run(now());
     this.verification=options.replyVerification===false?null:new (require('./onboarding-verification.cjs').OnboardingVerification)(service,options.verification||{});
     this.verificationPulse=()=>this.advanceVerifications();this.service.on?.('change',this.verificationPulse);
@@ -57,26 +59,53 @@ class OnboardingManager{
     return {requested_provider:requested,provider:requested,mode,connection_method:method||this.connectionMethod({provider:requested})};
   }
   connectionMethod(row){return row.connection_method||(['qwen-desktop','doubao'].includes(row.provider)?'native_desktop':DESKTOP.has(row.provider)?'manual_mcp':BRIDGE.has(row.provider)?'grok_command_bridge':'managed_native');}
+  authOwnership(row){
+    if(row.provider!=='codex')return null;
+    const memberId=row.target_member_id||row.direct_member_id||this.db.prepare('SELECT backend_member_id FROM launch_proxies WHERE room_id=? AND provider=?').get(row.room_id,row.provider)?.backend_member_id;
+    const target=memberId&&this.service.chat.clients?.get(memberId),client=typeof target?.authOwnershipStatus==='function'?target:this.service.codex;
+    try{return client?.authOwnershipStatus?.()||null;}catch(error){return {blocked:true,code:error.code||'codex_auth_ownership_required'};}
+  }
+  authRecheckAvailable(row,status=this.authOwnership(row)){
+    const runtime=json(row.runtime_result,null);
+    return row.provider==='codex'&&!row.auth_revision&&(row.stage==='connection_repair_required'||runtime?.status==='connection_repair_required')&&status?.blocked===false&&status.mode==='shared-cache'&&status.revision===SHARED_AUTH_REVISION;
+  }
+  authBlockedStage(row,status=this.authOwnership(row)){
+    if(row.provider!=='codex'||status?.blocked!==true||CODEX_OWNERSHIP_ERRORS.has(status.code))return null;
+    const code=String(status.code||'');
+    return code==='codex_login_required'?'awaiting_auth':/quota|rate_limit|api_key|provider_/i.test(code)?codexActionStage({code}):null;
+  }
   authProtection(row,error){
     if(row.provider!=='codex')return null;
-    const runtime=json(row.runtime_result,null),code=error?.code||error?.error_code||runtime?.error_code;
+    const runtime=json(row.runtime_result,null),code=error?.code||error?.error_code;
     if(CODEX_OWNERSHIP_ERRORS.has(code))return code;
-    if(row.stage==='connection_repair_required')return /^codex_[a-z0-9_]+$/.test(runtime?.error_code||'')?runtime.error_code:'codex_auth_ownership_required';
-    const status=this.service.codex?.authOwnershipStatus?.();
-    if(status?.blocked===true)return /^codex_[a-z0-9_]+$/.test(status.code||'')?status.code:'codex_auth_ownership_required';
-    return row.stage==='awaiting_auth'||code==='codex_login_required'?'codex_auth_ownership_required':null;
+    const status=this.authOwnership(row);
+    if(status?.blocked===true&&!this.authBlockedStage(row,status))return /^codex_[a-z0-9_]+$/.test(status.code||'')?status.code:'codex_auth_ownership_required';
+    if((row.stage==='connection_repair_required'||runtime?.status==='connection_repair_required')&&!this.authRecheckAvailable(row,status))return /^codex_[a-z0-9_]+$/.test(runtime?.error_code||'')?runtime.error_code:'codex_auth_ownership_required';
+    return null;
   }
-  pauseForAuthProtection(row,code){this.set(row.id,{status:'needs_action',stage:'connection_repair_required',error:CODEX_REPAIR_MESSAGE,runtime_result:JSON.stringify({status:'connection_repair_required',error_code:code})});}
+  pauseForAuthProtection(row,code){this.set(row.id,{status:'needs_action',stage:'connection_repair_required',error:CODEX_REPAIR_MESSAGE,runtime_result:JSON.stringify({status:'connection_repair_required',error_code:code}),auth_revision:row.auth_revision||SHARED_AUTH_REVISION});}
   authProtectionSnapshot(row,code){
     const memberId=row.target_member_id||row.direct_member_id||this.db.prepare('SELECT backend_member_id FROM launch_proxies WHERE room_id=? AND provider=?').get(row.room_id,row.provider)?.backend_member_id;
     let name=NAMES[row.provider]||row.provider;try{if(memberId)name=this.service.chat.store.member(memberId).name||name;}catch{}
     return {id:row.id,run_id:row.id,room_id:row.room_id,requested_provider:row.requested_provider,provider:row.provider,mode:row.mode,
       member_id:memberId||null,name,created:row.created,updated:row.updated,started_at:row.started_at||row.created,goal:row.goal||'',
       launch_session_id:row.launch_session_id,connection_method:this.connectionMethod(row),status:'needs_action',stage:'connection_repair_required',
+      auth_mode:row.auth_mode||null,auth_revision:row.auth_revision||null,
       error_code:code,error:CODEX_REPAIR_MESSAGE,detail:CODEX_REPAIR_MESSAGE,ready_for_office:false,local_verified:false,can_wake:false,
       protocol_verified:false,model_reply_verified:false,automatic_reply_verified:false,runner_ready:false,native_conversation_loaded:false,
       readiness:'connection_repair_required',error_stage:'authentication',native_group_status:'not_prepared',grok_verified:false,
       next_actions:[action('information','查看连接保护说明',{operation:'show_connection_repair'}),action('select','使用其他已连接成员',{operation:'choose_connected_member'})],policy:this.service.launch.policy()};
+  }
+  authRecheckSnapshot(row){
+    return {...this.authProtectionSnapshot(row,null),stage:'connection_recheck_available',error_code:null,error:null,error_stage:null,readiness:'connection_recheck_available',auth_mode:'shared-cache',auth_revision:row.auth_revision||null,recheck_auth_revision:SHARED_AUTH_REVISION,
+      detail:'已发现可安全沿用的原 Codex 登录缓存。原人物、聊天和 MCP 配置保留；点击后重新验证，不会另开登录流程。',
+      next_actions:[action('verify','沿用已有登录，重新验证',{operation:'retry'})]};
+  }
+  codexActionSnapshot(row,base,stage){
+    const login=stage==='awaiting_auth',quota=stage==='awaiting_quota';
+    return {...base,status:'needs_action',stage,ready_for_office:false,local_verified:false,can_wake:false,protocol_verified:false,model_reply_verified:false,automatic_reply_verified:false,runner_ready:false,native_conversation_loaded:false,
+      detail:login?'请先在原 Codex 窗口完成登录，再回这里检查连接。AO 沿用已有登录缓存，不会打开额外的后台登录。':quota?'请在原 Codex 使用的模型服务中检查额度，再回这里检查连接。已有账号和配置保留。':'请在原 Codex 检查提供商或 API 配置，再回这里检查连接。无需另开后台登录。',
+      next_actions:[action('verify',login?'已在原 Codex 登录，检查连接':quota?'额度处理后检查连接':'配置更新后检查连接',{operation:'retry'})]};
   }
   setDeliveryMethod(memberId,method){
     if(!memberId||!this.service.resume||!['native_desktop','manual_mcp'].includes(method))return;
@@ -105,6 +134,8 @@ class OnboardingManager{
   }
   async prepareManagedBinding(row,memberId){
     const protection=this.authProtection(row);if(protection)throw new RoomError(CODEX_REPAIR_MESSAGE,409,protection);
+    if(this.authRecheckAvailable(row))return false;
+    const authStage=this.authBlockedStage(row);if(authStage)throw new RoomError(authStage==='awaiting_auth'?'请先在原 Codex 窗口登录，再检查连接。':'请在原 Codex 检查模型服务配置或额度。',409,authStage==='awaiting_auth'?'codex_login_required':this.authOwnership(row)?.code);
     if(!this.managedBindingNeeded(row,memberId))return true;
     if(this.managedBindingBlocked(memberId))return false;
     this.set(row.id,{status:'running',stage:'connecting',error:null});
@@ -117,16 +148,17 @@ class OnboardingManager{
   }
   resumeManagedBinding(row,memberId){
     const protection=this.authProtection(row);if(protection){this.pauseForAuthProtection(row,protection);return;}
+    if(this.authRecheckAvailable(row))return;
     if(this.jobs.has(row.id)||this.managedBindingBlocked(memberId))return;
     const work=Promise.resolve().then(async()=>{if(await this.prepareManagedBinding(row,memberId))this.set(row.id,{status:'needs_action',stage:'awaiting_connection',error:null});})
-      .catch(error=>{const login=AUTH.test(error.message),protection=this.authProtection(row,error)||(row.provider==='codex'&&login?'codex_auth_ownership_required':null);if(protection)this.pauseForAuthProtection(row,protection);else this.set(row.id,{status:'needs_action',stage:login?'awaiting_auth':'error',error:safeText(error.message)});})
+      .catch(error=>{const login=AUTH.test(error.message),protection=this.authProtection(row,error);if(protection)this.pauseForAuthProtection(row,protection);else this.set(row.id,{status:'needs_action',stage:row.provider==='codex'?codexActionStage(error)||'error':login?'awaiting_auth':'error',error:safeText(error.message)});})
       .finally(()=>{this.jobs.delete(row.id);this.advanceVerifications();});this.jobs.set(row.id,work);
   }
   row(runId){const row=this.db.prepare('SELECT * FROM onboarding_runs WHERE id=?').get(runId);if(!row)throw new RoomError('接入进度不存在。',404,'onboarding_not_found');this.service.chat.store.room(row.room_id);return row;}
   set(runId,fields){
     const current=this.db.prepare('SELECT room_id,status FROM onboarding_runs WHERE id=?').get(runId);
     if(current?.status==='cancelled'||current&&this.service.chat.roomDeleted?.(current.room_id))return;
-    const allowed=new Set(['status','stage','launch_session_id','runtime_result','error']);
+    const allowed=new Set(['status','stage','launch_session_id','runtime_result','error','auth_mode','auth_revision']);
     const pairs=Object.entries(fields).filter(([key])=>allowed.has(key));
     if(!pairs.length)return;
     this.db.prepare(`UPDATE onboarding_runs SET ${pairs.map(([key])=>`${key}=?`).join(',')},updated=? WHERE id=?`).run(...pairs.map(([,value])=>value),now(),runId);
@@ -144,9 +176,12 @@ class OnboardingManager{
       const memberId=candidate.target_member_id||candidate.direct_member_id||this.connectionSnapshot(candidate).member_id||null;
       return memberId===(target.member_id||null)&&this.connectionMethod(candidate)===selection.connection_method;
     });
+    let rechecking=false,recheckMemberId=null;
     if(previous){
       const snapshot=this.snapshot(previous);
       if(snapshot.stage==='connection_repair_required')return {...snapshot,reused:true};
+      rechecking=snapshot.stage==='connection_recheck_available';recheckMemberId=rechecking?snapshot.member_id:null;
+      if(!rechecking){
       if(previous.stage==='awaiting_previous_result'){this.advanceVerifications();return {...this.snapshot(this.row(previous.id)),reused:true};}
       // Reading or repeating the same button cannot silently increase install
       // permission, recreate a native session or replay a model handshake.
@@ -157,19 +192,23 @@ class OnboardingManager{
         return {...this.snapshot(this.row(previous.id)),reused:true};
       }
       if(input.retry===true&&snapshot.member_id)this.verification?.retryFailed(snapshot.member_id);
+      }
     }
     const fixedElsewhere=target.fixed_proxy&&target.fixed_proxy.room_id!==room.id;
-    const stamp=now(),row={id:id(),room_id:room.id,...selection,status:fixedElsewhere||target.blocked&&input.reauthorize!==true?'needs_action':'running',stage:fixedElsewhere?'fixed_proxy_scope':target.blocked&&input.reauthorize!==true?'awaiting_credential':'preparing',launch_session_id:null,install_client:input.install_client===true?1:0,install_runtime:input.install_runtime===true?1:0,runtime_result:null,error:null,created:stamp,updated:stamp,started_at:stamp,goal,verify_reply:this.verification?1:0,target_member_id:target.member_id,connection_reused:target.reused_connection?1:0,reauthorize:input.reauthorize===true?1:0,selection_reason:target.reason||null};
+    const authentication=this.authOwnership({provider:selection.provider,room_id:room.id,target_member_id:target.member_id||recheckMemberId});
+    const stamp=now(),row={id:id(),room_id:room.id,...selection,status:fixedElsewhere||target.blocked&&input.reauthorize!==true?'needs_action':'running',stage:fixedElsewhere?'fixed_proxy_scope':target.blocked&&input.reauthorize!==true?'awaiting_credential':'preparing',launch_session_id:null,install_client:input.install_client===true?1:0,install_runtime:input.install_runtime===true?1:0,runtime_result:null,error:null,created:stamp,updated:stamp,started_at:stamp,goal,verify_reply:this.verification?1:0,target_member_id:target.member_id||recheckMemberId,connection_reused:target.reused_connection?1:0,reauthorize:input.reauthorize===true?1:0,selection_reason:target.reason||null,
+      auth_mode:typeof authentication?.mode==='string'?authentication.mode:null,auth_revision:typeof authentication?.revision==='string'?authentication.revision:selection.provider==='codex'?SHARED_AUTH_REVISION:null};
     const protection=this.authProtection(row);if(protection)Object.assign(row,{status:'needs_action',stage:'connection_repair_required',error:CODEX_REPAIR_MESSAGE,runtime_result:JSON.stringify({status:'connection_repair_required',error_code:protection})});
-    this.db.prepare('INSERT INTO onboarding_runs(id,room_id,requested_provider,provider,mode,status,stage,launch_session_id,install_client,install_runtime,runtime_result,error,created,updated,goal,verify_reply,target_member_id,connection_reused,reauthorize,selection_reason,connection_method,started_at) VALUES(:id,:room_id,:requested_provider,:provider,:mode,:status,:stage,:launch_session_id,:install_client,:install_runtime,:runtime_result,:error,:created,:updated,:goal,:verify_reply,:target_member_id,:connection_reused,:reauthorize,:selection_reason,:connection_method,:started_at)').run(row);
+    this.db.prepare('INSERT INTO onboarding_runs(id,room_id,requested_provider,provider,mode,status,stage,launch_session_id,install_client,install_runtime,runtime_result,error,created,updated,goal,verify_reply,target_member_id,connection_reused,reauthorize,selection_reason,connection_method,started_at,auth_mode,auth_revision) VALUES(:id,:room_id,:requested_provider,:provider,:mode,:status,:stage,:launch_session_id,:install_client,:install_runtime,:runtime_result,:error,:created,:updated,:goal,:verify_reply,:target_member_id,:connection_reused,:reauthorize,:selection_reason,:connection_method,:started_at,:auth_mode,:auth_revision)').run(row);
     if(protection){this.service.changed();return this.snapshot(row);}
     if(fixedElsewhere){this.service.changed();return this.snapshot(row);}
     if(target.blocked&&!row.reauthorize){this.service.changed();return this.snapshot(row);}
+    const authStage=this.authBlockedStage(row);if(authStage){this.set(row.id,{status:'needs_action',stage:authStage});return this.snapshot(this.row(row.id));}
     const existing=this.connectionSnapshot(row);
     // A working member from an older version has no onboarding history. Keep
     // that real connection rather than reporting ready and then quietly starting
     // another model handshake or modifying its profile behind the same button.
-    if(existing.status==='ready'&&existing.native_group_status==='host_reported'){
+    if(!rechecking&&existing.status==='ready'&&existing.native_group_status==='host_reported'){
       const sessions=this.db.prepare('SELECT id,selected_providers FROM launch_sessions WHERE room_id=? ORDER BY rowid DESC').all(room.id);
       const matching=sessions.find(session=>{const providers=json(session.selected_providers,[]);return Array.isArray(providers)&&providers.length===1&&providers[0]===row.provider;});
       this.set(row.id,{status:'ready',stage:existing.stage,launch_session_id:matching?.id||null});
@@ -181,9 +220,9 @@ class OnboardingManager{
     const work=Promise.resolve().then(()=>this.run(row)).catch(error=>{
       const protection=this.authProtection(row,error);if(protection){this.pauseForAuthProtection(row,protection);return;}
       const login=AUTH.test(error?.message||'')||/login|auth/.test(error?.code||'');
-      if(row.provider==='codex'&&login){this.pauseForAuthProtection(row,'codex_auth_ownership_required');return;}
       const block=providerBlock(row.provider,error);
-      this.set(row.id,{status:login||block?'needs_action':'error',stage:login?'awaiting_auth':block||'error',error:safeText(error?.message||'接入失败，请重试。')});
+      const stage=row.provider==='codex'?codexActionStage(error):login?'awaiting_auth':block;
+      this.set(row.id,{status:stage?'needs_action':'error',stage:stage||'error',error:safeText(error?.message||'接入失败，请重试。')});
     }).finally(()=>{this.jobs.delete(row.id);this.advanceVerifications();});
     this.jobs.set(row.id,work);this.service.changed();return this.snapshot(row);
   }
@@ -191,9 +230,11 @@ class OnboardingManager{
     const row=this.row(input.run_id);
     if(input.provider&&input.provider!==row.provider&&input.provider!==row.requested_provider||input.room_id&&input.room_id!==row.room_id)throw new RoomError('重试不能切换到另一个成员或房间。',403,'onboarding_scope_mismatch');
     const protection=this.authProtection(row);if(protection)return this.authProtectionSnapshot(row,protection);
-    if(row.direct_member_id){if(this.verification?.retryFailed(row.direct_member_id,!this.service.runtime.connectionState(row.direct_member_id).automatic_reply_verified))this.db.prepare('UPDATE onboarding_runs SET started_at=? WHERE id=?').run(now(),row.id);return this.verifyMember({member_id:row.direct_member_id,room_id:row.room_id});}
+    if(this.authBlockedStage(row))return this.connectionSnapshot(row);
+    const rechecking=this.authRecheckAvailable(row);
+    if(row.direct_member_id&&!rechecking){if(this.verification?.retryFailed(row.direct_member_id,!this.service.runtime.connectionState(row.direct_member_id).automatic_reply_verified))this.db.prepare('UPDATE onboarding_runs SET started_at=? WHERE id=?').run(now(),row.id);return this.verifyMember({member_id:row.direct_member_id,room_id:row.room_id});}
     return this.start({provider:row.requested_provider,mode:row.mode,room_id:row.room_id,goal:row.goal||'',retry:true,
-      target_member_id:row.target_member_id||undefined,connection_method:DESKTOP.has(row.provider)?this.connectionMethod(row):undefined,
+      target_member_id:row.target_member_id||(rechecking?this.authRecheckSnapshot(row).member_id:undefined)||undefined,connection_method:DESKTOP.has(row.provider)?this.connectionMethod(row):undefined,
       install_client:input.install_client===undefined?!!row.install_client:input.install_client===true,
       install_runtime:input.install_runtime===undefined?!!row.install_runtime:input.install_runtime===true});
   }
@@ -221,6 +262,7 @@ class OnboardingManager{
   async run(row){
     if(this.closing||this.service.chat.roomDeleted?.(row.room_id))return;
     const protection=this.authProtection(row);if(protection){this.pauseForAuthProtection(row,protection);return;}
+    const authStage=this.authBlockedStage(row);if(authStage){this.set(row.id,{status:'needs_action',stage:authStage});return;}
     if(row.target_member_id&&!row.reauthorize){
       const target=resolveConnectionTarget(this.service,{provider:row.provider,room_id:row.room_id,target_member_id:row.target_member_id});
       const manualExisting=['manual_mcp','grok_command_bridge'].includes(this.connectionMethod(row))&&target.credential_active;
@@ -250,7 +292,7 @@ class OnboardingManager{
         ...(typeof raw?.signed_in==='boolean'?{signed_in:raw.signed_in}:{}),
         ...(raw?.reason?{reason:safeText(raw.reason)}:{}),...(raw?.detail?{detail:safeText(raw.detail)}:{})};
       this.set(row.id,{runtime_result:JSON.stringify(result)});
-      if(['needs_login','awaiting_auth','login_required'].includes(result.status)||result.signed_in===false){if(row.provider==='codex')this.pauseForAuthProtection(row,'codex_auth_ownership_required');else this.set(row.id,{status:'needs_action',stage:'awaiting_auth'});return;}
+      if(['needs_login','awaiting_auth','login_required'].includes(result.status)||result.signed_in===false&&raw?.requiresOpenaiAuth!==false&&raw?.requires_openai_auth!==false){this.set(row.id,{status:'needs_action',stage:'awaiting_auth'});return;}
       if(!result.installed||['needs_setup','failed','error','needs_manual_install'].includes(result.status)){this.set(row.id,{status:'needs_action',stage:'awaiting_runtime_install'});return;}
     }
     if(this.closing||this.service.chat.roomDeleted?.(row.room_id))return;
@@ -316,7 +358,7 @@ class OnboardingManager{
       for(const row of rows){
         if(this.service.chat.roomDeleted?.(row.room_id))continue;
         const connection=this.connectionSnapshot(row);
-        if(connection.stage==='connection_repair_required')continue;
+        if(['connection_repair_required','connection_recheck_available'].includes(connection.stage))continue;
         if(connection.member_id){if(seen.has(connection.member_id))continue;seen.add(connection.member_id);}
         if(row.stage==='awaiting_previous_result'&&connection.member_id){this.resumeManagedBinding(row,connection.member_id);continue;}
         if(connection.member_id&&connection.local_verified&&connection.can_wake&&connection.stage==='ready_automatic'){
@@ -334,7 +376,7 @@ class OnboardingManager{
   setIfDifferent(row,fields){if(Object.entries(fields).some(([key,value])=>row[key]!==value))this.set(row.id,fields);}
   snapshot(row){
     const base=this.connectionSnapshot(row);
-    if(base.stage==='connection_repair_required')return base;
+    if(['connection_repair_required','connection_recheck_available'].includes(base.stage))return base;
     if(!row.verify_reply||!this.verification)return base;
     const verification=base.member_id?this.verification.view(this.verification.row(base.member_id),row):null;
     base.reply_verification=verification;base.ready_for_office=['manual_mcp','grok_command_bridge'].includes(base.connection_method)&&base.status==='ready'&&base.stage==='ready_mailbox';
@@ -359,9 +401,13 @@ class OnboardingManager{
   }
   connectionSnapshot(row){
     const protection=this.authProtection(row);if(protection)return this.authProtectionSnapshot(row,protection);
+    if(this.authRecheckAvailable(row))return this.authRecheckSnapshot(row);
     const base=this.rawConnectionSnapshot(row),method=this.connectionMethod(row),started=row.started_at||row.created;
-    if(row.provider==='codex'&&base.stage==='awaiting_auth')return this.authProtectionSnapshot(row,'codex_auth_ownership_required');
-    Object.assign(base,{connection_method:method,started_at:started});
+    Object.assign(base,{connection_method:method,started_at:started,auth_mode:row.auth_mode||null,auth_revision:row.auth_revision||null});
+    if(row.provider==='codex'&&!['fixed_proxy_scope','awaiting_credential','requires_explicit_backend_selection'].includes(base.stage)){
+      const stage=this.authBlockedStage(row)||(['awaiting_auth','awaiting_quota','awaiting_provider_action'].includes(row.stage)?row.stage:codexActionStage(base.error||'')||(base.stage==='awaiting_auth'?'awaiting_auth':null));
+      if(stage)return this.codexActionSnapshot(row,base,stage);
+    }
     if(method==='managed_native'&&row.stage==='awaiting_previous_result')return {...base,status:'needs_action',stage:'awaiting_previous_result',ready_for_office:false,local_verified:false,error:row.error,detail:'正在观察这位同事的原请求。结果核对结束后继续当前接入，不会重复提交原问题。',next_actions:[action('verify','核对原请求后检查连接',{operation:'retry'})]};
     if(base.stage==='fixed_proxy_scope'&&base.fixed_proxy?.room_id)base.next_actions=[action('open_fixed_room','查看原房间连接',{operation:'open_fixed_room',room_id:base.fixed_proxy.room_id,target_member_id:base.member_id})];
     if(!base.member_id||['fixed_proxy_scope','awaiting_credential','requires_explicit_backend_selection'].includes(base.stage)||row.mode==='managed'&&DESKTOP.has(row.provider))return base;

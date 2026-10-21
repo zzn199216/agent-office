@@ -31,6 +31,30 @@ test('retry replaces the tracked attempt before completion and does not issue a 
   assert.deepEqual(plain(f.calls),[{route:'/api/onboarding/jobs/original/retry',body:{}}]);assert.equal(f.context.onboardingFeedback.has('original'),false);
   assert.equal(f.context.onboardingFeedback.get('replacement').pending,false);
 });
+
+const recheckState={stage:'connection_recheck_available',auth_mode:'shared-cache',auth_revision:null,recheck_auth_revision:'native-shared-cache-v1',next_actions:[{operation:'retry',label:'沿用已有登录，重新验证'}]};
+test('legacy recheck observations stay read-only and cannot borrow old ready flags or login instructions',async()=>{
+  for(const source of ['connection_repair_required','connection_recheck_available']){
+    const f=fixture({...recheckState,stage:source,status:'ready_automatic',ready_for_office:true,can_wake:true,message:'OLD SUCCESS'});f.context.api=async(route,body)=>{f.calls.push({route,body});return{...f.job,...recheckState};};
+    await f.context.checkOnboarding(f.job.id);assert.equal(f.calls.length,1);assert.equal(f.calls[0].body,undefined);const job=f.context.onboardingJobs.get(f.job.id),html=f.context.onboardingJobMarkup(job);
+    assert.equal(f.context.onboardingOfficeReady(job),false);assert.equal(f.context.onboardingReady(job),null);assert.equal(f.context.onboardingRunning(job),false);assert.match(html,/沿用已有登录，重新验证/);assert.doesNotMatch(html,/onboarding-job ready|OLD SUCCESS|data-onboarding-check|login_client|复制/);
+  }
+});
+test('safe cached-login recheck needs one explicit retry and adopts the new attempt before navigation',async()=>{
+  const f=fixture(recheckState);f.context.api=async(route,body)=>{f.calls.push({route,body});return{...f.job,id:'fresh-verification',status:'running',stage:'connecting',ready_for_office:false};};
+  await f.context.runOnboardingOperation(f.job,'retry');assert.deepEqual(plain(f.calls),[{route:'/api/onboarding/jobs/original/retry',body:{}}]);assert.equal(f.flow.jobId,'fresh-verification');assert.equal(f.context.secretaryConnectJob,'fresh-verification');assert.equal(f.completions[0],'fresh-verification');
+});
+test('recheck cards reject stale actions and missing positive cache-mode evidence without API writes',async()=>{
+  for(const state of [recheckState,{...recheckState,auth_mode:null},{...recheckState,recheck_auth_revision:null},{...recheckState,error_code:'codex_auth_ownership_required'}]){
+    const f=fixture(state);for(const operation of ['login_client','install_runtime','native_desktop_connect','manual_mcp','reauthorize'])await f.context.runOnboardingOperation(f.job,operation);
+    if(state.auth_mode!=='shared-cache'||!state.recheck_auth_revision||state.error_code)await f.context.runOnboardingOperation(f.job,'retry');assert.deepEqual(f.calls,[]);
+  }
+});
+test('ordinary Codex login uses the original account window and blocks stale separate-login actions',async()=>{
+  const f=fixture({auth_mode:'shared-cache',next_actions:[{operation:'login_client',url:'https://login.invalid/',instruction:'OLD EXTRA LOGIN'},{operation:'retry'}]});
+  const html=f.context.onboardingJobMarkup(f.job);assert.match(html,/原 Codex 窗口/);assert.match(html,/已在原 Codex 登录，检查连接/);assert.doesNotMatch(html,/data-onboarding-operation="login_client"|打开首次配置|OLD EXTRA LOGIN|https:\/\/login/);
+  await f.context.runOnboardingOperation(f.job,'login_client');assert.deepEqual(f.calls,[]);f.context.renderLaunchCandidates();
+});
 test('a visible saved progress action owns its navigation without requiring another candidate click',async()=>{
   const f=fixture();f.context.secretaryNavigation=null;f.context.secretaryConnectJob=null;f.context.api=async()=>({...f.job,id:'new-attempt',status:'running'});
   await f.context.runOnboardingOperation(f.job,'retry');assert.equal(f.context.secretaryNavigation.source,'picker');assert.equal(f.context.secretaryNavigation.jobId,'new-attempt');assert.equal(f.context.secretaryConnectJob,'new-attempt');assert.equal(f.completions[0],'new-attempt');
@@ -68,7 +92,7 @@ test('foreign room, provider and member acknowledgement cannot replace any track
 });
 
 test('login is a real action despite an instruction, stays pending in the modal and rejects duplicate clicks',async()=>{
-  const f=fixture(),gate=deferred();f.context.api=async(route,body)=>{f.calls.push({route,body});return gate.promise;};
+  const f=fixture({provider:'claude-code'}),gate=deferred();f.context.api=async(route,body)=>{f.calls.push({route,body});return gate.promise;};
   const pending=f.context.runOnboardingOperation(f.job,'login_client');await f.context.runOnboardingOperation(f.job,'login_client');
   let html=f.$('secretary-connect-progress').innerHTML;
   assert.match(html,/正在打开账号配置入口/);assert.match(html,/data-onboarding-operation="login_client"/);assert.match(html,/<button disabled/);assert.doesNotMatch(html,/data-onboarding-copy=/);assert.equal(f.calls.length,1);
@@ -79,7 +103,7 @@ test('login is a real action despite an instruction, stays pending in the modal 
 
 test('login failure and unconfirmed launch stay as errors inside the current attempt after polling',async()=>{
   for(const failure of [Object.assign(Error('无法打开首次配置窗口'),{code:'login_launch_failed'}),null]){
-    const f=fixture();f.context.api=async()=>{if(failure)throw failure;return{job:f.job,action:{launched:false}};};
+    const f=fixture({provider:'claude-code'});f.context.api=async()=>{if(failure)throw failure;return{job:f.job,action:{launched:false}};};
     await assert.rejects(f.context.runOnboardingOperation(f.job,'login_client'),/配置/);f.context.renderOnboarding();
     assert.match(f.$('onboarding-jobs').innerHTML,/role="alert"/);assert.match(f.$('secretary-connect-progress').innerHTML,/配置/);assert.equal(f.context.onboardingFeedback.get('original').pending,false);
     assert.equal(f.context.onboardingOfficeReady(f.job),false);
@@ -116,7 +140,7 @@ test('current attempt readiness is mandatory and native mailbox success cannot m
 
 test('running discovery states are subordinate to actual authorization and attempt progress',()=>{
   const f=fixture();f.context.launchCandidates=[{id:'codex',name:'Codex',installed:true,running:true,capabilities:{automatic_launch:true}}];f.context.renderLaunchCandidates();
-  let html=f.$('launch-candidates').innerHTML;assert.match(html,/需要后台账号授权 · 尚未接通/);assert.match(html,/继续账号授权/);assert.doesNotMatch(html,/正在运行|本次连接已验证/);
+  let html=f.$('launch-candidates').innerHTML;assert.match(html,/请先在原 Codex 窗口登录 · 尚未接通/);assert.match(html,/查看登录状态/);assert.doesNotMatch(html,/正在运行|本次连接已验证|后台账号需单独核对/);
   f.context.onboardingJobs.clear();f.context.renderLaunchCandidates();html=f.$('launch-candidates').innerHTML;assert.match(html,/已发现本机进程 · 尚未验证 AO 连接/);assert.doesNotMatch(html,/本次连接已验证/);
 });
 test('the explicit current attempt wins over historical jobs with newer observation timestamps',()=>{
@@ -146,7 +170,7 @@ test('read-only polling never reveals an old, foreign or unselected connection a
   f.context.secretaryNavigation=f.flow;f.$('secretary-connect-dialog').open=false;assert.equal(f.context.revealOnboardingAction(f.job),false);assert.equal(scrolls.length,0);
 });
 test('one identical connection reason is rendered once across detail, action feedback and error fields',()=>{
-  const f=fixture({detail:'本人的连接没有开启，请先开启客户端连接。',error:'本人的连接没有开启，请先开启客户端连接。'});
+  const f=fixture({provider:'doubao',stage:'awaiting_native_desktop',detail:'本人的连接没有开启，请先开启客户端连接。',error:'本人的连接没有开启，请先开启客户端连接。'});
   f.context.onboardingFeedback.set(f.job.id,{message:f.job.error,error:true,pending:false});const html=f.context.onboardingJobMarkup(f.job);
   assert.equal(html.split(f.job.error).length-1,1);assert.doesNotMatch(html,/class="onboarding-job-error"/);
   f.job.error='另一个独立的连接失败原因';assert.match(f.context.onboardingJobMarkup(f.job),/另一个独立的连接失败原因/,'distinct causes remain visible');

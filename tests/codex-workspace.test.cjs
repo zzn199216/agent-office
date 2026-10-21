@@ -7,7 +7,7 @@ async function setup(t){
   await client.workspace.prepare(async()=>({model:'fixture-model',model_provider:'fixture-provider',model_providers:{'fixture-provider':{name:'Fixture',base_url:'http://127.0.0.1:1',env_key:'FIXTURE_KEY',wire_api:'responses',requires_openai_auth:false}}}));
   // Exercise the migration protocol against synthetic rollouts only. Production
   // legacyClient() refuses to launch the personal authentication owner.
-  const protocolLegacy=()=>{const value=new CodexClient({executable:process.execPath,args:[script],legacyHome});value.authOwnershipStatus=()=>({blocked:false});value.authenticationEnvironment=async()=>({...process.env,CODEX_HOME:legacyHome});return value;};
+  const protocolLegacy=()=>{const value=new CodexClient({executable:process.execPath,args:[script],legacyHome});value.workspace={home:legacyHome,migrationState:()=>null,legacyVisibleCount:()=>0};value.authOwnershipStatus=()=>({blocked:false});value.authenticationEnvironment=async()=>({...process.env,CODEX_HOME:legacyHome});return value;};
   client.legacyClient=protocolLegacy;const legacy=protocolLegacy();
   t.after(async()=>{await client.close();await legacy.close();});return {...f,legacyHome,project,discussion,client,legacy};
 }

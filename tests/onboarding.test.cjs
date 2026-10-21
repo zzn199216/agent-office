@@ -99,14 +99,58 @@ test('typed Codex ownership failures take precedence over login wording and rema
   }
 });
 
-test('Codex fresh-home login requirements show connection protection instead of a second authorization flow',async t=>{
+test('ordinary Codex missing-login results preserve the original-account flow without claiming an ownership conflict',async t=>{
   const runtime=setup(t,{runtimeInstaller:async()=>({status:'needs_login',installed:true,signed_in:false})});
-  runtime.service.codex={authOwnershipStatus:()=>({blocked:false})};
-  const state=await completed(runtime,{install_runtime:true});assertCodexRepair(state);assert.equal(runtime.calls.length,0);assert.equal(runtime.manager.row(state.id).stage,'connection_repair_required');
+  runtime.service.codex={authOwnershipStatus:()=>({blocked:false,mode:'shared-cache',revision:'native-shared-cache-v1'})};
+  const state=await completed(runtime,{install_runtime:true});assert.equal(state.stage,'awaiting_auth');assert.equal(runtime.calls.length,0);assert.equal(runtime.manager.row(state.id).stage,'awaiting_auth');assert.deepEqual(state.next_actions.map(value=>value.operation),['retry']);assert.match(state.detail,/原 Codex 窗口完成登录/);assert.doesNotMatch(JSON.stringify(state),/login_client|connection_repair_required/);
   const native=setup(t,{nativeError:'Codex 尚未登录，请重新认证。'});native.service.codex={authOwnershipStatus:()=>({blocked:false})};
-  assertCodexRepair(await completed(native));assert.equal(native.calls.length,1);
+  assert.equal((await completed(native)).stage,'awaiting_auth');assert.equal(native.calls.length,1);
   const thrown=setup(t,{prepareError:new RoomError('Codex 需要登录。',401,'codex_login_required')});
-  assertCodexRepair(await completed(thrown));assert.equal(thrown.manager.row(thrown.manager.state({room_id:thrown.room.id}).id).stage,'connection_repair_required');
+  assert.equal((await completed(thrown)).stage,'awaiting_auth');assert.equal(thrown.manager.row(thrown.manager.state({room_id:thrown.room.id}).id).stage,'awaiting_auth');
+});
+const sharedAuth=()=>({blocked:false,mode:'shared-cache',revision:'native-shared-cache-v1'});
+test('missing original Codex HOME is ordinary login-required and cannot dispatch or reuse historical readiness',async t=>{
+  const missing=()=>({blocked:true,code:'codex_login_required'}),v=setup(t,{runtimeInstaller:async()=>{throw Error('must not install or open login');}});v.service.codex={authOwnershipStatus:missing};
+  const first=v.manager.start({provider:'codex',room_id:v.room.id,install_runtime:true});
+  for(const state of [first,v.manager.state({run_id:first.id}),v.manager.retry({run_id:first.id})]){assert.equal(state.stage,'awaiting_auth');assert.equal(state.status,'needs_action');assert.match(state.detail,/原 Codex 窗口完成登录/);assert.deepEqual(state.next_actions.map(value=>value.operation),['retry']);assert.doesNotMatch(JSON.stringify(state),/connection_repair_required|login_client/);for(const key of ['ready_for_office','local_verified','can_wake','protocol_verified','model_reply_verified','automatic_reply_verified','runner_ready','native_conversation_loaded'])assert.equal(state[key],false,key);}
+  assert.equal(v.manager.jobs.size,0);assert.equal(v.calls.length,0);assert.equal(v.runtimes.length,0);assert.equal(v.members.size,0);
+  const ready=setup(t),old=await completed(ready);ready.service.chat.clients=new Map([[old.member_id,{authOwnershipStatus:missing}]]);ready.service.codex={authOwnershipStatus:sharedAuth};const before=ready.calls.length;
+  for(const state of [ready.manager.state({run_id:old.id}),ready.manager.retry({run_id:old.id})]){assert.equal(state.stage,'awaiting_auth');assert.equal(state.ready_for_office,false);assert.equal(state.can_wake,false);assert.equal(state.model_reply_verified,false);}
+  ready.manager.advanceVerifications();await Promise.resolve();assert.equal(ready.calls.length,before);assert.equal(ready.manager.jobs.size,0);
+});
+function legacyProtection(v,runId){v.db.prepare("UPDATE onboarding_runs SET status='needs_action',stage='connection_repair_required',runtime_result=?,error=?,auth_mode=NULL,auth_revision=NULL,started_at='2026-01-01T00:00:00.000Z' WHERE id=?").run(JSON.stringify({status:'connection_repair_required',error_code:'codex_auth_ownership_required'}),CODEX_REPAIR_MESSAGE,runId);}
+function assertRecheck(state){assert.equal(state.stage,'connection_recheck_available');assert.equal(state.status,'needs_action');for(const key of ['ready_for_office','local_verified','can_wake','protocol_verified','model_reply_verified','automatic_reply_verified','runner_ready','native_conversation_loaded'])assert.equal(state[key],false,key);assert.deepEqual(state.next_actions.map(value=>value.operation),['retry']);assert.equal(state.next_actions[0].label,'沿用已有登录，重新验证');assert.equal(state.error_code,null);}
+test('safe shared-cache mode projects unversioned preview12 protection as a read-only recheck without accepting historical proof',async t=>{
+  const v=setup(t),original=await completed(v);legacyProtection(v,original.id);v.service.codex={authOwnershipStatus:sharedAuth};
+  const rows=v.db.prepare('SELECT * FROM onboarding_runs').all(),cards=v.db.prepare('SELECT * FROM chat_resume_credentials').all(),calls=v.calls.length,changes=v.changes;
+  v.manager.verification={refresh(){},row(){assert.fail('historical verification cannot be reused');},begin(){assert.fail('GET cannot dispatch verification');}};
+  for(let i=0;i<3;i++){assertRecheck(v.manager.state({run_id:original.id}));v.manager.advanceVerifications();}
+  v.manager.resumeManagedBinding(v.manager.row(original.id),original.member_id);assert.equal(await v.manager.prepareManagedBinding(v.manager.row(original.id),original.member_id),false);
+  assert.equal(v.manager.jobs.size,0);assert.equal(v.calls.length,calls);assert.equal(v.changes,changes);assert.deepEqual(v.db.prepare('SELECT * FROM onboarding_runs').all(),rows);assert.deepEqual(v.db.prepare('SELECT * FROM chat_resume_credentials').all(),cards);
+});
+test('explicit retry or a new connect command creates a current-policy attempt for the same protected identity and credentials',async t=>{
+  for(const retry of [true,false]){
+    const v=setup(t),original=await completed(v);legacyProtection(v,original.id);v.service.codex={authOwnershipStatus:sharedAuth};
+    v.db.exec('ALTER TABLE launch_proxies ADD COLUMN proxy_member_id TEXT; ALTER TABLE launch_proxies ADD COLUMN created TEXT');
+    const old=v.manager.row(original.id),cards=v.db.prepare('SELECT * FROM chat_resume_credentials').all(),file=path.join(v.data,'entries',`${original.member_id}-${v.room.id}.json`),bytes=fs.readFileSync(file),dispatched=[];v.manager.run=async row=>{dispatched.push(row);};
+    const next=retry?v.manager.retry({run_id:original.id}):v.manager.start({provider:'codex',room_id:v.room.id});assert.notEqual(next.id,original.id);await Promise.all([...v.manager.jobs.values()]);
+    const row=v.manager.row(next.id);assert.equal(row.target_member_id,original.member_id);assert.equal(row.auth_mode,'shared-cache');assert.equal(row.auth_revision,'native-shared-cache-v1');assert.notEqual(row.started_at,old.started_at);assert.equal(dispatched.length,1);assert.equal(v.members.size,1);assert.deepEqual(v.manager.row(original.id),old);assert.deepEqual(v.db.prepare('SELECT * FROM chat_resume_credentials').all(),cards);assert.deepEqual(fs.readFileSync(file),bytes);
+  }
+});
+test('current-policy conflicts and unknown authentication revisions remain strictly protected',async t=>{
+  const current=setup(t,{prepareError:new RoomError('ownership conflict',409,'codex_auth_ownership_required')});current.service.codex={authOwnershipStatus:sharedAuth};const state=await completed(current);assertCodexRepair(state);assert.equal(current.manager.row(state.id).auth_revision,'native-shared-cache-v1');assertCodexRepair(current.manager.retry({run_id:state.id}));
+  for(const status of [{blocked:false,mode:'shared-cache',revision:'unknown-version'},{blocked:false,mode:'unknown',revision:'native-shared-cache-v1'},{blocked:true,code:'codex_personal_auth_owner_conflict',mode:'shared-cache',revision:'native-shared-cache-v1'}]){const v=setup(t),original=await completed(v);legacyProtection(v,original.id);v.service.codex={authOwnershipStatus:()=>status};assert.equal(v.manager.state({run_id:original.id}).stage,'connection_repair_required');assert.equal(v.manager.retry({run_id:original.id}).id,original.id);}
+});
+test('ownership checks prefer the selected existing Codex client over an unrelated global client',async t=>{
+  const v=setup(t),original=await completed(v);v.service.codex={authOwnershipStatus:()=>({blocked:true,code:'codex_auth_ownership_required'})};v.service.chat.clients=new Map([[original.member_id,{authOwnershipStatus:sharedAuth}]]);
+  assert.equal(v.manager.state({run_id:original.id}).stage,'ready_automatic');v.service.codex={authOwnershipStatus:sharedAuth};v.service.chat.clients.set(original.member_id,{authOwnershipStatus:()=>({blocked:true,code:'codex_personal_auth_owner_conflict'})});assertCodexRepair(v.manager.state({run_id:original.id}),'codex_personal_auth_owner_conflict');
+});
+test('third-party API and quota errors are ordinary provider actions and API-only readiness does not require OpenAI sign-in',async t=>{
+  for(const [error,stage]of [[new RoomError('Provider API key is invalid',401,'provider_api_key_invalid'),'awaiting_provider_action'],[new RoomError('quota exceeded',429,'insufficient_quota'),'awaiting_quota']]){
+    const v=setup(t,{prepareError:error});v.service.codex={authOwnershipStatus:sharedAuth};const state=await completed(v);assert.equal(state.stage,stage);assert.deepEqual(state.next_actions.map(value=>value.operation),['retry']);assert.equal(state.ready_for_office,false);assert.doesNotMatch(JSON.stringify(state),/connection_repair_required|login_client/);
+    const blocked=setup(t);blocked.service.codex={authOwnershipStatus:()=>({blocked:true,code:error.code})};const stopped=await completed(blocked);assert.equal(stopped.stage,stage);assert.equal(stopped.ready_for_office,false);assert.deepEqual(stopped.next_actions.map(value=>value.operation),['retry']);assert.equal(blocked.calls.length,0);assert.equal(blocked.manager.jobs.size,0);assert.doesNotMatch(JSON.stringify(stopped),/connection_repair_required|login_client/);
+  }
+  const api=setup(t,{runtimeInstaller:async()=>({status:'installed',installed:true,signed_in:false,requiresOpenaiAuth:false})});api.service.codex={authOwnershipStatus:sharedAuth};assert.equal((await completed(api,{install_runtime:true})).stage,'ready_automatic');assert.equal(api.calls.length,1);
 });
 
 test('current Codex ownership block overrides historical ready evidence while preserving the original person and cards',async t=>{

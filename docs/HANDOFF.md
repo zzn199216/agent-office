@@ -2,15 +2,15 @@
 
 更新：2026-10-21。分支 `claude/pixel-office-overhaul`。`claude/connect-overhaul` 已快进合并进这个分支，可以删除。
 
-## 紧急保护：0.15.0-preview.12 的 Codex 认证边界
+## 当前修复：0.15.0-preview.13 沿用原 Codex 登录
 
-用户报告 AO 登录测试后 Codex 桌面退出登录。源码确认旧实现复制个人 `auth.json` 到 AO 私有 HOME，随后由多个 app-server 分别使用、刷新；官方要求同一凭据副本仅用于单机或串行任务。这一机制与事故一致，尚未取得服务端令牌轮换证据，不能宣称已证明本次注销的全部因果。真实 AO 后台已停止，不再进行个人账号登录、刷新或模型验收。
+用户报告 AO 登录测试后 Codex 桌面退出登录。历史源码确认：0.14.5 引入私有 HOME，复制一次认证及模型配置，并强制文件凭据；更早版本直接沿用原环境。复制后的缓存不能观察原环境后续更新，用户记忆中的无额外登录流程确实存在。尚无真实服务端令牌轮换记录，不能声称已证明注销的全部因果。
 
-新工作区不再读取或复制个人认证，也不再启动个人 HOME 的 app-server 来读取配置。旧复制标记、来源未能证明的私有认证文件、个人 HOME 回退，在启动进程和登录窗口前暂停。状态检查、秘书接入、历史 ready、重试及旧会话恢复均不能解除；页面说明保护桌面登录，保留原人物、历史、MCP、bindings 与 imports，不诱导重复登录。
+当前生产构造使用 `authenticationMode: shared-cache`：原 `CODEX_HOME` 由原生 Codex 读取和维护认证，保留原凭据存储方式、模型及提供方；AO 不读取、复制或覆盖个人认证。`sqlite_home` 保留原 AO 状态索引，旧私有认证不使用、不删除。AO 内所有 facade 按原环境、程序与状态目录合并一个后台 owner；按 thread 路由确认，成员关闭只停止自己的在途轮次并释放自己的引用。最后一个引用释放才关闭 owner。各人物使用独立确定性 MCP 名称，禁用继承的个人 MCP，避免旧 URL/env 混入新身份；仅进程/线程覆盖，不改个人配置。
 
-这是止损补丁，不代表已完成 Codex 桌面会话复用。后台 CLI 与桌面宿主仍是不同的连接模式；后续需要正式的宿主委托接口或单一认证 owner，不能靠复制凭据、并行刷新、共享文件或仅凭登录命令退出成功来解决。不要运行旧的 `output/validation/check-codex-refresh.cjs`，不要恢复旧复制逻辑。个人认证文件保持原样；回归仅使用隔离假客户端，不能替代后续真实验收。
+原生缓存共享不等于跨进程刷新有锁：已安装二进制的隔离测试确认并发刷新竞争仍可能发生，但共享缓存更新后原生守护重读能恢复；分目录副本无法观察另一目录更新。不能保证真实提供方永远不使登录失效。额外登录仍禁用，来源为另一个 AO 工作副本或身份不匹配仍受保护。preview.12 旧暂停状态仅在当前 client 确认新策略可用时提供明确重验操作，GET 不触发模型或重试。当前尝试的真实冲突不能借历史迁移解除。
 
-依据：[官方串行凭据约束](https://learn.chatgpt.com/docs/auth/ci-cd-auth)、[App Server 认证所有权](https://learn.chatgpt.com/docs/app-server)。
+实际安装版本 `0.163.0-alpha.10.2` 的纯测试缓存验证：4 种刷新/竞争场景；集成验证：两个真实本机 MCP 握手、单 owner、关闭一个成员后另一个可读、重启原 thread ID 可读；0 个人认证读取、0 模型请求。证据在 `output/diagnostics/codex-shared-home-lab-result.json` 和 `output/validation/native-shared-cache-result.json`。这些不等同真实账号模型验收。不要运行已禁用的旧 `output/validation/check-codex-refresh.cjs`，不要恢复凭据复制。依据：[官方缓存共享](https://learn.chatgpt.com/docs/auth)、[状态目录配置](https://learn.chatgpt.com/docs/config-file/config-reference)。
 
 ## 最新续修（0.15.0-preview.6，对话接入帮助）
 
