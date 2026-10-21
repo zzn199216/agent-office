@@ -3,7 +3,8 @@ const fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypt
 const {RoomError,atomicWrite}=require('./util.cjs');
 const MARKER='desktop-lifecycle.json',MUTEX='desktop-lifecycle-mutex.sqlite';
 const UUID=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
-const invalid=()=>new RoomError('软件服务状态记录无法核对，已保留原记录；请查看本机诊断，没有启动或关闭其他服务。',409,'desktop_lifecycle_invalid');
+const invalid=cause=>{const error=new RoomError('软件服务状态记录无法核对，已保留原记录；请查看本机诊断，没有启动或关闭其他服务。',409,'desktop_lifecycle_invalid');if(cause)error.cause=cause;return error;};
+const changing=cause=>{const error=new RoomError('软件服务状态正在更新，请稍后重试；没有启动或关闭其他服务。',409,'desktop_lifecycle_busy');if(cause)error.cause=cause;return error;};
 function rootDirectory(dir,create=false){
   try{
     const absolute=path.resolve(dir);let stat;
@@ -13,16 +14,35 @@ function rootDirectory(dir,create=false){
     return fs.realpathSync.native(absolute);
   }catch(error){if(error instanceof RoomError)throw error;throw invalid();}
 }
-function regular(file,root){
+function regular(file,root,transient=false){
   let stat;try{stat=fs.lstatSync(file);}catch(error){if(error.code==='ENOENT')return null;throw error;}
-  if(!stat.isFile()||stat.isSymbolicLink()||stat.nlink>1||path.dirname(fs.realpathSync.native(file))!==root)throw invalid();
+  if(!stat.isFile()||stat.isSymbolicLink()||stat.nlink>1)throw invalid();
+  let resolved;try{resolved=fs.realpathSync.native(file);}catch(error){
+    // SQLite deletes its sidecars on commit. Disappearance after lstat is normal;
+    // links, other path failures and the persistent mutex still fail closed.
+    if(transient&&error.code==='ENOENT')return null;
+    throw error;
+  }
+  if(path.dirname(resolved)!==root)throw invalid();
   return stat;
 }
 function readIntent(root){
   if(!root)return null;
-  const file=path.join(root,MARKER);let stat;try{stat=regular(file,root);}catch(error){if(error instanceof RoomError)throw error;throw invalid();}if(!stat)return null;
-  if(stat.size>4096)throw invalid();
-  let value;try{value=JSON.parse(fs.readFileSync(file,'utf8'));}catch{throw invalid();}
+  const file=path.join(root,MARKER);let value,observed=false;
+  for(let attempt=0;attempt<3;attempt++){
+    try{
+      const stat=regular(file,root);
+      if(!stat){if(!observed)return null;if(attempt<2)continue;throw changing();}
+      observed=true;if(stat.size>4096)throw invalid();
+      value=JSON.parse(fs.readFileSync(file,'utf8'));break;
+    }catch(error){
+      // An atomic replacement may race path resolution/read. Reread the new
+      // marker; once observed, disappearance must never enable legacy access.
+      if(error.code==='ENOENT'){observed=true;if(attempt<2)continue;throw changing(error);}
+      if(error instanceof RoomError)throw error;
+      throw invalid(error);
+    }
+  }
   if(!value||typeof value!=='object'||Array.isArray(value)||value.schema!=='agentoffice.desktop-lifecycle'||value.version!==1||!UUID.test(value.id||'')||!['active','closed'].includes(value.state)||!Number.isFinite(Date.parse(value.updated_at||''))||Object.keys(value).some(key=>!['schema','version','id','state','updated_at','activation_id','control'].includes(key)))throw invalid();
   if(value.state==='active'&&(value.activation_id!==undefined||value.control!==undefined))throw invalid();
   if(value.state==='closed'&&(!UUID.test(value.activation_id||'')||!Object.hasOwn(value,'control')))throw invalid();
@@ -37,19 +57,20 @@ function validateControl(value,strict=false){
   return {pid:value.pid,owner_id:value.owner_id,instance_id:value.instance_id,url:address.origin};
 }
 function writeIntent(root,callback){
-  // Fail before creating a mutex if the existing marker cannot be trusted.
-  readIntent(root);
-  const mutex=path.join(root,MUTEX);for(const suffix of ['','-journal','-wal','-shm'])regular(mutex+suffix,root);
-  const {DatabaseSync}=require('node:sqlite');let db,begun=false;
+  const mutex=path.join(root,MUTEX);let db,begun=false;
   try{
+    // Fail before creating a mutex if the existing marker cannot be trusted.
+    readIntent(root);
+    for(const suffix of ['','-journal','-wal','-shm'])regular(mutex+suffix,root,suffix!=='');
+    const {DatabaseSync}=require('node:sqlite');
     db=new DatabaseSync(mutex);db.exec('PRAGMA busy_timeout=1000; BEGIN IMMEDIATE;');begun=true;
-    for(const suffix of ['','-journal','-wal','-shm'])regular(mutex+suffix,root);
+    for(const suffix of ['','-journal','-wal','-shm'])regular(mutex+suffix,root,suffix!=='');
     const result=callback(readIntent(root));db.exec('COMMIT');begun=false;return result;
   }catch(error){
     if(begun)try{db.exec('ROLLBACK');}catch{}
     if(error instanceof RoomError)throw error;
-    if(/busy|locked/i.test(error.message))throw new RoomError('另一个软件窗口正在更新服务状态，请稍后重试。',409,'desktop_lifecycle_busy');
-    throw new RoomError('无法保存软件服务状态，原办公室记录已保留。请检查本机诊断。',503,'desktop_lifecycle_unavailable');
+    const wrapped=/busy|locked/i.test(error.message)?new RoomError('另一个软件窗口正在更新服务状态，请稍后重试。',409,'desktop_lifecycle_busy'):new RoomError('无法保存软件服务状态，原办公室记录已保留。请检查本机诊断。',503,'desktop_lifecycle_unavailable');
+    wrapped.cause=error;throw wrapped;
   }finally{db?.close();}
 }
 function desktopIntent(dir){return descriptor(readIntent(rootDirectory(dir)));}

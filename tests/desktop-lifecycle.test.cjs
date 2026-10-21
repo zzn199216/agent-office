@@ -66,11 +66,53 @@ test('symbolic or reparse marker paths are rejected without following the target
   try{fs.symlinkSync(target,f.marker,process.platform==='win32'?'junction':'dir');}catch(error){if(['EPERM','EACCES','ENOTSUP'].includes(error.code)){t.skip('Fixture symlink permission unavailable');return;}throw error;}
   for(const operation of [()=>assertBackgroundAllowed(f.dir),()=>activateDesktop(f.dir)])assert.throws(operation,{code:'desktop_lifecycle_invalid'});assert.equal(fs.readFileSync(path.join(target,'preserved'),'utf8'),'keep');
 });
+
+test('a peer deleting a transient SQLite sidecar between lstat and realpath does not fail activation',t=>{
+  const f=setup(t);activateDesktop(f.dir);
+  for(const suffix of ['-journal','-wal','-shm']){
+    const sidecar=path.join(f.dir,'desktop-lifecycle-mutex.sqlite'+suffix),native=fs.realpathSync.native;let removed=false;
+    fs.writeFileSync(sidecar,'');
+    fs.realpathSync.native=function(file,...args){if(file===sidecar&&!removed){removed=true;fs.unlinkSync(sidecar);}return native.call(this,file,...args);};
+    try{assert.equal(activateDesktop(f.dir).state,'active');assert.equal(removed,true);}finally{fs.realpathSync.native=native;}
+  }
+});
+
+test('a marker replaced during path resolution is reread and still blocks background work when closed',t=>{
+  const f=setup(t),active=activateDesktop(f.dir),closed=markDesktopClosed(f.dir,{expectedActivation:active.id}),replacement=path.join(f.dir,'replacement.json'),native=fs.realpathSync.native;
+  fs.writeFileSync(replacement,fs.readFileSync(f.marker));let replaced=false;
+  fs.realpathSync.native=function(file,...args){if(file===f.marker&&!replaced){replaced=true;fs.renameSync(replacement,f.marker);throw Object.assign(new Error('Synthetic rename visibility race'),{code:'ENOENT'});}return native.call(this,file,...args);};
+  try{assert.throws(()=>assertBackgroundAllowed(f.dir),{code:'desktop_application_closed'});assert.equal(replaced,true);assert.deepEqual(desktopIntent(f.dir),closed);}finally{fs.realpathSync.native=native;}
+});
+
+test('a previously observed marker disappearing during a read never enables legacy background access',t=>{
+  const f=setup(t),active=activateDesktop(f.dir);markDesktopClosed(f.dir,{expectedActivation:active.id});const native=fs.realpathSync.native;let removed=false;
+  fs.realpathSync.native=function(file,...args){if(file===f.marker&&!removed){removed=true;fs.unlinkSync(f.marker);}return native.call(this,file,...args);};
+  try{assert.throws(()=>assertBackgroundAllowed(f.dir),error=>['desktop_lifecycle_invalid','desktop_lifecycle_busy'].includes(error.code));assert.equal(removed,true);}finally{fs.realpathSync.native=native;}
+});
+
+test('transient sidecar handling still rejects hardlinks and directories before SQLite can open them',t=>{
+  const f=setup(t),active=activateDesktop(f.dir),bytes=fs.readFileSync(f.marker,'utf8'),outside=path.join(f.root,'preserved');fs.writeFileSync(outside,'preserve external fixture');
+  for(const suffix of ['-journal','-wal','-shm']){
+    const sidecar=path.join(f.dir,'desktop-lifecycle-mutex.sqlite'+suffix);fs.linkSync(outside,sidecar);assert.throws(()=>activateDesktop(f.dir),{code:'desktop_lifecycle_invalid'});fs.unlinkSync(sidecar);
+    fs.mkdirSync(sidecar);assert.throws(()=>activateDesktop(f.dir),{code:'desktop_lifecycle_invalid'});fs.rmdirSync(sidecar);
+    assert.equal(fs.readFileSync(outside,'utf8'),'preserve external fixture');assert.equal(fs.readFileSync(f.marker,'utf8'),bytes);assert.deepEqual(desktopIntent(f.dir),active);
+  }
+});
+
+test('sidecar errors other than disappearance remain typed failures with their original diagnostic cause',t=>{
+  const f=setup(t),active=activateDesktop(f.dir),bytes=fs.readFileSync(f.marker,'utf8'),sidecar=path.join(f.dir,'desktop-lifecycle-mutex.sqlite-journal'),native=fs.realpathSync.native;
+  fs.writeFileSync(sidecar,'');fs.realpathSync.native=function(file,...args){if(file===sidecar)throw Object.assign(new Error('Synthetic denied sidecar resolution'),{code:'EACCES'});return native.call(this,file,...args);};
+  try{assert.throws(()=>activateDesktop(f.dir),error=>error.code==='desktop_lifecycle_unavailable'&&error.cause?.code==='EACCES');assert.equal(fs.readFileSync(f.marker,'utf8'),bytes);assert.deepEqual(desktopIntent(f.dir),active);}finally{fs.realpathSync.native=native;fs.unlinkSync(sidecar);}
+});
+
 function worker(dir,activation,operation){
-  const source=path.resolve(__dirname,'../src/desktop-lifecycle.cjs'),code="const m=require(process.argv[1]);try{const result=process.argv[4]==='activate'?m.activateDesktop(process.argv[2]):m.markDesktopClosed(process.argv[2],{expectedActivation:process.argv[3]});process.stdout.write(JSON.stringify({result}));}catch(error){process.stdout.write(JSON.stringify({error:error.code}));}";
+  const source=path.resolve(__dirname,'../src/desktop-lifecycle.cjs'),code="const m=require(process.argv[1]);function detail(e){return e?{code:e.code,name:e.name,message:e.message,stack:e.stack,cause:e.cause?detail(e.cause):undefined}:undefined;}try{const result=process.argv[4]==='activate'?m.activateDesktop(process.argv[2]):m.markDesktopClosed(process.argv[2],{expectedActivation:process.argv[3]});process.stdout.write(JSON.stringify({result}));}catch(error){process.stdout.write(JSON.stringify({error:error.code,detail:detail(error)}));}";
   return new Promise((resolve,reject)=>{const child=spawn(process.execPath,['-e',code,source,dir,activation,operation],{windowsHide:true,stdio:['ignore','pipe','pipe']});let out='',err='';const timer=setTimeout(()=>{child.kill();reject(Error('Owned lifecycle worker timed out'));},10000);child.stdout.on('data',part=>out+=part);child.stderr.on('data',part=>err+=part);child.once('error',error=>{clearTimeout(timer);reject(error);});child.once('exit',status=>{clearTimeout(timer);try{assert.equal(status,0,err);resolve(JSON.parse(out));}catch(error){reject(error);}});});
 }
 test('cross-process activation and stale close serialize without overwriting a newly opened window',async t=>{
-  const f=setup(t),initial=activateDesktop(f.dir),[opened,closed]=await Promise.all([worker(f.dir,initial.id,'activate'),worker(f.dir,initial.id,'close')]);
-  assert.equal(opened.result.state,'active');assert.ok(closed.result?.state==='closed'||closed.error==='desktop_service_changed');assert.deepEqual(desktopIntent(f.dir),opened.result);assert.deepEqual(assertBackgroundAllowed(f.dir),opened.result);
+  const f=setup(t);
+  for(let round=0;round<6;round++){
+    const initial=activateDesktop(f.dir),[opened,closed]=await Promise.all([worker(f.dir,initial.id,'activate'),worker(f.dir,initial.id,'close')]);
+    const diagnostic=JSON.stringify({round,opened,closed});assert.equal(opened.result?.state,'active',diagnostic);assert.ok(closed.result?.state==='closed'||closed.error==='desktop_service_changed',diagnostic);assert.deepEqual(desktopIntent(f.dir),opened.result);assert.deepEqual(assertBackgroundAllowed(f.dir),opened.result);
+  }
 });
