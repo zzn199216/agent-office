@@ -30,15 +30,15 @@ class ChatManager {
   }
   deliveryCapability(value){
     const member=typeof value==='string'?this.store.member(value):value,desktop=this.service.desktop,provider=member.config.launch_provider||(member.adapter==='grok-bridge'?'grok-bot':member.adapter);
-    const nativeConfigured=desktop?.configured(member.id)===true,nativeSupported=desktop?.nativeCapability(provider).available===true,nativeUsable=desktop?.canWake(member.id)===true;
+    const manual=member.config.desktop_delivery_mode==='manual_mcp',nativeConfigured=desktop?.configured(member.id)===true,nativeSupported=desktop?.nativeCapability(provider).available===true,nativeUsable=!manual&&desktop?.canWake(member.id)===true;
     const managed=this.adapters.get(member.adapter)?.capabilities.includes('automatic-wakeup')===true;
     let notificationConfigured=false,notificationUsable=null;
     try{if(member.config.webhook_enabled){const status=this.memberVault(member.id).status();notificationConfigured=status.configured===true;notificationUsable=status.usable===true?true:status.usable===false?false:null;}}catch{notificationUsable=false;}
     const credentials=this.service.resume?.credentials(member.id)||[],revoked=credentials.length>0&&credentials.every(row=>row.status==='revoked');
     const pendingNative=this.nativeDeliveryPending(member.id)||nativeConfigured&&!nativeSupported&&!!this.store.db.prepare("SELECT 1 FROM chat_messages WHERE to_member_id=? AND status='processing' LIMIT 1").get(member.id);
     const seated=this.store.rooms().some(room=>this.store.joined(room.id,member.id));
-    const notificationEligible=notificationConfigured&&!!member.verified_at&&member.status==='ready'&&seated&&!revoked&&!pendingNative,canNotify=notificationEligible&&notificationUsable===true;
-    const method=nativeConfigured&&(nativeSupported||nativeUsable)?'native_desktop':managed?'managed_native':notificationConfigured?'configured_notification':'manual';
+    const notificationEligible=!manual&&notificationConfigured&&!!member.verified_at&&member.status==='ready'&&seated&&!revoked&&!pendingNative,canNotify=notificationEligible&&notificationUsable===true;
+    const method=manual?'manual':nativeConfigured&&(nativeSupported||nativeUsable)?'native_desktop':managed?'managed_native':notificationConfigured?'configured_notification':'manual';
     return {connection_method:method,native_usable:nativeUsable,native_supported:nativeSupported,native_configured:nativeConfigured,
       notification_configured:notificationConfigured,notification_usable:notificationUsable,notification_eligible:notificationEligible,can_notify:canNotify,can_wake:managed||nativeUsable,
       ...(pendingNative?{routing_blocked:'native_outcome_uncertain'}:revoked?{routing_blocked:'resume_revoked'}:{})};

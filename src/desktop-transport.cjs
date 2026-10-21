@@ -18,7 +18,11 @@ function targetMatches(target,provider){
 }
 async function discoverDesktop(endpoint,provider,{fetchImpl=fetch,timeoutMs=3000}={}){
   const url=localEndpoint(endpoint);
-  const response=await fetchImpl(new URL('/json/list',url),{redirect:'error',signal:AbortSignal.timeout(timeoutMs)});
+  let response;
+  try{response=await fetchImpl(new URL('/json/list',url),{redirect:'error',signal:AbortSignal.timeout(timeoutMs)});}catch(cause){
+    const client={'qwen-desktop':'Qwen',doubao:'豆包','grok-bot':'Grok Bot'}[provider]||'客户端';
+    const error=new RoomError(`未能连接 ${client} 的本机接口。请在接入窗口点击“开启客户端连接”；若客户端已在运行，请先从菜单或托盘完整退出后再开启。原聊天和 MCP 配置保留。`,503,'desktop_bridge_unavailable');error.cause=cause;throw error;
+  }
   if(!response.ok)throw new RoomError('桌面对话连接尚未开启。',503,'desktop_bridge_unavailable');
   const targets=await response.json();
   if(!Array.isArray(targets)||targets.length>200)throw new RoomError('桌面对话列表无效。',502,'desktop_target_invalid');

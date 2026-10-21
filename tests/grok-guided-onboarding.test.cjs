@@ -69,7 +69,7 @@ test('rehomed original Grok entry verifies in a new room without rewriting card 
   v.service.entry.accept(card);const other=v.service.chat.addRoom({title:'New room',project_id:v.project.id});v.service.chat.join(other.id,member.id);v.service.chat.leave(v.room.id,member.id);
   assert.equal(v.service.resume.credential(card.credential_id).room_id,other.id);assert.equal(v.service.onboarding.credentialState(other.id,member),'active');
   v.service.onboarding.start({provider:'grok-bot',room_id:other.id});await Promise.all([...v.service.onboarding.jobs.values()]);const current=v.service.onboarding.state({room_id:other.id,provider:'grok-bot'});
-  assert.equal(current.member_id,member.id);assert.equal(current.stage,'ready_mailbox');assert.equal(current.can_wake,false);assert.equal(v.credentials().length,1);assert.deepEqual(fs.readFileSync(file),bytes);assert.equal(v.service.entry.describe(member.id,other.id).file,file);
+  assert.equal(current.member_id,member.id);assert.equal(current.stage,'awaiting_bridge_handshake');assert.equal(current.ready_for_office,false);assert.ok(current.next_actions.some(action=>action.operation==='copy_handshake_prompt'));v.service.entry.accept(card);assert.equal(v.service.onboarding.state({run_id:current.id}).stage,'ready_mailbox');assert.equal(current.can_wake,false);assert.equal(v.credentials().length,1);assert.deepEqual(fs.readFileSync(file),bytes);assert.equal(v.service.entry.describe(member.id,other.id).file,file);
   const guide=v.service.chat.setup(member.id,other.id).client;assert.equal(guide.handshake_verified,true);assert.match(guide.copy,/升级沿用/);assert.equal(v.calls.fetch+v.calls.desktop,0);
 });
 test('adding the same Grok to another joined room keeps its active first connection without issuing another credential',async t=>{
@@ -78,7 +78,7 @@ test('adding the same Grok to another joined room keeps its active first connect
   const before=v.credentials(),guide=v.service.chat.setup(member.id,other.id).client;
   assert.equal(guide.handshake_verified,true);assert.equal(guide.needs_prepare,false);assert.ok(guide.copy.includes(description.file));assert.equal(v.service.onboarding.credentialState(other.id,member),'active');
   v.service.onboarding.start({provider:'grok-bot',room_id:other.id});await Promise.all([...v.service.onboarding.jobs.values()]);const current=v.service.onboarding.state({room_id:other.id,provider:'grok-bot'});
-  assert.equal(current.member_id,member.id);assert.equal(current.stage,'ready_mailbox');assert.deepEqual(v.credentials(),before);assert.deepEqual(fs.readFileSync(description.file),bytes);
+  assert.equal(current.member_id,member.id);assert.equal(current.stage,'awaiting_bridge_handshake');assert.equal(current.ready_for_office,false);assert.deepEqual(v.credentials(),before);v.service.entry.accept(JSON.parse(bytes));assert.equal(v.service.onboarding.state({run_id:current.id}).ready_for_office,true);assert.deepEqual(fs.readFileSync(description.file),bytes);
 });
 test('Grok old entry CLI inbox spans current joined rooms and explicit room selection remains membership guarded',async t=>{
   const v=await setup(t),member=v.rawMember();v.service.chat.prepareGrokHandoff(member.id,v.room.id);const entry=v.service.entry.describePrimary(member.id,v.room.id),bytes=fs.readFileSync(entry.file);

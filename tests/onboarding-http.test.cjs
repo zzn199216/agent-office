@@ -34,7 +34,7 @@ async function setup(t,options={}){
     chat:{clientFactory(member){return new NativeProtocolFixture(member,service,options,clients);}},
     launch:{discover:()=>{scans++;return {candidates};},installer:async input=>{installations.push(input);return {status:'installed',installed:true,connected:false,needs_reload:true};}},
     onboarding:{replyVerification:false,runtimeInstaller:async input=>{runtimeCalls.push(input);return {status:'needs_login',installed:true};}},
-    onboardingActions:{env:{USERPROFILE:files.root,HOME:files.root,CLAUDE_CONFIG_DIR:path.join(files.root,'.claude')},launcher:async request=>{terminals.push(request);return {pid:process.pid,fixture:true};}}});
+    onboardingActions:{env:{USERPROFILE:files.root,HOME:files.root,CLAUDE_CONFIG_DIR:path.join(files.root,'.claude')},processIdentity:async()=>({identity:'fixture-login-birth'}),launcher:async request=>{terminals.push(request);return {pid:process.pid,nonce:request.nonce,process_identity:'fixture-login-birth',phase:'ready',exit_code:null};}}});
   const project=service.addProject({name:'One-click HTTP fixture',path:files.project}),room=service.chat.addRoom({title:'HTTP onboarding fixture',project_id:project.id});
   const token=id(),server=createServer(service,{port:0,token}),port=await server.listen(),base=`http://127.0.0.1:${port}`;
   t.after(async()=>{await server.close();await service.close();const absolute=path.resolve(files.root);assert.equal(path.dirname(absolute),path.resolve(os.tmpdir()));assert.match(path.basename(absolute),/^agentroom-test-/);fs.rmSync(absolute,{recursive:true,force:true});});
@@ -93,8 +93,8 @@ test('setup MCP connect requires explicit user setup and rejects bound member ca
   const start=await toolCall('agentroom_connect',input,api,{env:{AGENTROOM_SETUP_MODE:'1'}});assert.equal(calls,1);assert.equal((await v.finish(start)).stage,'ready_automatic');assert.equal(v.clients.length,1);
 });
 test('HTTP desktop onboarding reports import and mailbox readiness without claiming a background model',async t=>{
-  const v=await setup(t),start=await v.api('/api/onboarding/start',{provider:'qwen-desktop',room_id:v.room.id,install_client:true});
-  const state=await v.finish(start);assert.equal(state.stage,'awaiting_native_desktop');assert.equal(state.can_wake,false);assert.equal(state.local_verified,false);assert.equal(v.clients.length,0);
+  const v=await setup(t),start=await v.api('/api/onboarding/start',{provider:'qwen-desktop',room_id:v.room.id,install_client:true,connection_method:'manual_mcp'});
+  const state=await v.finish(start);assert.equal(state.stage,'awaiting_import');assert.equal(state.can_wake,false);assert.equal(state.local_verified,false);assert.equal(v.clients.length,0);
   const config=await v.api('/api/launch/client-config',{session_id:state.launch_session_id,provider:'qwen-desktop'}),url=config.config.mcpServers.agentroom.url;
   const parts=new URL(url).pathname.split('/'),card=v.service.resume.credential(parts[2]),raw=fs.readFileSync(path.join(v.data,'entries',`${card.member_id}-${card.room_id}.json`),'utf8');
   assert.equal(JSON.stringify(state).includes(parts[3]),false);assert.equal(JSON.stringify(state).includes('/mcp/'),false);

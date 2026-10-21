@@ -14,7 +14,7 @@ function fixture(){
     document:{body:{append:link=>{link.appended=true;}},createElement:tag=>{assert.equal(tag,'a');const link={click(){this.clicked=true;},remove(){this.removed=true;}};calls.anchors.push(link);return link;}}
   });
   vm.runInContext(section('const escape =','const time =')+section('function renderConnectionAssists(', 'function renderTyping('),context);
-  const assist=values=>({id:'assist',message_id:message.id,room_id:'room',member_id:'assistant',target_member_id:'target',provider:'doubao-desktop',name:'豆包',status:'needs_action',action_kind:values?.status==='ready'?'ready':values?.status==='running'?'wait':'manual_handoff',can_wake:false,summary:'需要本人窗口完成一步',copy_sentence:'请读取这台电脑上的接入文档 C:\\AO\\connect.md，按说明完成连接。',document_path:'C:\\AO\\connect.md',...values});
+  const assist=values=>({id:'assist',message_id:message.id,room_id:'room',member_id:'assistant',target_member_id:'target',provider:'doubao-desktop',name:'豆包',status:'needs_action',ready_for_office:values?.status==='ready',action_kind:values?.status==='ready'?'ready':values?.status==='running'?'wait':'manual_handoff',can_wake:false,summary:'需要本人窗口完成一步',copy_sentence:'请读取这台电脑上的接入文档 C:\\AO\\connect.md，按说明完成连接。',document_path:'C:\\AO\\connect.md',...values});
   return {context,message,members,calls,assist,render:()=>context.renderConnectionAssists(message),action:dataset=>context.connectionAssistAction({dataset})};
 }
 test('connection cards distinguish verified automatic delivery, manual inbox and an unfinished connection',()=>{
@@ -29,6 +29,9 @@ test('manual fallback escapes every display field and attributes the dialogue to
   assert.match(html,/秘书 &lt;script&gt;/);assert.match(html,/豆包 &lt;img src=x&gt;/);assert.match(html,/需要 &lt;approval&gt;/);assert.match(html,/failed &lt;unsafe&gt;/);assert.match(html,/A&amp;B&lt;connect&gt;\.md/);assert.match(html,/&quot;C:/);assert.match(html,/data-assist-copy="assist\/&quot;one"/);assert.doesNotMatch(html,/<script>|<img src=x>|<approval>|<unsafe>|<connect>/);
   assert.equal(f.calls.avatars[0][0],'秘书 <script>');assert.equal(f.calls.avatars[0][1],'codex');assert.equal(f.calls.avatars[0][3],'assistant');
   assert.equal((html.match(/data-assist-copy=/g)||[]).length,1);assert.equal((html.match(/data-assist-document=/g)||[]).length,1);assert.equal((html.match(/data-assist-check=/g)||[]).length,1);
+});
+test('historical ready assist metadata cannot announce connection before current attempt acceptance',()=>{
+  const f=fixture();for(const value of [false,undefined]){f.context.history.connection_assists=[f.assist({status:'ready',can_wake:true,ready_for_office:value})];assert.doesNotMatch(f.render(),/已自动接通|本人入口已接通|已加入办公室，沿用已有连接/);}
 });
 test('real Grok metadata offers the selected person guide and keeps errors and local paths inside closed diagnostics',async()=>{
   const f=fixture(),opened=[];Object.assign(f.members[1],{name:'指定的 Grok Bot',adapter:'grok-bridge',provider:'grok-bot'});f.context.showMemberSetup=async id=>opened.push(id);

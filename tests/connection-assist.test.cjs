@@ -29,6 +29,9 @@ function setup(t,options={}){
     onboarding:{desktopConnector:options.manualOnly?null:async input=>{calls.desktop.push(input);if(options.desktopGate)await options.desktopGate;throw Error('fixture 本机接口不可用 https://localhost/mcp/private-token token=fixture-private-token');}},
     connectionAssist:{contextWaitMs:options.contextWaitMs??100}});
   service._localUrl='http://127.0.0.1:47831';
+  // These document fixtures explicitly select the optional manual connection;
+  // absence of a native connector no longer silently changes delivery mode.
+  if(options.manualOnly){const start=service.onboarding.start.bind(service.onboarding);service.onboarding.start=input=>start({...input,connection_method:'manual_mcp'});}
   const project=service.addProject({name:'assist fixture',path:files.project}),room=service.chat.addRoom({project_id:project.id,title:'办公室'}),other=service.chat.addRoom({project_id:project.id,title:'另一间'}),recipient=service.chat.addMember({name:'接入助手',adapter:'mailbox'});
   service.chat.join(room.id,recipient.id);service.chat.store.updateMember(recipient.id,{status:'ready',verified_at:now()});
   const manager=service.connectionAssist||new ConnectionAssist(service,{contextWaitMs:options.contextWaitMs??100});
@@ -38,6 +41,38 @@ function setup(t,options={}){
   return {...files,service,project,room,other,recipient,manager,calls,message,finish};
 }
 function counts(v){const db=v.service.store.db;return {members:db.prepare('SELECT count(*) n FROM chat_members').get().n,credentials:db.prepare('SELECT count(*) n FROM chat_resume_credentials').get().n,runs:db.prepare('SELECT count(*) n FROM onboarding_runs').get().n,assists:db.prepare('SELECT count(*) n FROM connection_assists').get().n};}
+function cloneRun(v,runId,fields={}){const row={...v.service.onboarding.row(runId),id:id(),...fields},keys=Object.keys(row);v.service.store.db.prepare(`INSERT INTO onboarding_runs(${keys.join(',')}) VALUES(${keys.map(key=>':'+key).join(',')})`).run(row);return row;}
+
+test('an original auth failure card follows a verified explicit retry for the same person without changing its durable source',async t=>{
+  const v=setup(t);let signedIn=false;v.service.chat.options.clientFactory=member=>{const client=new HandshakeFixture(member,v.service,v.calls.native),run=client.run.bind(client);client.run=input=>signedIn?run(input):Promise.reject(Object.assign(Error('后台 Codex 尚未登录。'),{code:'codex_login_required'}));return client;};
+  const message=v.message('连接 Codex');v.manager.begin(message);const [original]=await v.finish();assert.equal(original.stage,'awaiting_auth');signedIn=true;
+  const retry=v.service.onboarding.retry({run_id:original.run_id});assert.notEqual(retry.id,original.run_id);await Promise.all([...v.service.onboarding.jobs.values()]);
+  const deadline=Date.now()+3000;let verified;do{v.service.onboarding.advanceVerifications();verified=v.service.onboarding.state({run_id:retry.id});if(verified.ready_for_office)break;await sleep(10);}while(Date.now()<deadline);assert.equal(verified.ready_for_office,true);assert.equal(verified.member_id,original.target_member_id);
+  const before=counts(v),revision=v.service.revision,card=v.manager.snapshotForMessage(message.id)[0];assert.equal(card.run_id,retry.id);assert.equal(card.ready_for_office,true);assert.equal(card.action_kind,'ready');assert.equal(card.target_member_id,original.target_member_id);assert.equal(v.manager.row(card.id).run_id,original.run_id);
+  assert.match(await v.manager.prepareContext(message.id),/"connection_ready":true/);assert.deepEqual(counts(v),before);assert.equal(v.service.revision,revision);
+});
+
+test('successor cards follow the latest exact identity attempt and reject newer other-room provider or same-name people',async t=>{
+  const v=setup(t),message=v.message('连接 Codex');v.manager.begin(message);const [original]=await v.finish(),anchor=v.service.onboarding.row(original.run_id),memberId=original.target_member_id;
+  const other=v.service.chat.addMember({name:v.service.chat.store.member(memberId).name,adapter:'codex'});v.service.chat.join(v.room.id,other.id);v.service.chat.join(v.other.id,memberId);
+  const later=offset=>new Date(Date.parse(anchor.created)+offset).toISOString(),states=new Map(),state=(run,member,status='ready')=>({id:run.id,run_id:run.id,room_id:run.room_id,provider:run.provider,member_id:member,status,stage:status==='ready'?'ready_automatic':'awaiting_auth',ready_for_office:status==='ready',local_verified:status==='ready',can_wake:status==='ready',next_actions:[]});
+  const valid=cloneRun(v,anchor.id,{target_member_id:memberId,created:later(1000),status:'needs_action',stage:'awaiting_auth'});states.set(valid.id,state(valid,memberId,'needs_action'));
+  for(const fields of [{room_id:v.other.id,target_member_id:memberId},{provider:'claude-code',target_member_id:memberId},{target_member_id:other.id},{target_member_id:null}]){const foreign=cloneRun(v,anchor.id,{...fields,created:later(2000)});states.set(foreign.id,state(foreign,fields.target_member_id===null?other.id:fields.target_member_id));}
+  const old=cloneRun(v,anchor.id,{target_member_id:memberId,created:new Date(Date.parse(anchor.created)-1000).toISOString()});states.set(old.id,state(old,memberId));
+  const read=v.service.onboarding.state.bind(v.service.onboarding);v.service.onboarding.state=input=>states.get(input.run_id)||read(input);
+  const before=counts(v),revision=v.service.revision,card=v.manager.snapshotForMessage(message.id)[0];assert.equal(card.run_id,valid.id);assert.equal(card.target_member_id,memberId);assert.equal(card.ready_for_office,false);assert.equal(card.recovery_action.run_id,valid.id);assert.deepEqual(counts(v),before);assert.equal(v.service.revision,revision);
+});
+
+test('a revoked no-run card follows only a later explicit reauthorization for its exact original member',async t=>{
+  const v=setup(t),first=v.message('连接 Codex');v.manager.begin(first);const [connected]=await v.finish(),memberId=connected.target_member_id;v.service.entry.issue(memberId,v.room.id);v.service.entry.revoke(memberId,v.room.id);
+  assert.equal(require('../src/connection-target.cjs').resolveConnectionTarget(v.service,{provider:'codex',room_id:v.room.id}).blocked,true,'the isolated target must really be revoked');
+  const message=v.message('连接 Codex');v.manager.begin(message);await v.finish();const [original]=v.manager.snapshotForMessage(message.id);assert.equal(original.run_id,null);assert.equal(original.target_member_id,memberId);
+  const anchor=v.service.onboarding.row(connected.run_id),created=new Date(Date.parse(original.created)+1000).toISOString(),states=new Map(),read=v.service.onboarding.state.bind(v.service.onboarding);
+  const add=fields=>{const run=cloneRun(v,anchor.id,{target_member_id:memberId,created,...fields});states.set(run.id,{id:run.id,run_id:run.id,room_id:run.room_id,provider:run.provider,member_id:run.target_member_id,status:'ready',stage:'ready_automatic',ready_for_office:true,local_verified:true,can_wake:true,next_actions:[]});return run;};
+  const unrelated=add({reauthorize:0});v.service.onboarding.state=input=>states.get(input.run_id)||read(input);assert.equal(v.manager.snapshotForMessage(message.id)[0].run_id,null);
+  add({reauthorize:1,created:new Date(Date.parse(original.created)-1000).toISOString()});const other=v.service.chat.addMember({name:'另一个 Codex',adapter:'codex'});v.service.chat.join(v.room.id,other.id);add({reauthorize:1,target_member_id:other.id});assert.equal(v.manager.snapshotForMessage(message.id)[0].run_id,null);
+  const recovered=add({reauthorize:1}),before=counts(v),revision=v.service.revision,card=v.manager.snapshotForMessage(message.id)[0];assert.notEqual(card.run_id,unrelated.id);assert.equal(card.run_id,recovered.id);assert.equal(card.target_member_id,memberId);assert.equal(card.ready_for_office,true);assert.equal(v.manager.row(card.id).run_id,null);assert.deepEqual(counts(v),before);assert.equal(v.service.revision,revision);
+});
 
 test('parser accepts named imperative requests and keeps CLI identities separate',()=>{
   assert.deepEqual(parseConnectionProviders('把grok bot拉进群'),['grok-bot']);assert.deepEqual(parseConnectionProviders('那拉个豆包进来'),['doubao']);
@@ -133,6 +168,22 @@ test('duplicate posts and recreated manager preserve run, identity and credentia
   const v=setup(t),message=v.message('连接豆包');v.manager.begin(message);const [first]=await v.finish(),before=counts(v),scans=v.calls.scans,bytes=fs.readFileSync(v.service.entry.describe(first.target_member_id,v.room.id).file);
   v.manager.begin(message);await v.finish();const restored=new ConnectionAssist(v.service,{contextWaitMs:10});assert.equal(restored.begin(message)[0].id,first.id);assert.equal(restored.snapshotForMessage(message.id)[0].run_id,first.run_id);await restored.close();
   assert.deepEqual(counts(v),before);assert.equal(v.calls.scans,scans);assert.deepEqual(fs.readFileSync(v.service.entry.describe(first.target_member_id,v.room.id).file),bytes);
+});
+
+test('secretary never calls a historical ready state connected without current attempt acceptance',async t=>{
+  const v=setup(t),message=v.message('连接豆包');v.manager.begin(message);const [initial]=await v.finish();
+  const original=v.service.onboarding.state.bind(v.service.onboarding),before=counts(v);
+  v.service.onboarding.state=input=>input.run_id===initial.run_id?{id:initial.run_id,room_id:v.room.id,provider:'doubao',member_id:initial.target_member_id,status:'ready',stage:'ready_automatic',local_verified:true,can_wake:true,ready_for_office:false,reused_connection:true,next_actions:[{operation:'native_desktop_connect'}]}:original(input);
+  const state=v.manager.snapshotForMessage(message.id)[0];
+  assert.equal(state.status,'needs_action');assert.equal(state.ready_for_office,false);assert.equal(state.local_verified,false);assert.equal(state.can_wake,false);assert.notEqual(state.action_kind,'ready');assert.doesNotMatch(state.summary,/已接通|已加入办公室/);
+  const context=await v.manager.prepareContext(message.id);assert.match(context,/"connection_ready":false/);assert.match(context,/"automatic_ready":false/);assert.deepEqual(counts(v),before);
+});
+
+test('failed Doubao native contact remains an actionable failure after the old MCP card is accepted',async t=>{
+  const v=setup(t),message=v.message('连接豆包');v.manager.begin(message);const [initial]=await v.finish();
+  const card=JSON.parse(fs.readFileSync(v.service.entry.describe(initial.target_member_id,v.room.id).file,'utf8'));v.service.entry.accept(card);
+  const state=v.manager.snapshotForMessage(message.id)[0];
+  assert.equal(state.ready_for_office,false);assert.equal(state.local_verified,false);assert.equal(state.can_wake,false);assert.notEqual(state.status,'ready');assert.equal(state.action_kind,'native_connect');assert.equal(state.document_path,null);assert.match(await v.manager.prepareContext(message.id),/"connection_ready":false/);
 });
 test('revoked target credential remains revoked and fallback cannot quietly renew it',async t=>{
   const v=setup(t);let release;const gate=new Promise(resolve=>release=resolve);const oldConnector=v.service.onboarding.options.desktopConnector;v.service.onboarding.options.desktopConnector=async input=>{await gate;return oldConnector(input);};

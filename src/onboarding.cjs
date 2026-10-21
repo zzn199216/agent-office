@@ -36,7 +36,7 @@ class OnboardingManager{
     if(!this.db.prepare('PRAGMA table_info(onboarding_runs)').all().some(column=>column.name==='goal'))this.db.exec("ALTER TABLE onboarding_runs ADD COLUMN goal TEXT NOT NULL DEFAULT ''");
     if(!this.db.prepare('PRAGMA table_info(onboarding_runs)').all().some(column=>column.name==='verify_reply'))this.db.exec('ALTER TABLE onboarding_runs ADD COLUMN verify_reply INTEGER NOT NULL DEFAULT 0');
     if(!this.db.prepare('PRAGMA table_info(onboarding_runs)').all().some(column=>column.name==='direct_member_id'))this.db.exec('ALTER TABLE onboarding_runs ADD COLUMN direct_member_id TEXT');
-    for(const [name,type]of [['target_member_id','TEXT'],['connection_reused','INTEGER NOT NULL DEFAULT 0'],['reauthorize','INTEGER NOT NULL DEFAULT 0'],['selection_reason','TEXT']])if(!this.db.prepare('PRAGMA table_info(onboarding_runs)').all().some(column=>column.name===name))this.db.exec(`ALTER TABLE onboarding_runs ADD COLUMN ${name} ${type}`);
+    for(const [name,type]of [['target_member_id','TEXT'],['connection_reused','INTEGER NOT NULL DEFAULT 0'],['reauthorize','INTEGER NOT NULL DEFAULT 0'],['selection_reason','TEXT'],['connection_method','TEXT'],['started_at','TEXT']])if(!this.db.prepare('PRAGMA table_info(onboarding_runs)').all().some(column=>column.name===name))this.db.exec(`ALTER TABLE onboarding_runs ADD COLUMN ${name} ${type}`);
     this.db.prepare("UPDATE onboarding_runs SET status='interrupted',stage='interrupted',error='接入期间本机处理程序结束。请点击重试；不会重放业务问题。',updated=? WHERE status='running' AND stage<>'verifying_reply'").run(now());
     this.verification=options.replyVerification===false?null:new (require('./onboarding-verification.cjs').OnboardingVerification)(service,options.verification||{});
     this.verificationPulse=()=>this.advanceVerifications();this.service.on?.('change',this.verificationPulse);
@@ -49,7 +49,52 @@ class OnboardingManager{
     const mode=input.mode|| (BRIDGE.has(requested)?'bridge':DESKTOP.has(requested)?'desktop':'managed');
     if(!['managed','desktop','bridge'].includes(mode)||mode==='bridge'&&!BRIDGE.has(requested)||BRIDGE.has(requested)&&mode!=='bridge')throw new RoomError('接入模式无效。',400,'onboarding_mode_invalid');
     if(mode==='desktop'&&MANAGED.has(requested))throw new RoomError('命令行 agent 不能作为另一个桌面会话接入。',400,'onboarding_mode_invalid');
-    return {requested_provider:requested,provider:requested,mode};
+    const method=input.connection_method;
+    if(method!==undefined&&(!['native_desktop','manual_mcp'].includes(method)||!DESKTOP.has(requested)))throw new RoomError('接入方式无效。',400,'onboarding_method_invalid');
+    if(method==='native_desktop'&&!this.service.desktop?.nativeCapability(requested).available)throw new RoomError('这个客户端尚无已验证的原生接入方式。',409,'desktop_adapter_unverified');
+    return {requested_provider:requested,provider:requested,mode,connection_method:method||this.connectionMethod({provider:requested})};
+  }
+  connectionMethod(row){return row.connection_method||(['qwen-desktop','doubao'].includes(row.provider)?'native_desktop':DESKTOP.has(row.provider)?'manual_mcp':BRIDGE.has(row.provider)?'grok_command_bridge':'managed_native');}
+  setDeliveryMethod(memberId,method){
+    if(!memberId||!this.service.resume||!['native_desktop','manual_mcp'].includes(method))return;
+    let changed=false;
+    this.service.chat.store.transaction(()=>{
+      // Serialize the pending-run check with native dispatch before selecting a
+      // different transport. No credential or native session is replaced.
+      this.db.prepare('UPDATE chat_members SET config=config WHERE id=?').run(memberId);
+      const member=this.service.chat.store.member(memberId);
+      if(method==='manual_mcp'&&(this.service.chat.nativeDeliveryPending(memberId)||this.service.chat.active?.get(memberId)?.desktop||this.service.desktop?.jobs.has(memberId)||this.service.desktop?.connecting.has(memberId)))throw new RoomError('这位同事有正在执行或结果待核对的原生请求。请先核对原请求，不能改走手动信箱重复执行。',409,'desktop_request_uncertain');
+      if(member.config.desktop_delivery_mode!==method){this.service.chat.store.updateMember(memberId,{config:{...member.config,desktop_delivery_mode:method}});changed=true;}
+    });
+    if(method==='manual_mcp')this.service.desktop?.pauseForManual(memberId);
+    if(changed)this.service.changed();
+  }
+  managedBindingNeeded(row,memberId){
+    if(!this.verification||!MANAGED.has(row.provider))return false;
+    const binding=this.service.chat.store.binding(row.room_id,memberId);
+    return !binding.thread_id||binding.binding_state!=='bound'||!this.service.runtime.connectionState(memberId).sessions.some(session=>session.native_session_id===binding.thread_id&&session.protocol.state==='verified');
+  }
+  managedBindingBlocked(memberId){
+    if(this.service.chat.active.has(memberId))return true;
+    const previous=this.verification?.row(memberId);if(!previous)return false;
+    const message=this.db.prepare('SELECT * FROM chat_messages WHERE id=?').get(previous.message_id);
+    return !['verified','failed'].includes(previous.status)||this.verification.dispatchState(previous,message)!=='terminal';
+  }
+  async prepareManagedBinding(row,memberId){
+    if(!this.managedBindingNeeded(row,memberId))return true;
+    if(this.managedBindingBlocked(memberId))return false;
+    this.set(row.id,{status:'running',stage:'connecting',error:null});
+    await this.service.chat.connectNative(this.service.chat.store.member(memberId),this.service.chat.store.room(row.room_id));
+    const work=this.service.chat.connecting.get(`${row.room_id}:${memberId}`);if(work)await work;
+    const member=this.service.chat.store.member(memberId);
+    if(member.status!=='ready'||this.managedBindingNeeded(row,memberId))throw new RoomError(member.error||'本房间的原生连接尚未通过真实握手，已有连接保留。',409,'managed_handshake_required');
+    return true;
+  }
+  resumeManagedBinding(row,memberId){
+    if(this.jobs.has(row.id)||this.managedBindingBlocked(memberId))return;
+    const work=Promise.resolve().then(async()=>{if(await this.prepareManagedBinding(row,memberId))this.set(row.id,{status:'needs_action',stage:'awaiting_connection',error:null});})
+      .catch(error=>this.set(row.id,{status:'needs_action',stage:AUTH.test(error.message)?'awaiting_auth':'error',error:safeText(error.message)}))
+      .finally(()=>{this.jobs.delete(row.id);this.advanceVerifications();});this.jobs.set(row.id,work);
   }
   row(runId){const row=this.db.prepare('SELECT * FROM onboarding_runs WHERE id=?').get(runId);if(!row)throw new RoomError('接入进度不存在。',404,'onboarding_not_found');this.service.chat.store.room(row.room_id);return row;}
   set(runId,fields){
@@ -66,25 +111,29 @@ class OnboardingManager{
     const selection=this.selection(input),goal=input.goal==null||input.goal===''?'':redact(cleanText(input.goal,1200,'协作目标')),room=this.service.launch.chooseRoom(input);
     const target=this.service.chat.store.participants&&this.service.resume?resolveConnectionTarget(this.service,{provider:selection.provider,room_id:room.id,target_member_id:input.target_member_id}):{member_id:null,blocked:false,reused_connection:false};
     if(input.reauthorize===true&&(!input.target_member_id||input.target_member_id!==target.member_id))throw new RoomError('重新授权必须明确指定原人物。',403,'connection_target_required');
-    const previous=this.db.prepare('SELECT * FROM onboarding_runs WHERE room_id=? AND provider=? AND mode=? ORDER BY created DESC,rowid DESC').all(room.id,selection.provider,selection.mode).find(candidate=>{
+    const switchingMethod=!!target.member?.config.desktop_delivery_mode&&target.member.config.desktop_delivery_mode!==selection.connection_method;
+    if(!target.blocked&&!target.fixed_proxy)this.setDeliveryMethod(target.member_id,selection.connection_method);
+    const previous=!switchingMethod&&this.db.prepare('SELECT * FROM onboarding_runs WHERE room_id=? AND provider=? AND mode=? ORDER BY created DESC,rowid DESC').all(room.id,selection.provider,selection.mode).find(candidate=>{
       if(!this.service.resume)return true;
       const memberId=candidate.target_member_id||candidate.direct_member_id||this.connectionSnapshot(candidate).member_id||null;
-      return memberId===(target.member_id||null);
+      return memberId===(target.member_id||null)&&this.connectionMethod(candidate)===selection.connection_method;
     });
     if(previous){
       const snapshot=this.snapshot(previous);
+      if(previous.stage==='awaiting_previous_result'){this.advanceVerifications();return {...this.snapshot(this.row(previous.id)),reused:true};}
       // Reading or repeating the same button cannot silently increase install
       // permission, recreate a native session or replay a model handshake.
       if(['waiting','waiting_result','uncertain'].includes(snapshot.reply_verification?.status)||snapshot.status==='running'||this.jobs.has(previous.id)||snapshot.status==='ready'&&!target.blocked||input.reauthorize===true&&previous.reauthorize&&!target.blocked&&!['error','interrupted'].includes(snapshot.status)||input.reauthorize!==true&&(snapshot.status==='ready'||input.retry!==true&&!['error','interrupted'].includes(snapshot.status)))return {...snapshot,reused:true};
       if(input.retry===true&&snapshot.member_id&&this.connectionSnapshot(previous).stage==='ready_automatic'&&this.verification?.retryFailed(snapshot.member_id,!snapshot.automatic_reply_verified)){
+        this.db.prepare('UPDATE onboarding_runs SET started_at=? WHERE id=?').run(now(),previous.id);
         this.set(previous.id,{status:'needs_action',stage:'awaiting_connection',error:null});this.advanceVerifications();
         return {...this.snapshot(this.row(previous.id)),reused:true};
       }
       if(input.retry===true&&snapshot.member_id)this.verification?.retryFailed(snapshot.member_id);
     }
     const fixedElsewhere=target.fixed_proxy&&target.fixed_proxy.room_id!==room.id;
-    const row={id:id(),room_id:room.id,...selection,status:fixedElsewhere||target.blocked&&input.reauthorize!==true?'needs_action':'running',stage:fixedElsewhere?'fixed_proxy_scope':target.blocked&&input.reauthorize!==true?'awaiting_credential':'preparing',launch_session_id:null,install_client:input.install_client===true?1:0,install_runtime:input.install_runtime===true?1:0,runtime_result:null,error:null,created:now(),updated:now(),goal,verify_reply:this.verification?1:0,target_member_id:target.member_id,connection_reused:target.reused_connection?1:0,reauthorize:input.reauthorize===true?1:0,selection_reason:target.reason||null};
-    this.db.prepare('INSERT INTO onboarding_runs(id,room_id,requested_provider,provider,mode,status,stage,launch_session_id,install_client,install_runtime,runtime_result,error,created,updated,goal,verify_reply,target_member_id,connection_reused,reauthorize,selection_reason) VALUES(:id,:room_id,:requested_provider,:provider,:mode,:status,:stage,:launch_session_id,:install_client,:install_runtime,:runtime_result,:error,:created,:updated,:goal,:verify_reply,:target_member_id,:connection_reused,:reauthorize,:selection_reason)').run(row);
+    const stamp=now(),row={id:id(),room_id:room.id,...selection,status:fixedElsewhere||target.blocked&&input.reauthorize!==true?'needs_action':'running',stage:fixedElsewhere?'fixed_proxy_scope':target.blocked&&input.reauthorize!==true?'awaiting_credential':'preparing',launch_session_id:null,install_client:input.install_client===true?1:0,install_runtime:input.install_runtime===true?1:0,runtime_result:null,error:null,created:stamp,updated:stamp,started_at:stamp,goal,verify_reply:this.verification?1:0,target_member_id:target.member_id,connection_reused:target.reused_connection?1:0,reauthorize:input.reauthorize===true?1:0,selection_reason:target.reason||null};
+    this.db.prepare('INSERT INTO onboarding_runs(id,room_id,requested_provider,provider,mode,status,stage,launch_session_id,install_client,install_runtime,runtime_result,error,created,updated,goal,verify_reply,target_member_id,connection_reused,reauthorize,selection_reason,connection_method,started_at) VALUES(:id,:room_id,:requested_provider,:provider,:mode,:status,:stage,:launch_session_id,:install_client,:install_runtime,:runtime_result,:error,:created,:updated,:goal,:verify_reply,:target_member_id,:connection_reused,:reauthorize,:selection_reason,:connection_method,:started_at)').run(row);
     if(fixedElsewhere){this.service.changed();return this.snapshot(row);}
     if(target.blocked&&!row.reauthorize){this.service.changed();return this.snapshot(row);}
     const existing=this.connectionSnapshot(row);
@@ -110,9 +159,9 @@ class OnboardingManager{
   retry(input={}){
     const row=this.row(input.run_id);
     if(input.provider&&input.provider!==row.provider&&input.provider!==row.requested_provider||input.room_id&&input.room_id!==row.room_id)throw new RoomError('重试不能切换到另一个成员或房间。',403,'onboarding_scope_mismatch');
-    if(row.direct_member_id){this.verification?.retryFailed(row.direct_member_id,!this.service.runtime.connectionState(row.direct_member_id).automatic_reply_verified);return this.verifyMember({member_id:row.direct_member_id,room_id:row.room_id});}
+    if(row.direct_member_id){if(this.verification?.retryFailed(row.direct_member_id,!this.service.runtime.connectionState(row.direct_member_id).automatic_reply_verified))this.db.prepare('UPDATE onboarding_runs SET started_at=? WHERE id=?').run(now(),row.id);return this.verifyMember({member_id:row.direct_member_id,room_id:row.room_id});}
     return this.start({provider:row.requested_provider,mode:row.mode,room_id:row.room_id,goal:row.goal||'',retry:true,
-      target_member_id:row.target_member_id||undefined,
+      target_member_id:row.target_member_id||undefined,connection_method:DESKTOP.has(row.provider)?this.connectionMethod(row):undefined,
       install_client:input.install_client===undefined?!!row.install_client:input.install_client===true,
       install_runtime:input.install_runtime===undefined?!!row.install_runtime:input.install_runtime===true});
   }
@@ -122,33 +171,36 @@ class OnboardingManager{
     this.service.chat.store.requireParticipant(room.id,member.id);
     const desktop=this.service.desktop?.row(member.id);
     if(!desktop||!this.service.desktop.canWake(member.id))throw new RoomError('本人对话尚未接通，保留已有连接。',409,'desktop_not_connected');
-    let row=this.db.prepare('SELECT * FROM onboarding_runs WHERE room_id=? ORDER BY rowid DESC').all(room.id)
+    const latest=this.db.prepare('SELECT * FROM onboarding_runs WHERE room_id=? ORDER BY rowid DESC').all(room.id)
       .find(candidate=>this.connectionSnapshot(candidate).member_id===member.id);
+    let row=latest&&this.connectionMethod(latest)==='native_desktop'?latest:null;
     if(row){
-      this.db.prepare("UPDATE onboarding_runs SET verify_reply=?,status='needs_action',stage='awaiting_connection',error=NULL,updated=? WHERE id=?")
+      this.db.prepare("UPDATE onboarding_runs SET connection_method='native_desktop',verify_reply=?,status='needs_action',stage='awaiting_connection',error=NULL,updated=? WHERE id=?")
         .run(this.verification?1:0,now(),row.id);
     }else{
       const stamp=now();row={id:id(),room_id:room.id,requested_provider:desktop.provider,provider:desktop.provider,
         mode:BRIDGE.has(desktop.provider)?'bridge':'desktop',status:'needs_action',stage:'awaiting_connection',created:stamp,updated:stamp,
-        verify_reply:this.verification?1:0,direct_member_id:member.id};
-      this.db.prepare(`INSERT INTO onboarding_runs(id,room_id,requested_provider,provider,mode,status,stage,created,updated,verify_reply,direct_member_id)
-        VALUES(:id,:room_id,:requested_provider,:provider,:mode,:status,:stage,:created,:updated,:verify_reply,:direct_member_id)`).run(row);
+        verify_reply:this.verification?1:0,direct_member_id:member.id,connection_method:'native_desktop',started_at:stamp};
+      this.db.prepare(`INSERT INTO onboarding_runs(id,room_id,requested_provider,provider,mode,status,stage,created,updated,verify_reply,direct_member_id,connection_method,started_at)
+        VALUES(:id,:room_id,:requested_provider,:provider,:mode,:status,:stage,:created,:updated,:verify_reply,:direct_member_id,:connection_method,:started_at)`).run(row);
     }
     this.advanceVerifications();return this.snapshot(this.row(row.id));
   }
   async run(row){
     if(this.closing||this.service.chat.roomDeleted?.(row.room_id))return;
-    if(row.connection_reused&&row.target_member_id&&!row.reauthorize){
+    if(row.target_member_id&&!row.reauthorize){
       const target=resolveConnectionTarget(this.service,{provider:row.provider,room_id:row.room_id,target_member_id:row.target_member_id});
-      if(!target.blocked&&target.reused_connection){
+      const manualExisting=['manual_mcp','grok_command_bridge'].includes(this.connectionMethod(row))&&target.credential_active;
+      if(!target.blocked&&(target.reused_connection||manualExisting)){
         if(!target.joined)this.service.chat.join(row.room_id,target.member_id);
+        if(!await this.prepareManagedBinding(row,target.member_id)){this.set(row.id,{status:'needs_action',stage:'awaiting_previous_result',error:'正在观察这位同事的原请求，核对结束前不会发起新的握手或验证。'});return;}
         const native=this.service.desktop?.row(target.member_id);
-        if(['qwen-desktop','doubao'].includes(row.provider)&&native?.native_session_id&&!this.service.desktop.canWake(target.member_id)){
+        if(this.connectionMethod(row)==='native_desktop'&&!this.service.desktop.canWake(target.member_id)){
           this.set(row.id,{status:'running',stage:'restoring_native',error:null});
-          try{if(!this.options.desktopConnector)throw new RoomError('已有原生对话暂不可恢复，请查看原连接。',409,'desktop_not_connected');await this.options.desktopConnector({member_id:target.member_id,room_id:row.room_id,provider:row.provider,recovery:true});}
+          try{if(!this.options.desktopConnector)throw new RoomError('已有原生对话暂不可恢复，请查看原连接。',409,'desktop_not_connected');await this.options.desktopConnector({member_id:target.member_id,room_id:row.room_id,provider:row.provider,...native?.native_session_id?{recovery:true}:{}});}
           catch(error){this.set(row.id,{status:'needs_action',stage:'awaiting_native_desktop',error:safeText(error.message)});return;}
         }
-        this.set(row.id,{status:'ready',stage:'existing_connection',error:null});return;
+        this.set(row.id,{status:'needs_action',stage:'awaiting_connection',error:null});return;
       }
     }
     if(row.mode==='managed'&&DESKTOP.has(row.provider)){
@@ -179,7 +231,8 @@ class OnboardingManager{
     this.set(row.id,{launch_session_id:launch.id,stage:'connecting'});
     const work=this.service.launch.jobs.get(launch.id);if(work)await work;
     if(this.closing)return;
-    if(['qwen-desktop','doubao','grok-bot'].includes(row.provider)&&this.options.desktopConnector&&(row.provider!=='grok-bot'||this.service.desktop?.nativeCapability(row.provider).available)){
+    this.setDeliveryMethod(this.connectionSnapshot(this.row(row.id)).member_id,this.connectionMethod(row));
+    if((this.connectionMethod(row)==='native_desktop'||row.provider==='grok-bot'&&this.service.desktop?.nativeCapability(row.provider).available)&&this.options.desktopConnector){
       const prepared=this.snapshot(this.row(row.id));
       if(prepared.member_id){
         try{await this.options.desktopConnector({member_id:prepared.member_id,room_id:row.room_id,provider:row.provider});this.set(row.id,{status:'needs_action',stage:'awaiting_connection',error:null});this.advanceVerifications();return;}
@@ -222,16 +275,18 @@ class OnboardingManager{
     this.advancingVerification=true;
     try{
       this.verification.refresh();
-      const rows=this.db.prepare("SELECT * FROM onboarding_runs WHERE verify_reply=1 AND status NOT IN ('cancelled','error','interrupted') AND stage IN ('awaiting_connection','awaiting_native_desktop','ready_automatic','verifying_reply','verification_pending','verification_failed')").all();
+      const rows=this.db.prepare("SELECT * FROM onboarding_runs WHERE verify_reply=1 AND status NOT IN ('cancelled','error','interrupted') AND stage IN ('awaiting_connection','awaiting_native_desktop','awaiting_previous_result','ready_automatic','verifying_reply','verification_pending','verification_failed') ORDER BY created DESC,rowid DESC").all(),seen=new Set();
       for(const row of rows){
         if(this.service.chat.roomDeleted?.(row.room_id))continue;
         const connection=this.connectionSnapshot(row);
+        if(connection.member_id){if(seen.has(connection.member_id))continue;seen.add(connection.member_id);}
+        if(row.stage==='awaiting_previous_result'&&connection.member_id){this.resumeManagedBinding(row,connection.member_id);continue;}
         if(connection.member_id&&connection.local_verified&&connection.can_wake&&connection.stage==='ready_automatic'){
           if(this.service.chat.store.joined&&!this.service.chat.store.joined(row.room_id,connection.member_id))continue;
           let verification=this.verification.row(connection.member_id);
-          if(!verification||verification.room_id!==row.room_id&&verification.status!=='verified')verification=this.verification.begin(row,this.service.chat.store.member(connection.member_id));
-          else verification=this.verification.view(verification);
-          if(verification?.status==='verified')this.setIfDifferent(row,{status:'ready',stage:'ready_automatic',error:null});
+          if(!this.verification.belongsToRun(verification,row))verification=this.verification.begin(row,this.service.chat.store.member(connection.member_id));
+          else verification=this.verification.view(verification,row);
+          if(verification?.status==='verified'&&verification.current_attempt)this.setIfDifferent(row,{status:'ready',stage:'ready_automatic',error:null});
           else if(verification?.status==='waiting')this.setIfDifferent(row,{status:'running',stage:'verifying_reply',error:null});
           else this.setIfDifferent(row,{status:'needs_action',stage:verification?.status==='failed'?'verification_failed':'verification_pending',error:verification?.error||null});
         }
@@ -241,12 +296,14 @@ class OnboardingManager{
   setIfDifferent(row,fields){if(Object.entries(fields).some(([key,value])=>row[key]!==value))this.set(row.id,fields);}
   snapshot(row){
     const base=this.connectionSnapshot(row);
-    if(base.reused_connection&&base.local_verified){base.ready_for_office=true;return base;}
     if(!row.verify_reply||!this.verification)return base;
-    const verification=base.member_id?this.verification.view(this.verification.row(base.member_id)):null;
-    base.reply_verification=verification;base.ready_for_office=base.status==='ready'&&base.stage==='ready_mailbox';
+    const verification=base.member_id?this.verification.view(this.verification.row(base.member_id),row):null;
+    base.reply_verification=verification;base.ready_for_office=['manual_mcp','grok_command_bridge'].includes(base.connection_method)&&base.status==='ready'&&base.stage==='ready_mailbox';
+    base.automatic_reply_verified=base.automatic_reply_verified===true&&verification?.current_attempt===true&&verification.status==='verified';
+    base.model_reply_verified=base.model_reply_verified===true&&verification?.current_attempt===true&&verification.status==='verified';
+    if(!base.automatic_reply_verified&&base.readiness==='reply_verified')base.readiness=base.protocol_verified?'protocol_verified':'registered_only';
     if(base.stage!=='ready_automatic'||!base.can_wake||!base.local_verified)return base;
-    base.ready_for_office=verification?.status==='verified'&&base.automatic_reply_verified===true;
+    base.ready_for_office=verification?.status==='verified'&&verification.current_attempt===true&&base.automatic_reply_verified===true;
     if(base.ready_for_office){base.detail='已自动核对本人对话的实际回复，可以开始协作。';return base;}
     base.next_actions=[];
     base.status=verification&&verification.status!=='waiting'?'needs_action':'running';
@@ -254,7 +311,7 @@ class OnboardingManager{
     base.error=verification?.error||null;
     base.detail=verification?.error||'连接已建立，正在自动验证本人对话的实际回复；无需去客户端发消息。';
     if(verification?.status==='failed')base.next_actions=[action('verify','重新验证连接',{operation:'retry'})];
-    if(verification?.status==='verified'&&!base.automatic_reply_verified){
+    if(verification?.status==='verified'&&(!verification.current_attempt||!base.automatic_reply_verified)){
       base.error=base.connection_evidence?.last_error?`原生调用当前未通过（${safeText(base.connection_evidence.last_error.code)}）。`:'本人对话正在恢复，等待原连接重新上线。';
       base.detail=`这位同事此前已通过自动回复验证。${base.error}已有连接与原对话保留。`;
       if(base.connection_evidence?.last_error)base.next_actions=[action('verify','重新验证连接',{operation:'retry'})];
@@ -262,6 +319,30 @@ class OnboardingManager{
     return base;
   }
   connectionSnapshot(row){
+    const base=this.rawConnectionSnapshot(row),method=this.connectionMethod(row),started=row.started_at||row.created;
+    Object.assign(base,{connection_method:method,started_at:started});
+    if(method==='managed_native'&&row.stage==='awaiting_previous_result')return {...base,status:'needs_action',stage:'awaiting_previous_result',ready_for_office:false,local_verified:false,error:row.error,detail:'正在观察这位同事的原请求。结果核对结束后继续当前接入，不会重复提交原问题。',next_actions:[action('verify','核对原请求后检查连接',{operation:'retry'})]};
+    if(base.stage==='fixed_proxy_scope'&&base.fixed_proxy?.room_id)base.next_actions=[action('open_fixed_room','查看原房间连接',{operation:'open_fixed_room',room_id:base.fixed_proxy.room_id,target_member_id:base.member_id})];
+    if(!base.member_id||['fixed_proxy_scope','awaiting_credential','requires_explicit_backend_selection'].includes(base.stage)||row.mode==='managed'&&DESKTOP.has(row.provider))return base;
+    if(base.can_wake&&!base.connection_evidence){const evidence=this.service.runtime.memberState(base.member_id).connection_evidence;Object.assign(base,{connection_evidence:evidence,protocol_verified:evidence?.protocol_verified===true,model_reply_verified:evidence?.model_reply_verified===true,automatic_reply_verified:evidence?.automatic_reply_verified===true,readiness:evidence?.verification_level||'unverified'});}
+    if(method==='native_desktop'){
+      const connected=this.service.desktop?.canWake(base.member_id)===true,native=this.service.desktop?.state(base.member_id);
+      if(!connected){
+        Object.assign(base,{local_verified:false,can_wake:false,protocol_verified:false,model_reply_verified:false,runner_ready:false,native_conversation_loaded:false,automatic_reply_verified:false,ready_for_office:false,response_mode:'managed_desktop'});
+        if(!['running','error','interrupted','cancelled'].includes(base.status)||['ready_mailbox','existing_connection','awaiting_native_desktop'].includes(base.stage))Object.assign(base,{status:'needs_action',stage:'awaiting_native_desktop'});
+        base.error=safeText(row.error||native?.error||base.error||'本人原生对话尚未接通，已有连接保留。');
+        base.detail=base.error;base.next_actions=[action('open_native_client','开启客户端连接',{operation:'open_native_client'}),action('verify','连接本人对话',{operation:'native_desktop_connect'}),action('manual','改用手动 MCP',{operation:'manual_mcp',target_member_id:base.member_id})];
+      }
+    }else if(method==='manual_mcp'||method==='grok_command_bridge'){
+      const credentials=this.service.resume?.credentials(base.member_id)||this.db.prepare('SELECT * FROM chat_resume_credentials WHERE member_id=?').all(base.member_id),credential=credentials.find(value=>value.status==='active'&&Date.parse(value.last_seen||'')>=Date.parse(started)),member=this.service.chat.store.member(base.member_id),entryActive=this.credentialState(row.room_id,member)==='active';
+      const verified=!!credential&&entryActive&&!!member.verified_at&&!['disabled','revoked'].includes(member.status)&&this.service.chat.store.joined(row.room_id,member.id);
+      Object.assign(base,{local_verified:verified,can_wake:false,protocol_verified:verified,model_reply_verified:false,runner_ready:false,native_conversation_loaded:false,automatic_reply_verified:false,response_mode:method==='manual_mcp'?'manual_mailbox':'manual_bridge',handshake_verified:verified,ready_for_office:verified});
+      if(verified){Object.assign(base,{status:'ready',stage:'ready_mailbox',error:null});base.next_actions=[];}
+      else if(!['running','error','interrupted','cancelled'].includes(base.status)&&(entryActive||!['awaiting_import','awaiting_reload'].includes(base.stage)))Object.assign(base,{status:'needs_action',stage:method==='manual_mcp'?'awaiting_handshake':'awaiting_bridge_handshake',error:null,detail:'已有配置与凭据保留。请在本人窗口实际调用接入工具，等待本次握手；无需重新导入。',next_actions:[action('self_handshake','复制本人接入说明',{operation:'copy_handshake_prompt'})]});
+    }
+    return base;
+  }
+  rawConnectionSnapshot(row){
     const base={id:row.id,run_id:row.id,room_id:row.room_id,requested_provider:row.requested_provider,provider:row.provider,name:NAMES[row.provider]||row.provider,mode:row.mode,
       status:row.status,stage:row.stage,launch_session_id:row.launch_session_id,ready_for_office:false,install_client:!!row.install_client,install_runtime:!!row.install_runtime,
       created:row.created,updated:row.updated,goal:row.goal||'',error:row.error?safeText(row.error):null,runtime:json(row.runtime_result,null),
@@ -356,7 +437,7 @@ class OnboardingManager{
     }
     if(row.stage==='awaiting_native_desktop'&&member){base.detail='本人对话未接通；检查客户端是否开启本机连接，再点击连接本人对话。';base.next_actions=[action('verify','连接本人对话',{operation:'native_desktop_connect'})];return base;}
     if(row.stage==='awaiting_auth'||member?.error&&AUTH.test(member.error)){
-      base.status='needs_action';base.stage='awaiting_auth';base.error=member?.error||row.error?safeText(member?.error||row.error):null;
+      base.status='needs_action';base.stage='awaiting_auth';base.error=row.error||member?.error?safeText(row.error||member?.error):null;
       if(row.provider==='claude-code'){let config;try{config=require('./claude.cjs').configurationInfo(this.options.env||process.env);}catch{}base.configuration=config?{file:config.file,api_mode:config.api_mode,credential_configured:config.credential_configured}:null;}
       base.next_actions=[DESKTOP.has(row.provider)?action('self_handshake','在本人客户端完成授权和接入',{operation:'copy_handshake_prompt'}):action('login',base.configuration?.api_mode?'配置 Claude API':`登录 ${base.name}`,{operation:'login_client'}),action('verify',base.configuration?.api_mode?'保存后继续接入':'登录后继续接入',{operation:'retry'})];return base;
     }

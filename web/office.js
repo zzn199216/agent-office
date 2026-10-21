@@ -181,6 +181,8 @@
   }
   function participantPresence(member, runtime, online, now) {
     const observed = {...(runtime?.members || runtime?.presence || []).find(item => (item.id || item.member_id) === member.id), ...member.runtime_state};
+    const desktop=member.desktop_connection,nativeUnavailable=desktop&&member.connection_method!=='manual'&&member.connection_method!=='manual_mcp'&&member.response_mode!=='manual_mailbox'&&desktop.configured===true&&desktop.can_wake===false&&(['offline','error','failed','reconnecting'].includes(desktop.state)||!!desktop.error);
+    if(nativeUnavailable)return {status:'offline',label:online?'本人对话未连接 · 查看连接':'服务已关闭',worker:false,lastSeen:member.last_seen||observed.last_seen||null,needsConnection:online};
     const original = member.presence || observed.presence || 'unknown';
     let status = typeof original === 'string' ? original : original.state || original.status || 'unknown';
     const expires = original?.lease_expires || observed.lease_expires;
@@ -395,7 +397,7 @@
       item.root.classList.toggle('ao-selected',selected.has(member.id));
       item.name.textContent=member.name || 'Agent';
       item.secretaryBadge.hidden=!info.secretary;item.root.dataset.secretary=String(info.secretary);
-      item.status.textContent=!info.occupied?`空位 · ${presence.label}${info.waiting&&current.online?' · 有待处理消息':''}`:info.processing?'处理中':info.needsInput?'等待确认':info.waiting&&current.online?'有待处理消息':presence.label;
+      item.status.textContent=presence.needsConnection?presence.label:!info.occupied?`空位 · ${presence.label}${info.waiting&&current.online?' · 有待处理消息':''}`:info.processing?'处理中':info.needsInput?'等待确认':info.waiting&&current.online?'有待处理消息':presence.label;
       const title=`${member.name || 'Agent'} · ${item.status.textContent}${member.adapter?` · ${member.adapter}`:''}`;
       item.character.title=title;item.character.setAttribute('aria-label',`${title}，查看成员`);
       item.label.title=title;item.customize.title=`更换 ${member.name || 'Agent'} 的形象`;item.customize.setAttribute('aria-label',item.customize.title);

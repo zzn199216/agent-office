@@ -9,7 +9,7 @@ function fixture({provider='qwen-desktop',adapter='mcp',evidence={},verifiedAt='
   const $=id=>{if(!elements.has(id)){const classes=new Set;elements.set(id,{innerHTML:'',textContent:'',value:'',dataset:{},open:false,disabled:false,classList:{toggle(name,value){if(value??!classes.has(name))classes.add(name);else classes.delete(name);},add:name=>classes.add(name),remove:name=>classes.delete(name),contains:name=>classes.has(name)},querySelector:()=>null,querySelectorAll:()=>[],cloneNode(){return{innerHTML:this.innerHTML,querySelector:()=>null,querySelectorAll:()=>[]};},showModal(){this.open=true;},close(){this.open=false;}});}return elements.get(id);};
   const member={id:'member/native',name:'本人同事',adapter,provider,verified_at:verifiedAt,runtime_state:{connection_evidence:evidence}};
   const client={kind:'native_desktop',provider,native_state:{configured:false,can_wake:false},connection_evidence:evidence};
-  const context=vm.createContext({$,roomId:'room:one',legacyId:null,selectedSetupMember:member.id,setupData:{member,client},nativeSetupPending:null,nativeSetupFailure:null,lastSetupSignature:'',webConnected:true,grokSetupWatch:null,grokSetupWatchTimer:null,grokSetupWatchSequence:0,grokSetupWatchError:'',
+  const context=vm.createContext({$,roomId:'room:one',projectId:'project',legacyId:null,secretaryNavigation:null,secretaryConnectJob:null,secretaryConnectRoom:null,onboardingJobs:new Map(),onboardingFeedback:new Map(),selectedSetupMember:member.id,setupData:{member,client},nativeSetupPending:null,nativeSetupFailure:null,lastSetupSignature:'',webConnected:true,grokSetupWatch:null,grokSetupWatchTimer:null,grokSetupWatchSequence:0,grokSetupWatchError:'',
     setTimeout:(callback,ms)=>{timers.set(++timerId,{callback,ms});return timerId;},clearTimeout:id=>timers.delete(id),
     state:{chat:{members:[member]}},toast:value=>notices.push(value),memberStatus:()=>({tone:'online',label:'旧协议已验证'}),memberPresence:()=>({status:'unknown',label:'在线性未知',canWake:false}),time:value=>String(value),
     refresh:async()=>{refreshes++;},refreshOnboarding:async()=>{onboardingRefreshes++;},renderLaunch:()=>{},showBridge:async id=>bridges.push(id),showResume:async()=>{},
@@ -17,8 +17,8 @@ function fixture({provider='qwen-desktop',adapter='mcp',evidence={},verifiedAt='
     api:async(route,body)=>{calls.push({route,body});return body?{}:{member,client};}
   });
   context.memberById=id=>context.state.chat.members.find(item=>item.id===id);
-  vm.runInContext(section('const escape =','const time =')+section('function nativeDesktopProvider(', 'function launchSelectable(')+
-    section('function onboardingActions(', 'function roomUsesGrok(')+section('async function connectMember(', 'function updateRecipientNote(')+
+  vm.runInContext(section('const escape =','const time =')+section('function nativeConnectionUnavailable(', 'function memberPresence(')+section('function nativeDesktopProvider(', 'function launchSelectable(')+
+    section('function onboardingView(', 'function roomUsesGrok(')+section('async function connectMember(', 'function updateRecipientNote(')+
     section("$('member-setup-content').onclick =", "$('member-grok-form').onsubmit")+
     section("$('member-connect-guide').onclick =", "$('member-copy-entry').onclick"),context);
   return{context,$,member,client,calls,notices,copied,bridges,timers,get refreshes(){return refreshes;},get onboardingRefreshes(){return onboardingRefreshes;}};
@@ -36,6 +36,13 @@ test('protocol verification never claims a loaded native conversation or actual 
   assert.match(f.$('member-setup-status').innerHTML,/本人实际回复已核对/);assert.match(f.$('member-connect-guide').innerHTML,/已核对原问题的真实回答/);
   f.member.runtime_state.connection_evidence={native_conversation_loaded:false,model_reply_verified:false};f.client.connection_evidence={native_conversation_loaded:true,model_reply_verified:true};f.context.renderSetup();
   assert.match(f.$('member-connect-guide').innerHTML,/待连接验证/);assert.doesNotMatch(f.$('member-connect-guide').innerHTML,/已核对原问题的真实回答/,'fresh runtime evidence overrides the old guide');
+});
+test('current disconnected desktop overrides historical native proof in setup and inspector',()=>{
+  const proof={native_conversation_loaded:true,model_reply_verified:true,automatic_reply_verified:true};
+  const f=fixture({provider:'doubao',evidence:proof});f.member.desktop_connection={configured:true,state:'offline',can_wake:false,error:'fetch failed'};f.member.connection_method='native_desktop';f.client.native_state.error='fetch failed';f.context.renderSetup();
+  const html=f.$('member-setup-status').innerHTML+f.$('member-connect-guide').innerHTML;assert.match(html,/本人对话未连接/);assert.match(html,/开启客户端连接后继续/);assert.match(html,/待连接验证/);assert.match(html,/待实际任务验证/);assert.doesNotMatch(html,/已核对原问题的真实回答|本人的实际回复已核对|fetch failed/);
+  const inspector=inspectorFixture({provider:'doubao',evidence:proof});inspector.member.desktop_connection=f.member.desktop_connection;inspector.member.connection_method='native_desktop';inspector.context.renderInspector();
+  assert.match(inspector.$('inspector-members').innerHTML,/点开查看连接步骤/);assert.doesNotMatch(inspector.$('inspector-selected-member').innerHTML,/已核对原问题的真实回答/);
 });
 
 test('native primary UI hides private values and preserves explicit compatibility copying without reconnecting',async()=>{
@@ -91,6 +98,17 @@ test('onboarding native action uses its scoped job and stops after a room switch
   const pending=stale.context.connectOnboardingNative(job);stale.context.roomId='different-room';gate.resolve({member:stale.member,client:stale.client});
   await assert.rejects(pending,/当前房间已切换/);assert.equal(stale.calls.filter(call=>call.route==='/api/desktop/connect').length,0);
   await assert.rejects(stale.context.connectOnboardingNative(job),/不属于当前房间/);assert.equal(stale.calls.length,1);
+});
+test('native setup replaces the picker and preserves only its current member completion flow',async()=>{
+  const f=fixture(),job={id:'native-run',member_id:f.member.id,room_id:f.context.roomId,provider:'qwen-desktop',status:'needs_action'};
+  const flow={source:'picker',roomId:f.context.roomId,projectId:'project',jobId:job.id};f.context.secretaryNavigation=flow;f.context.secretaryConnectJob=job.id;f.context.secretaryConnectRoom=f.context.roomId;f.context.onboardingJobs.set(job.id,job);f.context.secretaryNavigationCurrent=value=>value===f.context.secretaryNavigation&&value.roomId===f.context.roomId;
+  const picker=f.$('secretary-connect-dialog'),setup=f.$('member-setup-dialog');picker.open=true;let closePicker,closeSetup;
+  picker.addEventListener=(_type,callback)=>{closePicker=callback;};setup.addEventListener=(_type,callback)=>{closeSetup=callback;};
+  vm.runInContext(source.split('\n').filter(line=>line.startsWith("$('secretary-connect-dialog').addEventListener('close'")||line.startsWith("$('member-setup-dialog').addEventListener('close'")).join('\n'),f.context);
+  picker.close=()=>{picker.open=false;closePicker();};
+  await f.context.showMemberSetup(f.member.id);assert.equal(picker.open,false);assert.equal(setup.open,true);assert.equal(f.context.secretaryNavigation,flow);assert.equal(flow.setupMemberId,f.member.id);assert.equal(flow.jobId,job.id);
+  closeSetup();assert.equal(f.context.secretaryNavigation,null,'explicitly dismissing the owned setup cancels its pending navigation');
+  f.context.secretaryNavigation={source:'picker',roomId:f.context.roomId};closePicker();assert.equal(f.context.secretaryNavigation,null,'normal user closure still cancels the picker');
 });
 test('ordinary onboarding reauthorization uses its declared exact member instead of a generic retry',async()=>{
   const f=fixture(),job={id:'blocked-run',room_id:'room:one',member_id:f.member.id,provider:'qwen-desktop',status:'needs_action',stage:'awaiting_credential',next_actions:[{operation:'reauthorize',target_member_id:f.member.id}]};f.context.onboardingView=value=>value;f.context.api=async(route,body)=>{f.calls.push({route,body});return{...job,id:'recovery-run',status:'running'};};

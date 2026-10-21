@@ -15,7 +15,7 @@ function setup(t){
 test('chat and one-click resolve the same valid Codex despite several revoked historical people',async t=>{
   const v=setup(t),old=[v.member('codex',v.other,{revoked:true}),v.member('codex',v.other,{revoked:true}),v.member('codex',v.other,{revoked:true})],active=v.member('codex');
   const before=v.counts(),message=v.message('接入一下codex');v.service.connectionAssist.begin(message);const [assist]=await v.finish();
-  assert.equal(assist.target_member_id,active.member.id);assert.equal(assist.action_kind,'ready');assert.equal(assist.reused_connection,true);assert.equal(assist.verification_scope,'existing_connection');assert.equal(assist.copy_sentence,'');assert.equal(assist.document_path,null);assert.match(assist.summary,/沿用/);assert.equal(v.scans,0);
+  assert.equal(assist.target_member_id,active.member.id);assert.equal(assist.action_kind,'managed');assert.equal(assist.ready_for_office,false);assert.equal(assist.reused_connection,true);assert.equal(assist.verification_scope,'current_attempt');assert.equal(assist.copy_sentence,'');assert.equal(assist.document_path,null);assert.match(assist.summary,/原接入进度/);assert.equal(v.scans,0);
   const oneClick=v.service.onboarding.start({room_id:v.room.id,provider:'codex'});assert.equal(oneClick.member_id,active.member.id);assert.equal(oneClick.reused_connection,true);assert.equal(v.counts().members,before.members);assert.equal(v.counts().cards,before.cards);assert.deepEqual(fs.readFileSync(active.entry.file),active.bytes);
   for(const prior of old){assert.equal(v.service.resume.credential(prior.entry.credential_id).status,'revoked');assert.deepEqual(fs.readFileSync(prior.entry.file),prior.bytes);}
 });
@@ -34,13 +34,13 @@ test('a historical falsely blocked assist synchronizes read-only after the actua
   v.service.store.db.prepare("INSERT INTO connection_assists(id,room_id,message_id,member_id,provider,status,error,created,updated) VALUES(?,?,?,?,?,'needs_reauthorization','historical blocked record',?,?)").run(assistId,v.room.id,message.id,v.actor.id,'codex',stamp,stamp);
   const start=v.service.onboarding.start({room_id:v.room.id,provider:'codex'});await Promise.all([...v.service.onboarding.jobs.values()]);assert.equal(v.service.onboarding.state({run_id:start.id}).member_id,active.member.id);
   const before=v.counts(),revision=v.service.revision,scans=v.scans;
-  for(let i=0;i<3;i++){const state=v.service.connectionAssist.snapshotForMessage(message.id)[0];assert.equal(state.run_id,null);assert.equal(state.action_kind,'ready');assert.equal(state.target_member_id,active.member.id);assert.equal(state.reused_connection,true);assert.equal(state.error,null);assert.equal(state.copy_sentence,'');}
+  for(let i=0;i<3;i++){const state=v.service.connectionAssist.snapshotForMessage(message.id)[0];assert.equal(state.run_id,null);assert.equal(state.action_kind,'managed');assert.equal(state.ready_for_office,false);assert.equal(state.target_member_id,active.member.id);assert.equal(state.reused_connection,true);assert.equal(state.error,'historical blocked record');assert.equal(state.copy_sentence,'');}
   assert.deepEqual(v.counts(),before);assert.equal(v.service.revision,revision);assert.equal(v.scans,scans);assert.equal(v.service.store.db.prepare('SELECT status,error FROM connection_assists WHERE id=?').get(assistId).error,'historical blocked record');
 });
 test('a configured independent Grok joins a new office with the same identity, card and settings',async t=>{
   const v=setup(t),grok=v.member('grok-bot'),config=v.service.chat.store.member(grok.member.id).config,before=v.counts();
   const message=v.message('接入一下grok');v.service.connectionAssist.begin(message);const [assist]=await v.finish();
-  assert.equal(assist.target_member_id,grok.member.id);assert.equal(assist.action_kind,'ready');assert.equal(assist.reused_connection,true);assert.equal(assist.can_wake,false);assert.equal(assist.copy_sentence,'');assert.equal(assist.document_path,null);assert.equal(v.scans,0);assert.deepEqual(v.service.chat.store.member(grok.member.id).config,config);assert.equal(v.counts().members,before.members);assert.equal(v.counts().cards,before.cards);assert.deepEqual(fs.readFileSync(grok.entry.file),grok.bytes);
+  assert.equal(assist.target_member_id,grok.member.id);assert.equal(assist.action_kind,'manual_handoff');assert.equal(assist.reused_connection,true);assert.equal(assist.can_wake,false);assert.equal(assist.stage,'awaiting_bridge_handshake');assert.equal(v.scans,0);assert.deepEqual(v.service.chat.store.member(grok.member.id).config,config);assert.equal(v.counts().members,before.members);assert.equal(v.counts().cards,before.cards);assert.deepEqual(fs.readFileSync(grok.entry.file),grok.bytes);
 });
 test('adding Codex never turns an independent Grok into its fixed proxy',async t=>{
   const v=setup(t),grok=v.member('grok-bot',v.room),codex=v.member('codex',v.room),config=v.service.chat.store.member(grok.member.id).config;
@@ -67,7 +67,7 @@ for(const provider of ['qwen-desktop','doubao'])test(`${provider} saved offline 
 });
 test('an existing generic MCP identity reuses its manual connection without a managed or native action',async t=>{
   const v=setup(t),existing=v.member('opencode'),before=v.counts(),message=v.message('接入OpenCode');v.service.connectionAssist.begin(message);const [state]=await v.finish();
-  assert.equal(state.target_member_id,existing.member.id);assert.equal(state.action_kind,'ready');assert.equal(state.reused_connection,true);assert.equal(state.can_wake,false);assert.equal(state.copy_sentence,'');assert.equal(v.scans,0);assert.equal(v.counts().members,before.members);assert.equal(v.counts().cards,before.cards);
+  assert.equal(state.target_member_id,existing.member.id);assert.equal(state.action_kind,'manual_handoff');assert.equal(state.stage,'awaiting_handshake');assert.equal(state.reused_connection,true);assert.equal(state.can_wake,false);assert.equal(v.scans,0);assert.equal(v.counts().members,before.members);assert.equal(v.counts().cards,before.cards);
 });
 test('read-only synchronization of a historical blocked desktop assist never turns an offline native session into manual readiness',async t=>{
   const v=setup(t),existing=v.member('doubao',v.room),message=v.message('接入豆包'),stamp=now();
@@ -82,7 +82,7 @@ test('provider history for a revoked former person cannot override the newly sel
   v.service.resume.revoke(first.entry.credential_id);const second=v.member('codex',v.room),before=v.counts();
   assert.equal(resolveConnectionTarget(v.service,{room_id:v.room.id,provider:'codex'}).member_id,second.member.id);
   const current=v.service.onboarding.start({room_id:v.room.id,provider:'codex'});await Promise.all([...v.service.onboarding.jobs.values()]);assert.notEqual(current.id,oldRun.id);assert.equal(v.service.onboarding.state({run_id:current.id}).member_id,second.member.id);
-  const message=v.message('接入Codex');v.service.connectionAssist.begin(message);const [assist]=await v.finish();assert.equal(assist.target_member_id,second.member.id);assert.equal(assist.action_kind,'ready');assert.equal(assist.run_id,current.id);
+  const message=v.message('接入Codex');v.service.connectionAssist.begin(message);const [assist]=await v.finish();assert.equal(assist.target_member_id,second.member.id);assert.equal(assist.action_kind,'managed');assert.equal(assist.ready_for_office,false);assert.equal(assist.run_id,current.id);
   const explicit=v.service.onboarding.start({room_id:v.room.id,provider:'codex',target_member_id:first.member.id});assert.equal(explicit.id,oldRun.id);assert.equal(explicit.member_id,first.member.id);assert.equal(explicit.stage,'awaiting_credential');assert.equal(v.service.resume.credential(first.entry.credential_id).status,'revoked');assert.equal(v.counts().cards,before.cards);assert.equal(v.counts().members,before.members);
 });
 test('rapid explicit reauthorization clicks reuse the same original-person job without issuing another credential',async t=>{

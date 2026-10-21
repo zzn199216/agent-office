@@ -1,9 +1,8 @@
 'use strict';
 const {id,now,redact}=require('./util.cjs');
 
-// One controller-owned check belongs to the person, not to a room or a process.
-// Reopening progress, retrying setup and restarting AO only inspect this same
-// durable message. Delivery/recovery remains the ordinary adapter's job.
+// A controller-owned check is scoped to one durable onboarding attempt. The
+// member remains the dispatch lock: an uncertain older turn cannot be resent.
 class OnboardingVerification {
   constructor(service,options={}){
     this.service=service;this.db=service.store.db;this.options=options;
@@ -22,19 +21,14 @@ class OnboardingVerification {
       WHERE member_id=? AND model_message_id=? AND model_reply_verified_at IS NOT NULL
       AND native_session_id IS NOT NULL AND executor_kind IN ('managed_cli','desktop') LIMIT 1`).get(memberId,messageId)||null;
   }
-  existingProof(memberId){
-    if(!this.hasTable('connection_session_evidence'))return null;
-    const state=this.service.runtime.connectionState?.(memberId),current=new Set((state?.sessions||[]).filter(session=>session.automatic_reply_verified===true).map(session=>session.model?.message_id));
-    if(!state?.automatic_reply_verified||!current.size)return null;
-    return this.db.prepare(`SELECT e.model_message_id AS message_id,r.id AS reply_id FROM connection_session_evidence e
-      JOIN chat_messages m ON m.id=e.model_message_id AND m.to_member_id=e.member_id AND m.status='answered'
-      JOIN chat_messages r ON r.reply_to=m.id AND r.room_id=m.room_id AND r.sender_id=e.member_id AND r.kind='reply' AND length(trim(r.text))>0
-      WHERE e.member_id=? AND e.model_reply_verified_at IS NOT NULL AND e.native_session_id IS NOT NULL
-      AND e.executor_kind IN ('managed_cli','desktop') AND NOT EXISTS(SELECT 1 FROM onboarding_verification_history h WHERE h.message_id=e.model_message_id)
-      ORDER BY e.updated DESC`).all(memberId).find(proof=>current.has(proof.message_id))||null;
-  }
-  view(row){
-    return row?{status:row.status,message_id:row.message_id,reply_id:row.reply_id,verified_at:row.verified_at,
+  belongsToRun(row,run){return !!row&&row.run_id===run.id&&row.room_id===run.room_id&&Date.parse(row.created)>=Date.parse(run.started_at||run.created);}
+  archive(row){this.service.chat.store.transaction(()=>{
+    this.db.prepare('INSERT OR IGNORE INTO onboarding_verification_history VALUES(?,?,?,?)').run(row.message_id,row.member_id,JSON.stringify(row),now());
+    this.db.prepare('DELETE FROM onboarding_reply_verifications WHERE member_id=? AND message_id=?').run(row.member_id,row.message_id);
+  });}
+  view(row,run){
+    return row?{status:row.status,message_id:row.message_id,reply_id:row.reply_id,verified_at:row.verified_at,run_id:row.run_id,room_id:row.room_id,
+      ...run?{current_attempt:this.belongsToRun(row,run),verification_scope:this.belongsToRun(row,run)?'current_attempt':'historical_attempt'}:{},
       error:row.error?redact(row.error).slice(0,1000):null,deadline:row.deadline}:null;
   }
   dispatchState(row,message){
@@ -68,15 +62,19 @@ class OnboardingVerification {
         this.retryFailed(member.id);previous=this.row(member.id);
       }else if(previous.status==='failed'&&this.retryFailed(member.id))previous=null;
     }
-    if(previous)return this.view(previous);
-    const stamp=now(),proof=this.existingProof(member.id),nonce=`AO-CONNECT-${id()}`;
-    const row={member_id:member.id,run_id:run.id,room_id:run.room_id,message_id:proof?.message_id||'',nonce,
-      status:proof?'verified':'waiting',reply_id:proof?.reply_id||null,error:null,
-      deadline:new Date(Date.now()+(this.options.timeoutMs||45000)).toISOString(),verified_at:proof?stamp:null,created:stamp,updated:stamp};
+    if(previous&&!this.belongsToRun(previous,run)){
+      const original=this.db.prepare('SELECT * FROM chat_messages WHERE id=?').get(previous.message_id);
+      if(['verified','failed'].includes(previous.status)&&this.dispatchState(previous,original)==='terminal'){this.archive(previous);previous=null;}
+    }
+    if(previous)return this.view(previous,run);
+    const stamp=now(),nonce=`AO-CONNECT-${id()}`;
+    const row={member_id:member.id,run_id:run.id,room_id:run.room_id,message_id:'',nonce,
+      status:'waiting',reply_id:null,error:null,
+      deadline:new Date(Date.now()+(this.options.timeoutMs||45000)).toISOString(),verified_at:null,created:stamp,updated:stamp};
     this.service.chat.store.transaction(()=>{
       // A second controller/run for the same person cannot create another turn.
       if(this.row(member.id))return;
-      if(!proof){
+      {
         const message=this.service.chat.store.post({room_id:run.room_id,sender_id:'user',to_member_id:member.id,
           kind:'message',idempotency_key:`onboarding-verification:${member.id}:${nonce}`,
           text:`这是 Agent Office 的一次自动连接验证，不是业务任务。不读取文件，不调用其他工具，不执行其他操作。请只回复这一行：${nonce}`});
@@ -86,20 +84,20 @@ class OnboardingVerification {
         VALUES(:member_id,:run_id,:room_id,:message_id,:nonce,:status,:reply_id,:error,:deadline,:verified_at,:created,:updated)`).run(row);
     });
     const saved=this.row(member.id);
-    if(saved?.run_id!==row.run_id||saved.message_id!==row.message_id||proof)return this.view(saved);
+    if(saved?.run_id!==row.run_id||saved.message_id!==row.message_id)return this.view(saved,run);
     try{
       // Persist first, then use the same native executor as a normal message.
       // No human-setup flag is supplied, so this check cannot install agents.
       const pending=this.service.chat.adapter(member).message(this.service.chat.store.message(saved.message_id));
       pending?.catch?.(error=>this.dispatchFailed(saved,error));
     }catch(error){this.dispatchFailed(saved,error);}
-    return this.view(this.row(member.id));
+    return this.view(this.row(member.id),run);
   }
   dispatchFailed(row,error){
     const message=this.db.prepare('SELECT status FROM chat_messages WHERE id=?').get(row.message_id);
     if(message?.status==='queued')this.service.chat.store.updateMessage(row.message_id,{status:'failed',error:'自动连接验证未能派发；没有重新提交。'});
-    this.db.prepare("UPDATE onboarding_reply_verifications SET status='uncertain',error=?,updated=? WHERE member_id=? AND status<>'verified'")
-      .run(redact(error?.message||'自动连接验证结果待核对；没有重新提交。').slice(0,1000),now(),row.member_id);
+    this.db.prepare("UPDATE onboarding_reply_verifications SET status='uncertain',error=?,updated=? WHERE member_id=? AND message_id=? AND status<>'verified'")
+      .run(redact(error?.message||'自动连接验证结果待核对；没有重新提交。').slice(0,1000),now(),row.member_id,row.message_id);
     this.service.changed();
   }
   refresh(){

@@ -9,7 +9,7 @@ function fixture(){
   const $=id=>{if(!elements.has(id))elements.set(id,{open:false,value:'',innerHTML:'',closeCount:0,showModal(){this.open=true;},close(){this.open=false;this.closeCount++;},scrollIntoView(){},classList:{toggle(){}}});return elements.get(id);};
   const unassigned={room_id:'room',member_id:null,status:'unassigned',assignment_id:null};
   const ready={room_id:'room',member_id:'member',status:'ready',assignment_id:'assignment',can_wake:true};
-  const context=vm.createContext({$,state:{projects:[{id:'project'}],secretaries:{room:unassigned}},history:{room:{id:'room'},participants:[{id:'member',verified_at:'verified',status:'ready'}]},roomId:'room',projectId:'project',legacyId:null,professionalView:true,webConnected:true,selectedSetupMember:'member',secretaryNavigation:null,secretaryConnectRoom:'room',secretaryConnectJob:null,secretaryFinishing:false,secretaryBusy:false,secretaryStartBusy:false,secretaryPickingRoom:'room',secretaryOpenRoom:'room',secretaryError:'',secretaryDismissed:new Set(),refreshing:false,refreshWaiters:[],onboardingJobs:new Map(),onboardingStarting:new Set(),launchError:'',launchCandidates:[{id:'qwen-desktop',installed:true,capabilities:{mcp_prepare:true}}],
+  const context=vm.createContext({$,state:{projects:[{id:'project'}],secretaries:{room:unassigned}},history:{room:{id:'room'},participants:[{id:'member',verified_at:'verified',status:'ready'}]},roomId:'room',projectId:'project',legacyId:null,professionalView:true,webConnected:true,selectedSetupMember:'member',secretaryNavigation:null,secretaryConnectRoom:'room',secretaryConnectJob:null,secretaryFinishing:false,secretaryBusy:false,secretaryStartBusy:false,secretaryPickingRoom:'room',secretaryOpenRoom:'room',secretaryError:'',secretaryDismissed:new Set(),refreshing:false,refreshWaiters:[],onboardingJobs:new Map(),onboardingFeedback:new Map(),onboardingStarting:new Set(),launchError:'',launchCandidates:[{id:'qwen-desktop',installed:true,capabilities:{mcp_prepare:true}}],
     admittedMembers:members=>members.filter(member=>member.verified_at&&!['connection_failed','failed','disabled','revoked','unavailable'].includes(member.status)),
     renderSecretary(){},updateOfficeScene(){},renderLaunch(){},updateRecipientNote(){},rememberSelection(){},showProject(){},showRoom(){},localStorage:{setItem(){}},toast:value=>notices.push(value),
     setProfessionalView:value=>{context.professionalView=value;navigation.push(['workspace',value]);},selectRoomView:value=>navigation.push(['office',value]),
@@ -22,7 +22,7 @@ function fixture(){
     section('function closeSecretaryTutorial()', 'function renderSecretary()')+section('function beginSecretaryNavigation(', 'async function clearSecretary()'),context);
   return{context,$,calls,notices,navigation,ready};
 }
-function connectFlow(f,sourceName='picker',job={id:'job',room_id:'room',member_id:'member',provider:'qwen-desktop',status:'ready_automatic',can_wake:true}){
+function connectFlow(f,sourceName='picker',job={id:'job',room_id:'room',member_id:'member',provider:'qwen-desktop',status:'ready_automatic',can_wake:true,ready_for_office:true}){
   const flow=f.context.beginSecretaryNavigation(sourceName);flow.jobId=job.id;f.context.onboardingJobs.set(job.id,job);f.context.secretaryConnectJob=job.id;f.$('secretary-connect-dialog').open=sourceName==='picker';f.$('member-setup-dialog').open=true;return flow;
 }
 
@@ -44,6 +44,16 @@ test('automatic verification progress remains in setup and never assigns a secre
   const f=fixture();connectFlow(f,'picker',{id:'job',room_id:'room',member_id:'member',provider:'qwen-desktop',status:'running',stage:'verifying_reply',can_wake:true,ready_for_office:false});
   await f.context.returnSecretaryAfterOnboarding();assert.equal(f.calls.length,0);assert.equal(f.navigation.length,0);assert.equal(f.$('secretary-connect-dialog').open,true);
 });
+test('native historical success and missing attempt acceptance cannot close setup',async()=>{
+  for(const invalid of [{ready_for_office:undefined,status:'ready_automatic',can_wake:true},{ready_for_office:false,status:'ready_mailbox',can_wake:false},{ready_for_office:true,status:'ready_mailbox',can_wake:false},{ready_for_office:true,status:'ready_automatic',can_wake:false}]){
+    const f=fixture();connectFlow(f,'picker',{id:'job',room_id:'room',member_id:'member',provider:'doubao',connection_method:'native_desktop',...invalid});await f.context.returnSecretaryAfterOnboarding();assert.equal(f.$('secretary-connect-dialog').open,true);assert.equal(f.navigation.length,0);assert.equal(f.calls.length,0);
+  }
+});
+test('explicit manual connection can enter as a member but cannot become an automatic secretary',async()=>{
+  const job={id:'job',room_id:'room',member_id:'member',provider:'qwen-desktop',status:'ready_mailbox',connection_method:'manual_mcp',can_wake:false,ready_for_office:true};
+  const picker=fixture();picker.$('secretary-connect-progress').querySelector=()=>null;connectFlow(picker,'picker',job);await picker.context.returnSecretaryAfterOnboarding();assert.equal(picker.calls.length,0);assert.equal(picker.navigation.length,0);assert.equal(picker.$('secretary-connect-dialog').open,true);assert.match(picker.context.onboardingFeedback.get('job').message,/不会自动处理秘书任务/);
+  const member=fixture();member.context.refresh=async()=>{};connectFlow(member,'member',job);await member.context.returnSecretaryAfterOnboarding();assert.equal(member.calls.length,0);assert.deepEqual(member.navigation,[['workspace',true],['office',true]]);assert.equal(member.$('member-setup-dialog').open,false);
+});
 test('Grok pending and mailbox-ready picker flows open one owned guide without assigning a secretary',async()=>{
   for(const status of ['needs_action','ready_mailbox']){
     const f=fixture(),opened=[];f.context.showMemberSetup=async(id,flow)=>opened.push({id,flow});const flow=connectFlow(f,'picker',{id:'job',room_id:'room',member_id:'member',provider:'grok-bot',native_direct_available:false,status,stage:status==='needs_action'?'awaiting_bridge_handshake':'ready_mailbox',can_wake:false});
@@ -56,7 +66,7 @@ test('Grok authorization and unsupported fixed routes remain in their declared s
 });
 test('adding an existing connected Grok reuses configuration and enters office without another copy modal',async()=>{
   const f=fixture();f.context.showMemberSetup=async()=>assert.fail('valid reused connection must not ask for another window handoff');
-  connectFlow(f,'picker',{id:'job',room_id:'room',member_id:'member',provider:'grok-bot',native_direct_available:false,status:'ready_mailbox',can_wake:false,connection_reused:true});f.context.refresh=async()=>{};
+  connectFlow(f,'picker',{id:'job',room_id:'room',member_id:'member',provider:'grok-bot',native_direct_available:false,status:'ready_mailbox',can_wake:false,connection_reused:true,ready_for_office:true});f.context.refresh=async()=>{};
   await f.context.returnSecretaryAfterOnboarding();assert.equal(f.$('secretary-connect-dialog').open,false);assert.deepEqual(f.navigation,[['workspace',true],['office',true]]);assert.equal(f.calls.length,0);assert.equal(f.context.state.secretaries.room.member_id,null);assert.match(f.notices.at(-1),/沿用原有连接和配置/);assert.doesNotMatch(f.notices.at(-1),/本次真实连接|自动接通/);
 });
 test('choosing a ready secretary closes its tutorial and owned setup without starting a goal',async()=>{
@@ -83,7 +93,7 @@ test('the launch home starts the same completion flow and enters the created off
   f.context.api=async(route,body)=>{f.calls.push({route,body});if(route==='/api/onboarding/start')return{id:'job',room_id:'new-room',member_id:'member',provider:'qwen-desktop',status:'running'};if(route==='/api/secretary')return{...f.ready,room_id:'new-room'};throw Error(route);};
   f.context.refresh=async()=>{f.context.state.secretaries['new-room']=f.calls.some(call=>call.route==='/api/secretary')?{...f.ready,room_id:'new-room'}:{room_id:'new-room',member_id:null,status:'unassigned'};};
   await f.context.startOnboarding('qwen-desktop');assert.equal(f.context.roomId,'new-room');assert.equal(f.context.secretaryNavigation.source,'launch');assert.equal(f.context.secretaryNavigation.jobId,'job');
-  f.context.onboardingJobs.get('job').status='ready_automatic';f.context.onboardingJobs.get('job').can_wake=true;await f.context.returnSecretaryAfterOnboarding();
+  Object.assign(f.context.onboardingJobs.get('job'),{status:'ready_automatic',can_wake:true,ready_for_office:true});await f.context.returnSecretaryAfterOnboarding();
   assert.deepEqual(f.navigation,[['workspace',true],['office',true]]);assert.equal(f.context.secretaryOpenRoom,null);assert.equal(f.calls.filter(call=>call.route==='/api/secretary/start').length,0);
 });
 test('late launch preparation never selects a room after the user selected another room or project',async()=>{
@@ -150,7 +160,7 @@ test('taking over the text view cancels a pending guided flow, but entering the 
 });
 test('connecting a different member to a ready room never replaces the person’s chosen recipient',async()=>{
   const f=fixture();f.context.history.participants.push({id:'other',verified_at:'verified',status:'ready'});f.context.state.secretaries.room={...f.ready};f.$('recipient').value='keep-me';
-  connectFlow(f,'picker',{id:'job',room_id:'room',member_id:'other',provider:'qwen-desktop',status:'ready_automatic',can_wake:true});
+  connectFlow(f,'picker',{id:'job',room_id:'room',member_id:'other',provider:'qwen-desktop',status:'ready_automatic',can_wake:true,ready_for_office:true});
   await f.context.returnSecretaryAfterOnboarding();
   assert.equal(f.$('recipient').value,'keep-me');assert.equal(f.calls.filter(call=>call.route==='/api/secretary').length,0);assert.deepEqual(f.navigation,[['workspace',true],['office',true]]);assert.ok(f.notices.includes('成员已真实接通，已进入办公室。'));
 });

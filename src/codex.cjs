@@ -40,15 +40,28 @@ function backgroundTransport(config={}) {
 class CodexClient extends EventEmitter {
   constructor(options = {}) { super(); this.executable = options.executable || detectCodex(); this.spawnArgs = options.args || []; this.mcpEnvironment=options.mcpEnvironment||{};this.dataDir=options.dataDir;this.extraInstructions=options.developerInstructions||'';this.workspace=options.dataDir&&options.isolate!==false?new CodexWorkspace(options.dataDir,{legacyHome:options.legacyHome}):null;this.legacyHome=options.legacyHome; this.pending = new Map(); this.nextId = 1; this.child = null; this.readyPromise = null; this.closed = false; }
   legacyClient(){return new CodexClient({executable:this.executable,args:this.spawnArgs,isolate:false,legacyHome:this.workspace?.legacyHome||this.legacyHome});}
+  async authenticationEnvironment(){
+    if(this.workspace)await this.workspace.prepare(async()=>{const legacy=this.legacyClient();try{await legacy.ready();return (await legacy.call('config/read',{includeLayers:false})).config||{};}finally{await legacy.close();}});
+    return this.workspace?this.workspace.environment():this.legacyHome?{...process.env,CODEX_HOME:this.legacyHome}:process.env;
+  }
+  invalidateAuthentication(){this.authenticationDirty=true;}
   async ready() {
     if(this.closed)throw new RoomError('后台连接已停止。',409,'cancelled');
+    // A completed independent login changes the file-backed account. Reopen an
+    // idle owned app-server so it cannot keep reporting its pre-login cache.
+    // Pending RPCs and active turn listeners keep their original transport.
+    if(this.authenticationDirty&&!this.connecting&&!this.pending.size&&!this.listenerCount('notification')&&!this.authenticationReset){
+      this.authenticationDirty=false;const child=this.child;this.child=null;this.readyPromise=null;
+      this.authenticationReset=child?new Promise(resolve=>{const timer=setTimeout(()=>{child.kill();resolve();},1500);child.once('exit',()=>{clearTimeout(timer);resolve();});try{child.stdin.end();}catch{child.kill();resolve();}}):Promise.resolve();
+    }
+    if(this.authenticationReset){const reset=this.authenticationReset;try{await reset;}finally{if(this.authenticationReset===reset)this.authenticationReset=null;}}
+    if(this.closed)throw new RoomError('后台连接已停止。',409,'cancelled');
     if (this.readyPromise) return this.readyPromise;
-    this.readyPromise = this.connect().catch(e => { this.readyPromise = null; throw e; }); return this.readyPromise;
+    this.connecting=true;this.readyPromise = this.connect().catch(e => { this.readyPromise = null; throw e; }).finally(()=>{this.connecting=false;}); return this.readyPromise;
   }
   async connect() {
     if (!this.executable) throw new RoomError('没有找到 Codex。请先安装并登录 Codex，再点击检查连接。', 503, 'codex_missing');
-    if(this.workspace)await this.workspace.prepare(async()=>{const legacy=this.legacyClient();try{await legacy.ready();return (await legacy.call('config/read',{includeLayers:false})).config||{};}finally{await legacy.close();}});
-    const env=this.workspace?this.workspace.environment():this.legacyHome?{...process.env,CODEX_HOME:this.legacyHome}:process.env;
+    const env=await this.authenticationEnvironment();
     // A cold private home may fail after creating its SQLite files. Retry only
     // that recognized startup failure, before a thread or model turn exists.
     for(let attempt=0;attempt<2;attempt++){

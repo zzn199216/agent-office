@@ -11,7 +11,7 @@ async function setup(t){
   const project=service.addProject({path:files.project}),room=service.chat.addRoom({project_id:project.id,title:'Human connections'}),actor=service.chat.addMember({name:'Current assistant',adapter:'codex'}),peer=service.chat.addMember({name:'Peer',adapter:'mailbox'});
   for(const member of[actor,peer])service.chat.join(room.id,member.id);
   service.chat.store.updateMember(actor.id,{status:'ready',verified_at:now()});
-  service.onboarding.start=input=>{calls.push(input);const row={id:id(),room_id:input.room_id,provider:input.provider,status:'ready',stage:'ready_automatic',can_wake:true,local_verified:true};states.set(row.id,row);return row;};
+  service.onboarding.start=input=>{calls.push(input);const row={id:id(),room_id:input.room_id,provider:input.provider,status:'ready',stage:'ready_automatic',can_wake:true,local_verified:true,ready_for_office:true};states.set(row.id,row);return row;};
   service.onboarding.state=({run_id,room_id})=>{const state=states.get(run_id);assert.equal(state.room_id,room_id);return state;};
   const server=createServer(service,{port:0,token:'fixture-controller'}),base='http://127.0.0.1:'+await server.listen();
   t.after(async()=>{await server.close();await service.close();});

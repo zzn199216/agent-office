@@ -15,12 +15,12 @@ function setup(t,options={}){
     CREATE TABLE chat_rooms(id TEXT PRIMARY KEY,title TEXT);
     CREATE TABLE launch_sessions(id TEXT PRIMARY KEY,room_id TEXT,status TEXT,candidates TEXT,error TEXT,selected_providers TEXT);
     CREATE TABLE launch_proxies(id TEXT PRIMARY KEY,room_id TEXT,provider TEXT,name TEXT,backend_member_id TEXT,installation TEXT,native_group_status TEXT);
-    CREATE TABLE chat_resume_credentials(id TEXT PRIMARY KEY,room_id TEXT,member_id TEXT,status TEXT);`);
+    CREATE TABLE chat_resume_credentials(id TEXT PRIMARY KEY,room_id TEXT,member_id TEXT,status TEXT,last_seen TEXT);`);
   const room={id:id(),title:'测试协作群'};db.prepare('INSERT INTO chat_rooms VALUES(?,?)').run(room.id,room.title);
   const members=new Map(),calls=[],runtimes=[],capabilities=new Map();let changes=0,scans=0;
   const service={store:{db,dir:data},changed(){changes++;},chat:{store:{
     room(value){if(value!==room.id)throw new RoomError('房间不存在。',404);return room;},
-    member(value){const member=members.get(value);if(!member)throw new RoomError('成员不存在。',404);return member;}
+    member(value){const member=members.get(value);if(!member)throw new RoomError('成员不存在。',404);return member;},joined(){return true;}
   }},runtime:{memberState(memberId){return {can_wake:capabilities.get(memberId)===true};}}};
   service.launch={jobs:new Map(),policy(){return {scan:'on_request',join:'explicit_selection',automatic_sync:false};},
     chooseRoom(input){return service.chat.store.room(input.room_id||room.id);},
@@ -42,7 +42,7 @@ function setup(t,options={}){
         const file=path.join(data,'entries',`${proxy.backend_member_id}-${room.id}.json`);let card,credential;
         try{card=JSON.parse(fs.readFileSync(file,'utf8'));credential=db.prepare('SELECT * FROM chat_resume_credentials WHERE id=?').get(card.credential_id);}catch{}
         if(!credential||credential.status==='revoked'){
-          card={credential_id:id(),room_id:room.id,member_id:proxy.backend_member_id};db.prepare("INSERT INTO chat_resume_credentials VALUES(?,?,?,'pending')").run(card.credential_id,room.id,proxy.backend_member_id);fs.writeFileSync(file,JSON.stringify(card));
+          card={credential_id:id(),room_id:room.id,member_id:proxy.backend_member_id};db.prepare("INSERT INTO chat_resume_credentials VALUES(?,?,?,'pending',NULL)").run(card.credential_id,room.id,proxy.backend_member_id);fs.writeFileSync(file,JSON.stringify(card));
         }
       }
       const work=Promise.resolve().then(async()=>{if(options.gate)await options.gate;
@@ -61,7 +61,7 @@ async function completed(v,input={}){
   const start=v.manager.start({provider:'codex',room_id:v.room.id,...input});
   await Promise.all([...v.manager.jobs.values()]);return v.manager.state({run_id:start.id});
 }
-function verifyDesktop(v,state){const member=v.members.get(state.member_id);member.status='ready';member.verified_at=now();v.db.prepare("UPDATE chat_resume_credentials SET status='active' WHERE member_id=? AND room_id=?").run(member.id,state.room_id);}
+function verifyDesktop(v,state){const member=v.members.get(state.member_id);member.status='ready';member.verified_at=now();v.db.prepare("UPDATE chat_resume_credentials SET status='active',last_seen=? WHERE member_id=? AND room_id=?").run(now(),member.id,state.room_id);}
 
 test('construction and status lookup never discover agents or create sessions and cards',t=>{
   const v=setup(t);assert.equal(v.scans,0);
@@ -134,7 +134,7 @@ test('verified desktop mailbox readiness never becomes background wake capabilit
 });
 test('desktop JSON import action does not disclose configuration paths or credential body',async t=>{
   const v=setup(t,{installation:{status:'awaiting_import',needs_import:true,configuration_file:'SECRET-FILE',mcp:{url:'http://127.0.0.1/mcp/SECRET-CARD'},detail:'本机导入配置'}});
-  const first=await completed(v,{provider:'qwen-desktop'});
+  const first=await completed(v,{provider:'qwen-desktop',connection_method:'manual_mcp'});
   assert.equal(first.stage,'awaiting_import');assert.deepEqual(first.next_actions.map(a=>a.kind),['import_mcp','self_handshake']);
   const body=JSON.stringify(first);assert.equal(body.includes('SECRET'),false);assert.equal(body.includes('configuration_file'),false);assert.equal(body.includes('/mcp/'),false);
   const changes=v.changes,cards=v.db.prepare('SELECT count(*) AS n FROM chat_resume_credentials').get().n;
@@ -173,6 +173,7 @@ test('uninstalled managed runtime and unsupported clients never become ready mem
 test('native login failures distinguish account action from transport verification failures',async t=>{
   const login=setup(t,{nativeError:'Claude Code 尚未登录。'}),first=await completed(login,{provider:'claude-code'});
   assert.equal(first.stage,'awaiting_auth');assert.equal(first.next_actions[0].kind,'login');assert.equal(first.local_verified,false);
+  login.manager.set(first.id,{status:'needs_action',stage:'awaiting_auth',error:'本次登录窗口无法打开，请重试。'});assert.equal(login.manager.state({run_id:first.id}).error,'本次登录窗口无法打开，请重试。');
   const bad=setup(t,{nativeError:'transport closed https://host.invalid/mcp/SECRET key=private-secret'}),failed=await completed(bad);
   assert.equal(failed.status,'error');assert.equal(failed.stage,'error');assert.equal(failed.next_actions[0].operation,'retry');assert.equal(failed.error.includes('SECRET'),false);assert.equal(failed.error.includes('private-secret'),false);
 });
@@ -193,7 +194,7 @@ test('revoked native credentials prevent readiness without progress reads issuin
   assert.equal(v.manager.state({run_id:restarted.id}).stage,'ready_automatic');assert.equal(v.db.prepare('SELECT count(*) AS n FROM chat_resume_credentials').get().n,cards+1);
 });
 test('a desktop historical handshake needs an active current credential and a missing entry requires explicit retry',async t=>{
-  const v=setup(t),first=await completed(v,{provider:'qwen-desktop'}),member=v.members.get(first.member_id);
+  const v=setup(t),first=await completed(v,{provider:'qwen-desktop',connection_method:'manual_mcp'}),member=v.members.get(first.member_id);
   member.status='ready';member.verified_at=now();
   const pending=v.manager.state({run_id:first.id});assert.equal(pending.local_verified,false);assert.equal(pending.credential_status,'pending');assert.notEqual(pending.stage,'ready_mailbox');
   verifyDesktop(v,first);assert.equal(v.manager.state({run_id:first.id}).stage,'ready_mailbox');
@@ -227,7 +228,7 @@ test('invalid or broad selections fail before discovery, installation and room m
 test('additional manual clients stay awaiting import and require their own active credential handshake',async t=>{
   for(const provider of ['doubao','opencode','cherry-studio','cline','roo-code']){
     const installation={status:'awaiting_import',needs_import:true,import_kind:provider==='doubao'?'form':'json',configuration_file:'PRIVATE-FILE',manual_fields:{url:'http://127.0.0.1/mcp/PRIVATE-CREDENTIAL'},detail:'本人的 MCP 配置已准备'};
-    const v=setup(t,{installation}),state=await completed(v,{provider});
+    const v=setup(t,{installation}),state=await completed(v,{provider,connection_method:'manual_mcp'});
     assert.equal(state.mode,'desktop');assert.equal(state.status,'needs_action');assert.equal(state.stage,'awaiting_import');assert.equal(state.response_mode,'manual_mailbox');assert.equal(state.can_wake,false);assert.equal(state.local_verified,false);
     assert.equal(state.installation.import_kind,installation.import_kind);assert.deepEqual(state.next_actions.map(a=>a.kind),['import_mcp','self_handshake']);assert.equal(JSON.stringify(state).includes('PRIVATE'),false);
     if(provider==='doubao')assert.match(state.next_actions[0].label,/个人连接器/);

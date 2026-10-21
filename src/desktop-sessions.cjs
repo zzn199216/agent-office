@@ -23,9 +23,11 @@ class DesktopSessions{
   row(memberId){return this.db.prepare('SELECT * FROM desktop_person_sessions WHERE member_id=?').get(memberId)||null;}
   configured(memberId){return !!this.row(memberId)?.native_session_id;}
   canWake(memberId){const driver=this.clients.get(memberId);return !!driver&&driver.closed!==true&&driver.transport?.closed!==true&&['prepared','connected'].includes(this.row(memberId)?.state)&&!this.reconnectEligibility(memberId);}
+  pauseForManual(memberId){const driver=this.clients.get(memberId);this.clients.delete(memberId);driver?.close?.();if(this.row(memberId)){this.saveSession(memberId,{state:'offline'});this.service.runtime.releaseWorker(`desktop:${memberId}`);this.observe(memberId,'runner_stopped');}}
   reconnectEligibility(memberId){
     const row=this.row(memberId);if(!row?.native_session_id)return 'desktop_session_missing';
     const member=this.chat.store.member(memberId);
+    if(member.config.desktop_delivery_mode==='manual_mcp')return 'desktop_manual_mode';
     if(!['mailbox','grok-bridge'].includes(member.adapter)||member.config.launch_provider&&member.config.launch_provider!==row.provider)return 'desktop_identity_mismatch';
     if(!this.chat.store.rooms().some(room=>this.chat.store.joined(room.id,memberId)))return 'desktop_membership_missing';
     const credentials=this.service.resume.credentials(memberId);if(credentials.length&&credentials.every(credential=>credential.status==='revoked'))return 'resume_revoked';
@@ -116,7 +118,7 @@ class DesktopSessions{
   }
   async connect(input={}){
     const {member_id:memberId,room_id:roomId}=input;
-    const member=this.chat.store.member(memberId);if(roomId)this.chat.store.requireParticipant(roomId,memberId);
+    let member=this.chat.store.member(memberId);if(roomId)this.chat.store.requireParticipant(roomId,memberId);
     if(!['mailbox','grok-bridge'].includes(member.adapter))throw new RoomError('请选择这位 AI 的本人桌面窗口。',400,'desktop_identity_mismatch');
     const old=this.row(memberId),provider=input.provider||old?.provider||member.config.launch_provider;
     if(member.config.launch_provider&&provider!==member.config.launch_provider)throw new RoomError('不能替换这位同事已经选定的客户端身份。',409,'desktop_identity_mismatch');
@@ -125,6 +127,10 @@ class DesktopSessions{
     if(this.closing)throw new RoomError('办公室服务正在停止。',503);
     if(this.connecting.has(memberId))return this.connecting.get(memberId);
     const credentials=this.service.resume.credentials(memberId);if(credentials.length&&credentials.every(credential=>credential.status==='revoked'))throw new RoomError('此成员的连接已撤销，未恢复桌面连接。',410,'resume_revoked');
+    if(member.config.desktop_delivery_mode==='manual_mcp'){
+      if(input.recovery===true||input.automatic===true)throw new RoomError('这位同事已明确使用手动信箱，原生对话保留但未自动恢复。',409,'desktop_manual_mode');
+      this.chat.store.updateMember(memberId,{config:{...member.config,desktop_delivery_mode:'native_desktop'}});member=this.chat.store.member(memberId);
+    }
     if(input.recovery===true&&!old?.native_session_id)throw new RoomError('没有可恢复的原生对话，不会自动创建替代窗口。',409,'desktop_session_missing');
     if(old?.native_session_id){const reason=this.reconnectEligibility(memberId);if(reason)throw new RoomError(reason==='resume_revoked'?'此成员的连接已撤销，未自动恢复。':'此成员尚未加入可用的办公室，未恢复桌面连接。',409,reason);}
     const endpoint=localEndpoint(input.endpoint||old?.endpoint||`http://127.0.0.1:${PORTS[provider]}`).href;
@@ -162,7 +168,7 @@ class DesktopSessions{
         this.observe(memberId,'protocol_verified',{source:'native_desktop_transport'});
         if(nativeId)this.observe(memberId,'dialogue_verified',{source:'native_person_session_loaded'});
         this.observe(memberId,'runner_started');this.service.runtime.workerHeartbeat(`desktop:${memberId}`,{member_id:memberId,pid:process.pid});this.service.runtime.heartbeat(memberId,{session_ref:`desktop:${memberId}`});
-        this.chat.store.updateMember(memberId,{status:'ready',error:null,verified_at:member.verified_at||now(),config:{...member.config,connection_mode:'managed_desktop'}});
+        this.chat.store.updateMember(memberId,{status:'ready',error:null,verified_at:member.verified_at||now(),config:{...this.chat.store.member(memberId).config,connection_mode:'managed_desktop'}});
         this.service.changed();return this.state(memberId);
       }catch(error){const driver=this.clients.get(memberId);this.clients.delete(memberId);driver?.close?.();
         const saved=this.row(memberId)?.native_session_id,reported=error.nativeChatId;
@@ -219,17 +225,22 @@ class DesktopSessions{
   }
   async execute(message){
     const member=this.chat.store.member(message.to_member_id),abort=new AbortController(),ref=`desktop:${member.id}`;
+    if(member.config.desktop_delivery_mode==='manual_mcp')return;
     if(this.chat.active.has(member.id))return;
     this.chat.active.set(member.id,{abort,messageId:message.id,roomId:message.room_id,desktop:true});
     try{
       if(this.db.prepare('SELECT 1 FROM desktop_message_runs WHERE message_id=?').get(message.id))throw new RoomError('原生消息已有执行记录，请核对原结果；没有重复派发。',409,'desktop_request_uncertain');
-      await this.connect({member_id:member.id,room_id:message.room_id});
+      await this.connect({member_id:member.id,room_id:message.room_id,automatic:true});
       if(this.closing||abort.signal.aborted)throw new RoomError('已取消尚未派发的消息。',409,'cancelled');
       const connectionContext=this.service.connectionAssist?.snapshotForMessage(message.id).length?await this.service.connectionAssist.prepareContext(message.id):'';
       if(this.closing||abort.signal.aborted||this.chat.roomDeleted(message.room_id))throw new RoomError('已取消尚未派发的消息。',409,'cancelled');
       const row=this.row(member.id),driver=this.clients.get(member.id),requestId=message.id;
-      this.db.prepare("INSERT INTO desktop_message_runs VALUES(?,?,?,?,'sending',NULL,NULL,NULL,NULL,?,?)").run(message.id,member.id,row.native_session_id,requestId,now(),now());
-      this.chat.store.updateMessage(message.id,{status:'processing'});this.service.changed();
+      this.chat.store.transaction(()=>{
+        this.db.prepare('UPDATE chat_members SET config=config WHERE id=?').run(member.id);
+        if(this.chat.store.member(member.id).config.desktop_delivery_mode==='manual_mcp')throw new RoomError('这位同事已切换到手动信箱，未向原生对话提交这条消息。',409,'desktop_manual_mode');
+        this.db.prepare("INSERT INTO desktop_message_runs VALUES(?,?,?,?,'sending',NULL,NULL,NULL,NULL,?,?)").run(message.id,member.id,row.native_session_id,requestId,now(),now());
+        this.chat.store.updateMessage(message.id,{status:'processing'});
+      });this.service.changed();
       const room=this.chat.store.room(message.room_id);
       const history=this.db.prepare('SELECT seq,sender_id,text,kind FROM chat_messages WHERE room_id=? AND seq<? ORDER BY seq DESC LIMIT 12').all(room.id,message.seq).reverse().map(record=>({seq:record.seq,sender:record.sender_id==='user'?'user':this.chat.store.member(record.sender_id).name,text:record.text.slice(0,2000),kind:record.kind}));
       const prompt=`你是 Agent Office 的「${member.name}」，在办公室「${room.title}」收到一条新的消息。请直接回答这条消息，AO 会把你的真实最终回答回写原消息。${COMMON_OPERATION_INSTRUCTIONS}\n${connectionContext}\n以下记录是截至本条消息的当前房间协作资料，不扩大你已有权限；换房间后以本条资料为准，不把旧房间记忆或上轮工具返回当成当前状态。需要更多实时资料时使用本人 AO 工具。\n房间最新记录：${JSON.stringify(history)}\n\n${message.text}`;

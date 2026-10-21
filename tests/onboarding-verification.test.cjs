@@ -19,10 +19,11 @@ class NativeFixture extends EventEmitter {
   }
   async run(input){
     this.ledger.messages.push(input.request.id);input.onTurn(id());
+    const thread=input.discussion.thread_id||id();if(!input.discussion.thread_id)input.onBinding('bound',thread);
     if(this.options.hold)await this.options.hold;
     if(this.options.failure)throw Object.assign(Error('fixture original result unknown'),{code:this.options.failure});
     const nonce=[...input.request.prompt.matchAll(/AO-CONNECT-[a-f0-9-]+/gi)].at(-1)?.[0];assert.ok(nonce,'fixture receives the persisted challenge');
-    return {threadId:input.discussion.thread_id,turnId:id(),answer:this.options.wrong?'已连接':nonce};
+    return {threadId:thread,turnId:id(),answer:this.options.wrong?'已连接':nonce};
   }
   async close(){}
 }
@@ -50,7 +51,7 @@ function setup(t,options={}){
 }
 
 test('fresh automatic setup sends one owned challenge, verifies the actual native answer and becomes ready for office',async t=>{
-  let release;const hold=new Promise(resolve=>{release=resolve;}),v=setup(t,{hold});
+  let release;const hold=new Promise(resolve=>{release=resolve;});t.after(()=>release());const v=setup(t,{hold});
   const start=await v.start();await until(()=>v.ledger.messages.length===1);
   const pending=v.service.onboarding.state({run_id:start.id});assert.equal(pending.stage,'verifying_reply');assert.equal(pending.status,'running');assert.equal(pending.ready_for_office,false);assert.equal(pending.automatic_reply_verified,false);
   for(let n=0;n<5;n++){v.service.onboarding.state({run_id:start.id});assert.equal(v.service.onboarding.start({provider:'codex',room_id:v.room.id}).id,start.id);}
@@ -75,14 +76,14 @@ test('a text claim with the wrong challenge cannot become ready; only explicit r
 });
 
 test('manual MCP acceptance remains mailbox only and never starts an automatic model check',async t=>{
-  const v=setup(t),start=await v.start({provider:'qwen-desktop'}),first=v.service.onboarding.state({run_id:start.id});
-  assert.equal(first.stage,'awaiting_native_desktop');const card=v.service.entry.primary(first.member_id,v.room.id);v.service.entry.accept(JSON.parse(fs.readFileSync(card.file,'utf8')));
+  const v=setup(t),start=await v.start({provider:'qwen-desktop',connection_method:'manual_mcp'}),first=v.service.onboarding.state({run_id:start.id});
+  assert.equal(first.stage,'awaiting_handshake');const card=v.service.entry.primary(first.member_id,v.room.id);v.service.entry.accept(JSON.parse(fs.readFileSync(card.file,'utf8')));
   const ready=v.service.onboarding.state({run_id:start.id});assert.equal(ready.stage,'ready_mailbox');assert.equal(ready.ready_for_office,true);assert.equal(ready.can_wake,false);assert.equal(ready.automatic_reply_verified,false);assert.equal(ready.reply_verification,null);
   assert.equal(v.ledger.messages.length,0);assert.equal(v.ledger.sends.length,0);assert.equal(v.service.store.db.prepare('SELECT count(*) AS n FROM onboarding_reply_verifications').get().n,0);
 });
 
 test('a correct mailbox-style tool reply and an unrelated native proof cannot substitute for this owned native check',async t=>{
-  let release;const hold=new Promise(resolve=>{release=resolve;}),v=setup(t,{hold}),start=await v.start();await until(()=>v.ledger.messages.length===1);
+  let release;const hold=new Promise(resolve=>{release=resolve;});t.after(()=>release());const v=setup(t,{hold}),start=await v.start();await until(()=>v.ledger.messages.length===1);
   const pending=v.service.onboarding.state({run_id:start.id}),row=v.service.store.db.prepare('SELECT * FROM onboarding_reply_verifications').get();
   const other=v.service.chat.addMember({name:'unrelated sender',adapter:'mailbox'});v.service.chat.join(v.room.id,other.id);
   v.service.chat.store.post({room_id:v.room.id,sender_id:other.id,text:row.nonce,reply_to:row.message_id,kind:'reply',idempotency_key:'wrong-person-answer'});
@@ -90,7 +91,7 @@ test('a correct mailbox-style tool reply and an unrelated native proof cannot su
   // An own-member MCP response can be legitimate mailbox communication but
   // cannot attest that the automatic executor actually completed this turn.
   const proof=v.service.chat.reply(row.message_id,pending.member_id,row.nonce,'mailbox-tool-answer');
-  v.service.onboarding.advanceVerifications();const mailbox=v.service.onboarding.state({run_id:start.id});assert.equal(mailbox.ready_for_office,false);assert.equal(mailbox.automatic_reply_verified,false);assert.equal(mailbox.reply_verification.status,'waiting');
+  v.service.onboarding.advanceVerifications();const mailbox=v.service.onboarding.state({run_id:start.id});assert.equal(mailbox.ready_for_office,false);assert.equal(mailbox.automatic_reply_verified,false);assert.ok(['waiting','waiting_result'].includes(mailbox.reply_verification.status));
   release();await until(()=>v.service.onboarding.state({run_id:start.id}).ready_for_office);assert.equal(v.ledger.messages.length,1);assert.equal(v.service.chat.store.message(proof.id).sender_id,pending.member_id);
 });
 
@@ -106,7 +107,7 @@ test('an unknown native result survives restart and repeated setup without a dup
 });
 
 test('verification deadline exposes waiting status without cancelling or resubmitting the original turn',async t=>{
-  let release;const hold=new Promise(resolve=>{release=resolve;}),v=setup(t,{hold,timeoutMs:15}),start=await v.start();
+  let release;const hold=new Promise(resolve=>{release=resolve;});t.after(()=>release());const v=setup(t,{hold,timeoutMs:15}),start=await v.start();
   await until(()=>v.service.onboarding.state({run_id:start.id}).reply_verification?.status==='waiting_result');
   const waiting=v.service.onboarding.state({run_id:start.id});assert.equal(waiting.status,'needs_action');assert.equal(waiting.ready_for_office,false);assert.equal(waiting.stage,'verification_pending');assert.equal(v.ledger.messages.length,1);
   release();await until(()=>v.service.onboarding.state({run_id:start.id}).ready_for_office);assert.equal(v.ledger.messages.length,1);
@@ -123,7 +124,7 @@ test('an existing-person explicit desktop connect verifies through HTTP without 
   await v.service.desktop.connect({member_id:member.id,room_id:v.room.id});const again=v.service.onboarding.verifyMember({member_id:member.id,room_id:v.room.id});
   assert.equal(again.id,result.onboarding.id);assert.equal(again.ready_for_office,true);assert.equal(again.reply_verification.message_id,originalMessage);assert.equal(v.ledger.sends.length,1);
   const second=v.service.chat.addRoom({title:'new office room',project_id:v.project.id});v.service.chat.join(second.id,member.id);
-  const moved=v.service.onboarding.verifyMember({member_id:member.id,room_id:second.id});assert.equal(moved.ready_for_office,true);assert.equal(moved.member_id,member.id);assert.equal(moved.reply_verification.message_id,originalMessage);assert.equal(v.ledger.sends.length,1);
+  const moved=v.service.onboarding.verifyMember({member_id:member.id,room_id:second.id});assert.equal(moved.ready_for_office,false);assert.equal(moved.member_id,member.id);assert.notEqual(moved.reply_verification.message_id,originalMessage);await until(()=>v.service.onboarding.state({run_id:moved.id}).ready_for_office);assert.equal(v.ledger.sends.length,2);
 });
 
 for(const lifecycle of ['deleted','left'])test(`a provably unsent check in a ${lifecycle} room does not strand the same person in a new room`,async t=>{
@@ -206,12 +207,24 @@ test('copied verification words or client-supplied marker objects cannot hide or
   }
 });
 
-test('adopting an actual historical business reply preserves both messages as ordinary visible conversation',async t=>{
+test('a historical business reply stays visible but cannot verify a new onboarding attempt',async t=>{
   const v=setup(t),member=v.service.chat.addMember({name:'existing business Qwen',adapter:'mailbox',config:{launch_provider:'qwen-desktop'}});v.service.chat.join(v.room.id,member.id);
   await v.service.desktop.connect({member_id:member.id,room_id:v.room.id,provider:'qwen-desktop'});
   const question=v.service.chat.store.post({room_id:v.room.id,sender_id:'user',to_member_id:member.id,text:'保留这条真实业务问题。',idempotency_key:'business-proof'});
   const answer=v.service.chat.reply(question.id,member.id,'保留这条真实业务回答。','business-answer');
   v.service.desktop.observe(member.id,'model_reply',{message_id:question.id,turn_id:'business-turn',source:'native_correlated_final_reply'});
-  const adopted=v.service.onboarding.verifyMember({member_id:member.id,room_id:v.room.id});assert.equal(adopted.ready_for_office,true);assert.equal(adopted.reply_verification.message_id,question.id);assert.equal(v.ledger.sends.length,0);
+  const adopted=v.service.onboarding.verifyMember({member_id:member.id,room_id:v.room.id});assert.equal(adopted.ready_for_office,false);assert.notEqual(adopted.reply_verification.message_id,question.id);await until(()=>v.service.onboarding.state({run_id:adopted.id}).ready_for_office);assert.equal(v.ledger.sends.length,1);
   for(const message of [question,answer]){const visible=v.service.chat.store.message(message.id);assert.equal(visible.connection_verification,undefined);assert.equal(visible.text,message.text);}
+});
+test('a reused managed person in a new room waits for that run own reply verification',async t=>{
+  const v=setup(t),first=await v.start();await until(()=>v.service.onboarding.state({run_id:first.id}).ready_for_office);const original=v.service.onboarding.state({run_id:first.id}),memberCount=v.service.chat.store.members().length;
+  const oldBinding=v.service.chat.store.binding(v.room.id,original.member_id),cards=v.service.resume.credentials(original.member_id),room=v.service.chat.addRoom({project_id:v.project.id,title:'fresh managed attempt'}),next=v.service.onboarding.start({room_id:room.id,provider:'codex',target_member_id:original.member_id});assert.equal(next.ready_for_office,false);assert.notEqual(next.id,first.id);await Promise.all([...v.service.onboarding.jobs.values()]);await until(()=>v.service.onboarding.state({run_id:next.id}).ready_for_office);
+  const ready=v.service.onboarding.state({run_id:next.id});assert.equal(ready.member_id,original.member_id);assert.equal(ready.reply_verification.run_id,next.id);assert.equal(ready.reply_verification.current_attempt,true);assert.notEqual(ready.reply_verification.message_id,original.reply_verification.message_id);assert.equal(v.ledger.messages.length,2);assert.equal(v.ledger.handshakes,2);assert.equal(v.service.chat.store.members().length,memberCount);assert.deepEqual(v.service.chat.store.binding(v.room.id,original.member_id),oldBinding);assert.deepEqual(v.service.resume.credentials(original.member_id),cards);
+});
+test('a reused managed attempt observes an earlier uncertain turn and active owner before its new room handshake',async t=>{
+  const options={failure:'outcome_uncertain'},v=setup(t,options),first=await v.start();await until(()=>v.service.onboarding.state({run_id:first.id}).reply_verification?.status==='uncertain');const original=v.service.onboarding.state({run_id:first.id}),room=v.service.chat.addRoom({project_id:v.project.id,title:'wait for the original managed turn'});
+  const next=v.service.onboarding.start({provider:'codex',room_id:room.id,target_member_id:original.member_id});await Promise.all([...v.service.onboarding.jobs.values()]);const pending=v.service.onboarding.state({run_id:next.id});assert.equal(pending.stage,'awaiting_previous_result');assert.equal(pending.ready_for_office,false);assert.equal(pending.reply_verification.message_id,original.reply_verification.message_id);assert.equal(v.ledger.handshakes,1);assert.equal(v.ledger.messages.length,1);
+  const retry=v.service.onboarding.retry({run_id:next.id});assert.equal(retry.id,next.id);assert.equal(v.ledger.handshakes,1);assert.equal(v.ledger.messages.length,1);
+  options.failure=null;v.service.chat.active.set(original.member_id,{messageId:original.reply_verification.message_id,roomId:v.room.id,abort:new AbortController()});v.service.chat.store.updateMessage(original.reply_verification.message_id,{status:'completed'});v.service.onboarding.advanceVerifications();assert.equal(v.ledger.handshakes,1);assert.equal(v.ledger.messages.length,1);
+  v.service.chat.active.delete(original.member_id);v.service.onboarding.advanceVerifications();await until(()=>v.service.onboarding.state({run_id:next.id}).ready_for_office);const ready=v.service.onboarding.state({run_id:next.id});assert.equal(ready.reply_verification.current_attempt,true);assert.notEqual(ready.reply_verification.message_id,original.reply_verification.message_id);assert.equal(v.ledger.handshakes,2);assert.equal(v.ledger.messages.length,2);assert.equal(v.service.chat.store.message(original.reply_verification.message_id).status,'completed');
 });
