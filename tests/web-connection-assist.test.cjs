@@ -33,6 +33,26 @@ test('manual fallback escapes every display field and attributes the dialogue to
 test('historical ready assist metadata cannot announce connection before current attempt acceptance',()=>{
   const f=fixture();for(const value of [false,undefined]){f.context.history.connection_assists=[f.assist({status:'ready',can_wake:true,ready_for_office:value})];assert.doesNotMatch(f.render(),/已自动接通|本人入口已接通|已加入办公室，沿用已有连接/);}
 });
+test('connection repair overrides old ready, managed, handoff and reauthorization cards with one protected progress action',()=>{
+  for(const action_kind of ['ready','managed','manual_handoff','reauthorize','connection_repair']){
+    const f=fixture(),item=f.assist({provider:'codex',status:'ready',stage:'connection_repair_required',action_kind,ready_for_office:true,can_wake:true,reused_connection:true,run_id:'protected-run',recovery_action:{operation:'retry'},summary:'OLD SUCCESS',next_step:'OPEN LOGIN AGAIN',error:'OLD LOGIN ERROR'});f.context.history.connection_assists=[item];
+    const html=f.render();assert.match(html,/连接已暂停 · 保护桌面登录/);assert.match(html,/原人物、聊天和 MCP 配置都保留/);assert.match(html,/data-assist-open="assist">查看保护进度/);
+    assert.doesNotMatch(html,/data-assist-(?:copy|document|check|continue|reauthorize)|已自动接通|本人入口已接通|已加入办公室|由 AO 自动接入|OLD SUCCESS|OPEN LOGIN AGAIN|OLD LOGIN ERROR|C:\\AO|请读取/);
+    assert.equal((html.match(/<button /g)||[]).length,1);
+  }
+  for(const extra of [{action_kind:'connection_repair'},{error_code:'codex_auth_ownership_required'},{error_code:'codex_personal_auth_owner_conflict'}]){
+    const f=fixture();f.context.history.connection_assists=[f.assist({status:'ready',stage:'awaiting_auth',can_wake:true,action_kind:'ready',...extra})];assert.match(f.render(),/连接已暂停 · 保护桌面登录/);assert.doesNotMatch(f.render(),/已自动接通/);
+  }
+});
+test('stale repair-card controls cannot copy, refresh, reauthorize, retry or download any data',async()=>{
+  for(const action_kind of ['ready','managed','reauthorize','manual_handoff','connection_repair']){
+    const f=fixture(),item=f.assist({provider:'codex',stage:'connection_repair_required',action_kind,run_id:'protected-run',status:'ready',ready_for_office:true,can_wake:true,recovery_action:{operation:'reauthorize',provider:'codex',room_id:'room',target_member_id:'target'}});f.context.history.connection_assists=[item];
+    for(const field of ['assistCopy','assistDocument','assistCheck','assistContinue','assistReauthorize']){
+      await f.action({[field]:item.id});await f.action({[field]:item.id,assistOpen:item.id});
+    }
+    assert.deepEqual(f.calls.api,[]);assert.deepEqual(f.calls.copy,[]);assert.equal(f.calls.refresh,0);assert.deepEqual(f.calls.anchors,[]);
+  }
+});
 test('real Grok metadata offers the selected person guide and keeps errors and local paths inside closed diagnostics',async()=>{
   const f=fixture(),opened=[];Object.assign(f.members[1],{name:'指定的 Grok Bot',adapter:'grok-bridge',provider:'grok-bot'});f.context.showMemberSetup=async id=>opened.push(id);
   const item=f.assist({provider:'grok-bot',name:'Grok Bot',target_member_id:'target',target_window:'已有 Grok Bot 对话',next_step:'把说明发给这位 Bot，确认一次电脑授权。',error:'needs_external_entry desktop_session_missing',document_path:'C:\\AO\\private-path.md'});f.context.history.connection_assists=[item];
@@ -88,6 +108,10 @@ test('managed recovery uses the same scoped onboarding run and refuses foreign j
   }
   const f=recoveryFixture(),item=f.assist({provider:'codex',action_kind:'managed',run_id:'owned-run',recovery_action:{operation:'retry'}});f.context.history.connection_assists=[item];f.context.api=async(...args)=>{f.calls.api.push(args);return{id:'owned-run',room_id:'room',provider:'codex',member_id:'target',status:args.length===1?'needs_action':'running'};};
   assert.match(f.render(),/data-assist-continue/);await f.action({assistContinue:item.id});assert.deepEqual(plain(f.calls.api),[['/api/onboarding/jobs/owned-run'],['/api/onboarding/jobs/owned-run/retry',{}]]);assert.equal(f.context.onboardingJobs.get('owned-run').member_id,'target');
+});
+test('a managed card cannot retry when its read-only job observation reveals connection ownership protection',async()=>{
+  const f=recoveryFixture(),item=f.assist({provider:'codex',action_kind:'managed',run_id:'protected-run',recovery_action:{operation:'retry'}});f.context.history.connection_assists=[item];f.context.api=async(...args)=>{f.calls.api.push(args);return{id:item.run_id,room_id:'room',provider:'codex',member_id:'target',status:'needs_action',stage:'connection_repair_required',error_code:'codex_auth_ownership_required'};};
+  await f.action({assistContinue:item.id});assert.deepEqual(plain(f.calls.api),[['/api/onboarding/jobs/protected-run']]);assert.equal(f.calls.refresh,1);assert.equal(f.context.onboardingJobs.size,0);
 });
 test('notification receipt wording distinguishes actual delivery from model execution and manual-only connections',()=>{
   const f=fixture();Object.assign(f.context,{state:{chat:{activeMessages:[]}},webConnected:true,roomApprovals:()=>[]});Object.assign(f.members[1],{provider:'grok-bot',adapter:'grok-bridge',can_notify:true,manual_wake:true});
@@ -147,4 +171,12 @@ test('opening interrupted setup reads its exact existing job and renders progres
   await f.action({assistOpen:item.id});
   assert.deepEqual(plain(f.calls.api),[[`/api/onboarding/jobs/${encodeURIComponent(item.run_id)}`]]);assert.equal(f.context.onboardingJobs.get(job.id),job);assert.deepEqual(views,[false]);assert.equal(rendered,1);assert.deepEqual(plain(scrolls),[{block:'nearest',behavior:'smooth'}]);assert.equal(f.calls.refresh,0);assert.deepEqual(f.calls.copy,[]);assert.deepEqual(f.calls.anchors,[]);
   item.run_id=null;f.context.onboardingJobs.clear();await f.action({assistOpen:item.id});assert.equal(f.calls.api.length,1,'missing jobs can show setup choices without creating a replacement run');assert.equal(f.context.onboardingJobs.size,0);assert.equal(rendered,2);
+});
+test('opening protected progress reads only its owned run and keeps stale ready data behind the repair gate',async()=>{
+  const f=fixture(),item=f.assist({provider:'codex',status:'ready',action_kind:'ready',stage:'connection_repair_required',error_code:'codex_personal_auth_owner_conflict',run_id:'protected/run'}),views=[],scrolls=[],job={id:item.run_id,room_id:'room',provider:'codex',member_id:'target',status:'ready',stage:'ready_automatic',can_wake:true,ready_for_office:true,next_actions:[{operation:'login_client'},{operation:'retry'}]};let renders=0,memberSetups=0;
+  Object.assign(f.context,{onboardingJobs:new Map(),onboardingView:value=>value.job||value,setProfessionalView:value=>views.push(value),renderLaunch:()=>{renders++;},showMemberSetup:()=>{memberSetups++;},$:id=>{assert.equal(id,'onboarding-progress');return{scrollIntoView:value=>scrolls.push(value)};}});
+  f.context.history.connection_assists=[item];f.context.api=async(...args)=>{f.calls.api.push(args);return{job};};await f.action({assistOpen:item.id});
+  assert.deepEqual(plain(f.calls.api),[['/api/onboarding/jobs/protected%2Frun']]);assert.equal(memberSetups,0);assert.equal(f.calls.refresh,0);assert.deepEqual(views,[false]);assert.equal(renders,1);assert.equal(scrolls.length,1);
+  const displayed=f.context.onboardingJobs.get(job.id);assert.equal(displayed.stage,'connection_repair_required');assert.equal(displayed.ready_for_office,false);assert.equal(displayed.can_wake,false);assert.deepEqual(plain(displayed.next_actions),[]);assert.equal(job.stage,'ready_automatic','the observed server payload is not mutated');
+  f.context.onboardingJobs.clear();job.room_id='foreign';await f.action({assistOpen:item.id});assert.equal(f.context.onboardingJobs.size,0);assert.equal(renders,1,'a foreign observation cannot replace protected progress');
 });

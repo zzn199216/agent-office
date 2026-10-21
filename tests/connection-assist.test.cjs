@@ -43,13 +43,12 @@ function setup(t,options={}){
 function counts(v){const db=v.service.store.db;return {members:db.prepare('SELECT count(*) n FROM chat_members').get().n,credentials:db.prepare('SELECT count(*) n FROM chat_resume_credentials').get().n,runs:db.prepare('SELECT count(*) n FROM onboarding_runs').get().n,assists:db.prepare('SELECT count(*) n FROM connection_assists').get().n};}
 function cloneRun(v,runId,fields={}){const row={...v.service.onboarding.row(runId),id:id(),...fields},keys=Object.keys(row);v.service.store.db.prepare(`INSERT INTO onboarding_runs(${keys.join(',')}) VALUES(${keys.map(key=>':'+key).join(',')})`).run(row);return row;}
 
-test('an original auth failure card follows a verified explicit retry for the same person without changing its durable source',async t=>{
+test('a Codex authentication protection card cannot turn into a login retry or success when the fixture later reports signed in',async t=>{
   const v=setup(t);let signedIn=false;v.service.chat.options.clientFactory=member=>{const client=new HandshakeFixture(member,v.service,v.calls.native),run=client.run.bind(client);client.run=input=>signedIn?run(input):Promise.reject(Object.assign(Error('后台 Codex 尚未登录。'),{code:'codex_login_required'}));return client;};
-  const message=v.message('连接 Codex');v.manager.begin(message);const [original]=await v.finish();assert.equal(original.stage,'awaiting_auth');signedIn=true;
-  const retry=v.service.onboarding.retry({run_id:original.run_id});assert.notEqual(retry.id,original.run_id);await Promise.all([...v.service.onboarding.jobs.values()]);
-  const deadline=Date.now()+3000;let verified;do{v.service.onboarding.advanceVerifications();verified=v.service.onboarding.state({run_id:retry.id});if(verified.ready_for_office)break;await sleep(10);}while(Date.now()<deadline);assert.equal(verified.ready_for_office,true);assert.equal(verified.member_id,original.target_member_id);
-  const before=counts(v),revision=v.service.revision,card=v.manager.snapshotForMessage(message.id)[0];assert.equal(card.run_id,retry.id);assert.equal(card.ready_for_office,true);assert.equal(card.action_kind,'ready');assert.equal(card.target_member_id,original.target_member_id);assert.equal(v.manager.row(card.id).run_id,original.run_id);
-  assert.match(await v.manager.prepareContext(message.id),/"connection_ready":true/);assert.deepEqual(counts(v),before);assert.equal(v.service.revision,revision);
+  const message=v.message('连接 Codex');v.manager.begin(message);const [original]=await v.finish();assert.equal(original.stage,'connection_repair_required');signedIn=true;
+  const before=counts(v),calls=v.calls.native.length,retry=v.service.onboarding.retry({run_id:original.run_id});assert.equal(retry.id,original.run_id);v.service.onboarding.advanceVerifications();await Promise.all([...v.service.onboarding.jobs.values()]);
+  const revision=v.service.revision,card=v.manager.snapshotForMessage(message.id)[0];assert.equal(card.run_id,original.run_id);assert.equal(card.ready_for_office,false);assert.equal(card.action_kind,'connection_repair');assert.equal(card.recovery_action,null);assert.equal(card.target_member_id,original.target_member_id);assert.equal(v.manager.row(card.id).run_id,original.run_id);
+  assert.match(card.summary,/保护已登录的 Codex/);assert.match(card.next_step,/无需重复登录或重新配置 MCP/);assert.match(await v.manager.prepareContext(message.id),/"connection_ready":false/);assert.deepEqual(counts(v),before);assert.equal(v.calls.native.length,calls);assert.equal(v.service.revision,revision);
 });
 
 test('successor cards follow the latest exact identity attempt and reject newer other-room provider or same-name people',async t=>{
