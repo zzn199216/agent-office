@@ -17,7 +17,7 @@ function fixture({provider='qwen-desktop',adapter='mcp',evidence={},verifiedAt='
     api:async(route,body)=>{calls.push({route,body});return body?{}:{member,client};}
   });
   context.memberById=id=>context.state.chat.members.find(item=>item.id===id);
-  vm.runInContext(section('const escape =','const time =')+section('function nativeConnectionUnavailable(', 'function memberPresence(')+section('function nativeDesktopProvider(', 'function launchSelectable(')+
+  vm.runInContext(section('const escape =','const time =')+section('function nativeConnectionUnavailable(', 'function memberPresence(')+section('function onboardingRepairRequired(', 'function onboardingReady(')+section('function nativeDesktopProvider(', 'function launchSelectable(')+
     section('function onboardingView(', 'function roomUsesGrok(')+section('async function connectMember(', 'function updateRecipientNote(')+
     section("$('member-setup-content').onclick =", "$('member-grok-form').onsubmit")+
     section("$('member-connect-guide').onclick =", "$('member-copy-entry').onclick"),context);

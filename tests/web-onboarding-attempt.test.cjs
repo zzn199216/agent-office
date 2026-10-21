@@ -17,7 +17,7 @@ function fixture(overrides={}){
     renderLaunch(){context.renderOnboarding();const active=context.onboardingJobs.get(context.secretaryConnectJob);$('secretary-connect-progress').innerHTML=active?context.onboardingJobMarkup(active):'';},
     setApprovalMarkup:(element,html)=>{element.innerHTML=html;},refresh:async()=>events.push('refresh'),refreshOnboarding:async()=>events.push('poll'),refreshLaunch:async()=>context.renderLaunch(),
     returnSecretaryAfterOnboarding:()=>{completions.push(context.secretaryNavigation?.jobId);},action:callback=>callback(),setTimeout:()=>0,
-    rememberSelection:()=>events.push('remember'),setReply:value=>events.push(['reply',value]),setProfessionalView:value=>events.push(['workspace',value]),showMemberSetup:async id=>events.push(['setup',id]),
+    rememberSelection:()=>events.push('remember'),setReply:value=>events.push(['reply',value]),setProfessionalView:value=>events.push(['workspace',value]),showMemberSetup:async id=>events.push(['setup',id]),openSecretaryTutorial:()=>events.push('secretary-picker'),
     api:async(route,body)=>{calls.push({route,body});return{...job};}
   });
   vm.runInContext(section('function launchProvider(', 'const providerDocs')+section('function onboardingCanInstall(', 'function renderLaunch()')+section('function onboardingView(', 'function roomUsesGrok(')+section('function onboardingJobMarkup(', 'async function refreshOnboarding()')+section('async function checkOnboarding(', 'function onboardingProgressTarget()'),context);
@@ -128,4 +128,41 @@ test('fixed Grok scope offers the existing room without rebinding or producing c
   const f=fixture({provider:'grok-bot',stage:'fixed_proxy_scope',next_actions:[{operation:'open_fixed_room',room_id:'fixed',target_member_id:'member'}]});assert.match(f.context.onboardingActionMarkup(f.job),/查看原房间连接/);
   await f.context.runOnboardingOperation(f.job,'open_fixed_room');assert.equal(f.context.roomId,'fixed');assert.equal(f.context.projectId,'original-project');assert.equal(f.calls.length,0);assert.equal(f.$('secretary-connect-dialog').open,false);assert.ok(f.events.some(value=>Array.isArray(value)&&value[0]==='setup'&&value[1]==='member'));
   const missing=fixture({provider:'grok-bot',next_actions:[{operation:'open_fixed_room',room_id:'removed',target_member_id:'member'}]});await assert.rejects(missing.context.runOnboardingOperation(missing.job,'open_fixed_room'),/原房间暂不可用/);assert.equal(missing.$('secretary-connect-dialog').open,true);assert.equal(missing.calls.length,0);
+});
+test('current picker action is revealed once per attempt stage without chasing routine polls',()=>{
+  const f=fixture(),scrolls=[],node={scrollIntoView:value=>scrolls.push(value)};f.$('secretary-connect-progress').querySelector=selector=>selector==='.onboarding-action'?node:null;
+  assert.equal(f.context.revealOnboardingAction(f.job),true);assert.equal(scrolls.length,1);assert.equal(scrolls[0].block,'nearest');
+  for(let index=0;index<4;index++){f.job.updated='poll-'+index;f.context.revealOnboardingAction(f.job);}assert.equal(scrolls.length,1,'timestamps and unchanged status must not seize user scroll');
+  f.job.stage='awaiting_native_desktop';f.context.revealOnboardingAction(f.job);assert.equal(scrolls.length,2);
+  f.job.stage='awaiting_auth';f.context.revealOnboardingAction(f.job);assert.equal(scrolls.length,2,'returning to an already shown stage does not scroll again');
+  f.job.next_actions=[{operation:'reauthorize',target_member_id:'member'}];f.context.revealOnboardingAction(f.job);assert.equal(scrolls.length,3,'an actually different next step is revealed');
+  const replacement={...f.job,id:'replacement'};f.flow.jobId=replacement.id;f.context.revealOnboardingAction(replacement);assert.equal(scrolls.length,4);
+});
+test('read-only polling never reveals an old, foreign or unselected connection action',()=>{
+  const f=fixture(),scrolls=[];f.$('secretary-connect-progress').querySelector=()=>({scrollIntoView:()=>scrolls.push(true)});
+  assert.equal(f.context.revealOnboardingAction({...f.job,id:'historical'}),false);f.job.status='running';assert.equal(f.context.revealOnboardingAction(f.job),false);
+  f.job.status='needs_action';f.context.roomId='different';assert.equal(f.context.revealOnboardingAction(f.job),false);
+  f.context.roomId='room';f.context.secretaryNavigation=null;assert.equal(f.context.revealOnboardingAction(f.job),false);
+  f.context.secretaryNavigation=f.flow;f.$('secretary-connect-dialog').open=false;assert.equal(f.context.revealOnboardingAction(f.job),false);assert.equal(scrolls.length,0);
+});
+test('one identical connection reason is rendered once across detail, action feedback and error fields',()=>{
+  const f=fixture({detail:'本人的连接没有开启，请先开启客户端连接。',error:'本人的连接没有开启，请先开启客户端连接。'});
+  f.context.onboardingFeedback.set(f.job.id,{message:f.job.error,error:true,pending:false});const html=f.context.onboardingJobMarkup(f.job);
+  assert.equal(html.split(f.job.error).length-1,1);assert.doesNotMatch(html,/class="onboarding-job-error"/);
+  f.job.error='另一个独立的连接失败原因';assert.match(f.context.onboardingJobMarkup(f.job),/另一个独立的连接失败原因/,'distinct causes remain visible');
+});
+test('connection ownership repair blocks historical ready, login links and stale automatic retry actions',async()=>{
+  const f=fixture({stage:'connection_repair_required',status:'ready_automatic',ready_for_office:true,can_wake:true,next_actions:[{operation:'login_client',url:'https://login.example.test/'},{operation:'retry'},{operation:'install_runtime'}]});
+  assert.equal(f.context.onboardingOfficeReady(f.job),false);const html=f.context.onboardingJobMarkup(f.job);assert.match(html,/连接已暂停 · 保护桌面登录/);assert.match(html,/原人物、聊天和连接配置均已保留/);assert.doesNotMatch(html,/onboarding-job ready|data-onboarding-operation="(?:login_client|retry|install_runtime)"|https:\/\/login|打开首次配置/);
+  for(const operation of ['login_client','retry','install_runtime'])await f.context.runOnboardingOperation(f.job,operation);
+  assert.equal(f.calls.length,0,'stale controls never open login or mutate the protected connection');
+  for(const error_code of ['codex_auth_ownership_required','codex_personal_auth_owner_conflict'])assert.equal(f.context.onboardingOfficeReady({...f.job,stage:'awaiting_auth',error_code}),false);
+});
+test('an ownership repair observation is read-only and cannot turn its old managed job into a retry',async()=>{
+  const f=fixture();f.context.api=async(route,body)=>{f.calls.push({route,body});return{...f.job,status:'needs_action',stage:'connection_repair_required',error_code:'codex_auth_ownership_required',next_actions:[{operation:'show_connection_repair'},{operation:'choose_connected_member'}]};};
+  await f.context.checkOnboarding(f.job.id);assert.equal(f.calls.length,1);assert.equal(f.calls[0].body,undefined);assert.match(f.$('secretary-connect-progress').innerHTML,/保护桌面登录/);assert.doesNotMatch(f.$('secretary-connect-progress').innerHTML,/data-onboarding-check|打开首次配置|配置完成后继续接入/);
+});
+test('repair state can return to existing secretary choices without writing configuration or creating another member',async()=>{
+  const f=fixture({stage:'connection_repair_required',next_actions:[{operation:'show_connection_repair'},{operation:'choose_connected_member'}]});assert.match(f.context.onboardingActionMarkup(f.job),/选择其他已接通成员/);
+  await f.context.runOnboardingOperation(f.job,'choose_connected_member');assert.equal(f.calls.length,0);assert.ok(f.events.includes('secretary-picker'));assert.equal(f.context.secretaryNavigation,null);assert.equal(f.context.secretaryConnectJob,null);assert.equal(f.$('secretary-connect-dialog').open,false);
 });

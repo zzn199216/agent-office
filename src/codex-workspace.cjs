@@ -32,6 +32,8 @@ function workspaceConfig(config={}){const values=Object.entries(config).filter((
 // A conservative false positive only leaves the independent config unchanged.
 function hasWindowsConfig(source){return /\bwindows\b/i.test(source)||/\\[uU][a-fA-F0-9]{4}/.test(source);}
 function workspaceOwner(state,legacyHome){return state?.schema==='agentoffice.codex-workspace'&&state.version===1&&typeof state.prepared==='boolean'&&typeof state.legacy_home==='string'&&path.isAbsolute(state.legacy_home)&&same(state.legacy_home,legacyHome);}
+function entryExists(file){try{fs.lstatSync(file);return true;}catch(error){if(error.code==='ENOENT')return false;throw error;}}
+function readWorkspaceMarker(file,home){regular(file,home);try{return JSON.parse(fs.readFileSync(file,'utf8'));}catch{throw new RoomError('后台协作目录身份标记无法核对，原记录已保留。',409,'codex_workspace_owner');}}
 async function preserveWindowsSandbox(home,marker,state,markerBytes,readConfig,assertHome){
   assertHome();
   const configFile=path.join(home,'config.toml');
@@ -61,13 +63,28 @@ class CodexWorkspace{
   constructor(dir,options={}){
     this.home=path.resolve(dir,'codex');let origin;
     const marker=path.join(this.home,'agentoffice-workspace.json');
-    if(!options.legacyHome&&fs.existsSync(marker)){regular(marker,this.home);const record=JSON.parse(fs.readFileSync(marker,'utf8'));if(record.schema==='agentoffice.codex-workspace'&&record.version===1&&typeof record.legacy_home==='string'&&path.isAbsolute(record.legacy_home))origin=record.legacy_home;}
+    if(!options.legacyHome&&entryExists(marker)){const record=readWorkspaceMarker(marker,this.home);if(record.schema==='agentoffice.codex-workspace'&&record.version===1&&typeof record.legacy_home==='string'&&path.isAbsolute(record.legacy_home))origin=record.legacy_home;}
     // MCP/CLI recovery inherits this private CODEX_HOME. Recover the original
     // source from our marker instead of treating it as a new personal home.
     this.legacyHome=path.resolve(options.legacyHome||origin||process.env.CODEX_HOME||path.join(process.env.USERPROFILE||os.homedir(),'.codex'));
     if(same(this.home,this.legacyHome))throw new RoomError('后台协作目录不能使用个人 Codex 保存目录。',409,'codex_workspace_shared');
   }
+  assertAuthenticationOwner(){
+    if(!entryExists(this.home))return;
+    if(!fs.lstatSync(this.home).isDirectory()||fs.lstatSync(this.home).isSymbolicLink())throw new RoomError('后台协作保存目录不能是链接。',409,'codex_workspace_path');
+    if(fs.existsSync(this.legacyHome)&&same(fs.realpathSync.native(this.home),fs.realpathSync.native(this.legacyHome)))throw new RoomError('后台协作目录不能使用个人 Codex 保存目录。',409,'codex_workspace_shared');
+    const marker=path.join(this.home,'agentoffice-workspace.json');let state;
+    if(entryExists(marker)){
+      state=readWorkspaceMarker(marker,this.home);
+      if(!workspaceOwner(state,this.legacyHome))throw new RoomError('后台协作目录身份不匹配。',409,'codex_workspace_owner');
+    }
+    // A copied rotating login is not an independent identity. Do not read its
+    // bytes, refresh it, replace it, or infer ownership from timestamps. Until
+    // a single-owner authorization flow exists, file-backed logins stay paused.
+    if(state?.credential_seeded===true||entryExists(path.join(this.home,'auth.json')))throw new RoomError('为保护已登录的 Codex，AO 已暂停这条后台连接。原聊天和成员已保留；请勿重复登录或复制登录文件。',409,'codex_auth_ownership_required');
+  }
   async prepare(readConfig){
+    this.assertAuthenticationOwner();
     const preparationKey=process.platform==='win32'?this.home.toLowerCase():this.home;
     if(preparations.has(preparationKey))return preparations.get(preparationKey);
     const pending=(async()=>{
@@ -79,16 +96,14 @@ class CodexWorkspace{
       else{if(fs.readdirSync(this.home).length)throw new RoomError('后台协作目录已有未登记文件，请核对保存位置。',409,'codex_workspace_owner');atomicWrite(marker,JSON.stringify({schema:'agentoffice.codex-workspace',version:1,prepared:false,legacy_home:this.legacyHome}));}
       const markerBytes=fs.readFileSync(marker,'utf8');
       const config=await readConfig();
+      this.assertAuthenticationOwner();
       assertHome();regular(marker,this.home);
       if(fs.readFileSync(marker,'utf8')!==markerBytes)throw new RoomError('后台协作目录在检查期间发生变化，未生成配置。',409,'codex_workspace_owner');
       const configFile=path.join(this.home,'config.toml');
       if(fs.existsSync(configFile))regular(configFile,this.home);
       else try{fs.writeFileSync(configFile,workspaceConfig(config),{flag:'wx',mode:0o600});}catch(error){if(error.code!=='EEXIST')throw error;regular(configFile,this.home);}
-      // An opaque, one-time seed of file-backed CLI auth. Never sync it back or
-      // overwrite an independent login/refresh, and never return its contents.
-      const original=path.join(this.legacyHome,'auth.json'),target=path.join(this.home,'auth.json');let seeded=false;
-      if(!fs.existsSync(target)&&fs.existsSync(original)){regular(original,this.legacyHome);const bytes=fs.readFileSync(original);try{fs.writeFileSync(target,bytes,{flag:'wx',mode:0o600});seeded=true;}catch(error){if(error.code!=='EEXIST')throw error;}}
-      atomicWrite(marker,JSON.stringify({schema:'agentoffice.codex-workspace',version:1,prepared:true,legacy_home:this.legacyHome,credential_seeded:seeded,windows_sandbox_checked:true,created:new Date().toISOString()}));return this.home;
+      // Never seed, sync, or replace personal credentials in a private HOME.
+      atomicWrite(marker,JSON.stringify({schema:'agentoffice.codex-workspace',version:1,prepared:true,legacy_home:this.legacyHome,credential_seeded:false,authentication_policy:'no-personal-credential-copy-v1',windows_sandbox_checked:true,created:new Date().toISOString()}));return this.home;
     })();preparations.set(preparationKey,pending);
     try{return await pending;}finally{preparations.delete(preparationKey);}
   }

@@ -64,6 +64,10 @@ class OnboardingActions{
     const opening=this.openLogin(job);this.opening.set(job.id,opening);try{return await opening;}finally{this.opening.delete(job.id);}
   }
   async openLogin(job){
+    // Reject unsupported authentication ownership before reusing a terminal,
+    // probing its identity, creating receipts, or launching another login.
+    let environment=process.env;
+    if(job.provider==='codex'){const client=memberClient(this.service,job);environment=await bounded(client.authenticationEnvironment({purpose:'login'}),10000,'client_login_open_timeout');}
     const identity=this.options.processIdentity||processIdentity,prior=this.terminals.get(job.id);
     if(prior){
       const current=await bounded(identity(prior.pid),3000,'client_login_open_timeout'),receipt=prior.receipt_file?readReceipt(prior.receipt_file):null;
@@ -78,9 +82,7 @@ class OnboardingActions{
     const command=shellCommand(cli.executable,[...cli.args,...(job.provider==='claude-code'?['auth','login']:job.provider==='codex'?['login']:[])],'win32');
     const nonce=crypto.randomUUID(),receipt_file=path.join(fs.mkdtempSync(path.join(os.tmpdir(),'agentoffice-login-')),'receipt.json');
     const script=`$ErrorActionPreference='Stop';$receiptFile=${psLiteral(receipt_file)};$nonce=${psLiteral(nonce)};function Write-LoginReceipt($phase,$code){$p=Get-Process -Id $PID;$r=@{nonce=$nonce;pid=$PID;process_identity=$p.StartTime.ToUniversalTime().Ticks.ToString();phase=$phase;exit_code=$code};$tmp=$receiptFile+'.tmp';[IO.File]::WriteAllText($tmp,($r|ConvertTo-Json -Compress));if([IO.File]::Exists($receiptFile)){[IO.File]::Replace($tmp,$receiptFile,$null)}else{[IO.File]::Move($tmp,$receiptFile)}};try{if([Console]::IsInputRedirected -or [Console]::IsOutputRedirected){throw 'Interactive console unavailable'};$Host.UI.RawUI.WindowTitle='AgentRoom - ${job.provider} 首次配置';Write-Host '完成 AO 后台的独立登录或配置后，返回 AgentRoom 点击继续接入。';Write-LoginReceipt 'ready' $null;${command};$code=$LASTEXITCODE;if($null -eq $code){$code=0};if($code -eq 0){Write-LoginReceipt 'completed' 0}else{Write-LoginReceipt 'failed' $code}}catch{try{Write-LoginReceipt 'failed' -1}catch{};Write-Host '首次配置没有完成，请返回 AgentRoom 重试。'}`;
-    let environment=process.env;
     try{
-      if(job.provider==='codex'){const client=memberClient(this.service,job);environment=await bounded(client.authenticationEnvironment(),10000,'client_login_open_timeout');}
       const request={command:'powershell.exe',args:['-NoProfile','-NoExit','-EncodedCommand',Buffer.from(script,'utf16le').toString('base64')],nonce,receipt_file,options:{env:environment,cwd:fs.existsSync(project.path)?project.path:path.dirname(cli.executable),windowsHide:false,detached:false,shell:false,stdio:'inherit'}};
       const launched=await bounded(this.options.launcher?this.options.launcher(request):launchInteractive(request,this.options),12000,'client_login_open_timeout');
       if(!receiptMatches(launched,nonce)||launched.phase==='failed')throw loginError();

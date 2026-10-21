@@ -63,6 +63,99 @@ async function completed(v,input={}){
 }
 function verifyDesktop(v,state){const member=v.members.get(state.member_id);member.status='ready';member.verified_at=now();v.db.prepare("UPDATE chat_resume_credentials SET status='active',last_seen=? WHERE member_id=? AND room_id=?").run(now(),member.id,state.room_id);}
 
+const CODEX_REPAIR_MESSAGE='为保护已登录的 Codex，AO 已暂停这条后台连接。原聊天和成员已保留。';
+function assertCodexRepair(state,code='codex_auth_ownership_required'){
+  assert.equal(state.status,'needs_action');assert.equal(state.stage,'connection_repair_required');assert.equal(state.error_code,code);
+  assert.equal(state.error,CODEX_REPAIR_MESSAGE);assert.equal(state.detail,CODEX_REPAIR_MESSAGE);
+  for(const key of ['ready_for_office','local_verified','can_wake','protocol_verified','model_reply_verified','automatic_reply_verified','runner_ready','native_conversation_loaded'])assert.equal(state[key],false,key);
+  assert.deepEqual(state.next_actions.map(item=>item.operation),['show_connection_repair','choose_connected_member']);
+  assert.equal(JSON.stringify(state).includes('login_client'),false);assert.equal(state.next_actions.some(item=>['retry','reauthorize','install_runtime','refresh'].includes(item.operation)),false);
+}
+
+test('Codex ownership protection stops preparation and repeated attempts without requesting another login',async t=>{
+  for(const code of ['codex_auth_ownership_required','codex_personal_auth_owner_conflict']){
+    const v=setup(t,{runtimeInstaller:async()=>{throw new Error('must not install');}});
+    v.service.codex={authOwnershipStatus:()=>({blocked:true,code,message:'private details must not be exposed'})};
+    const first=v.manager.start({provider:'codex',room_id:v.room.id,install_runtime:true,install_client:true});assertCodexRepair(first,code);
+    const changes=v.changes;
+    assertCodexRepair(v.manager.state({run_id:first.id}),code);
+    const repeated=v.manager.start({provider:'codex',room_id:v.room.id,install_runtime:true});assert.equal(repeated.id,first.id);assert.equal(repeated.reused,true);assertCodexRepair(repeated,code);
+    const retry=v.manager.retry({run_id:first.id,install_runtime:true});assert.equal(retry.id,first.id);assertCodexRepair(retry,code);
+    await Promise.resolve();assert.equal(v.manager.jobs.size,0);assert.equal(v.calls.length,0);assert.equal(v.scans,0);assert.equal(v.runtimes.length,0);assert.equal(v.members.size,0);
+    assert.equal(v.db.prepare('SELECT count(*) AS n FROM onboarding_runs').get().n,1);assert.equal(v.db.prepare('SELECT count(*) AS n FROM chat_resume_credentials').get().n,0);assert.equal(v.changes,changes);
+    const row=v.manager.row(first.id);assert.equal(row.stage,'connection_repair_required');assert.equal(JSON.parse(row.runtime_result).error_code,code);
+  }
+});
+
+test('typed Codex ownership failures take precedence over login wording and remain protected after reload',async t=>{
+  for(const code of ['codex_auth_ownership_required','codex_personal_auth_owner_conflict']){
+    const error=new RoomError('authentication required; sign in https://private.invalid/auth?token=secret',409,code),v=setup(t,{prepareError:error});
+    const state=await completed(v);assertCodexRepair(state,code);assert.equal(v.calls.length,1);assert.equal(v.members.size,0);
+    const row=v.manager.row(state.id);assert.equal(row.stage,'connection_repair_required');assert.equal(row.error,CODEX_REPAIR_MESSAGE);
+    const restarted=new OnboardingManager(v.service,{replyVerification:false});t.after(()=>restarted.close());
+    v.service.codex={authOwnershipStatus:()=>({blocked:false})};assertCodexRepair(restarted.state({run_id:state.id}),code);
+    assertCodexRepair(restarted.retry({run_id:state.id}),code);assert.equal(v.calls.length,1);assert.equal(restarted.jobs.size,0);
+    assert.equal(JSON.stringify(state).includes('private.invalid'),false);assert.equal(JSON.stringify(state).includes('token='),false);
+  }
+});
+
+test('Codex fresh-home login requirements show connection protection instead of a second authorization flow',async t=>{
+  const runtime=setup(t,{runtimeInstaller:async()=>({status:'needs_login',installed:true,signed_in:false})});
+  runtime.service.codex={authOwnershipStatus:()=>({blocked:false})};
+  const state=await completed(runtime,{install_runtime:true});assertCodexRepair(state);assert.equal(runtime.calls.length,0);assert.equal(runtime.manager.row(state.id).stage,'connection_repair_required');
+  const native=setup(t,{nativeError:'Codex 尚未登录，请重新认证。'});native.service.codex={authOwnershipStatus:()=>({blocked:false})};
+  assertCodexRepair(await completed(native));assert.equal(native.calls.length,1);
+  const thrown=setup(t,{prepareError:new RoomError('Codex 需要登录。',401,'codex_login_required')});
+  assertCodexRepair(await completed(thrown));assert.equal(thrown.manager.row(thrown.manager.state({room_id:thrown.room.id}).id).stage,'connection_repair_required');
+});
+
+test('current Codex ownership block overrides historical ready evidence while preserving the original person and cards',async t=>{
+  const v=setup(t),first=await completed(v),member=v.members.get(first.member_id),beforeMember={...member};
+  v.db.prepare("UPDATE launch_proxies SET native_group_status='host_reported' WHERE id=?").run(first.proxy_id);
+  v.service.runtime.memberState=()=>({can_wake:true,connection_evidence:{protocol_verified:true,runner_online:true,model_reply_verified:true,automatic_reply_verified:true,verification_level:'reply_verified'}});
+  const beforeRows=v.db.prepare('SELECT * FROM onboarding_runs').all(),beforeCards=v.db.prepare('SELECT * FROM chat_resume_credentials').all(),changes=v.changes;
+  v.service.codex={authOwnershipStatus:()=>({blocked:true,code:'codex_personal_auth_owner_conflict'})};
+  for(const state of [v.manager.state({run_id:first.id}),v.manager.start({provider:'codex',room_id:v.room.id,install_runtime:true}),v.manager.retry({run_id:first.id})]){
+    assertCodexRepair(state,'codex_personal_auth_owner_conflict');assert.equal(state.member_id,first.member_id);assert.equal(state.id,first.id);
+  }
+  assert.equal(v.calls.length,1);assert.equal(v.manager.jobs.size,0);assert.deepEqual(member,beforeMember);assert.equal(v.changes,changes);
+  assert.deepEqual(v.db.prepare('SELECT * FROM onboarding_runs').all(),beforeRows);assert.deepEqual(v.db.prepare('SELECT * FROM chat_resume_credentials').all(),beforeCards);
+});
+
+test('Codex protection prevents historical validation and pending-result recovery from dispatching',async t=>{
+  const v=setup(t),first=await completed(v);let refreshed=0;
+  v.manager.verification={refresh(){refreshed++;},row(){assert.fail('must not reuse historical reply verification');},begin(){assert.fail('must not start a model check');},retryFailed(){assert.fail('must not retry a model check');}};
+  v.service.codex={authOwnershipStatus:()=>({blocked:true,code:'codex_auth_ownership_required'})};
+  v.manager.resumeManagedBinding=()=>assert.fail('must not reconnect pending requests');
+  for(const stage of ['ready_automatic','awaiting_previous_result','verifying_reply']){
+    v.db.prepare("UPDATE onboarding_runs SET status='needs_action',stage=?,verify_reply=1 WHERE id=?").run(stage,first.id);
+    v.manager.advanceVerifications();assertCodexRepair(v.manager.state({run_id:first.id}));
+  }
+  assert.equal(refreshed,3);assert.equal(v.calls.length,1);assert.equal(v.manager.jobs.size,0);
+});
+
+test('Codex protection is checked before an existing binding can bypass ownership validation',async t=>{
+  const v=setup(t),first=await completed(v),row=v.manager.row(first.id);
+  v.service.codex={authOwnershipStatus:()=>({blocked:true,code:'codex_auth_ownership_required'})};
+  v.manager.managedBindingNeeded=()=>assert.fail('ownership guard must precede the existing binding fast path');
+  v.service.chat.connectNative=()=>assert.fail('must not reconnect');
+  await assert.rejects(v.manager.prepareManagedBinding(row,first.member_id),error=>error.code==='codex_auth_ownership_required');
+  v.manager.resumeManagedBinding(row,first.member_id);assert.equal(v.manager.jobs.size,0);assertCodexRepair(v.manager.state({run_id:first.id}));
+});
+
+test('an ownership block appearing during launch cannot be overwritten by its completion',async t=>{
+  let release;const gate=new Promise(resolve=>{release=resolve;}),v=setup(t,{gate});let blocked=false;
+  v.service.codex={authOwnershipStatus:()=>({blocked,code:'codex_auth_ownership_required'})};
+  const first=v.manager.start({provider:'codex',room_id:v.room.id});await Promise.resolve();await Promise.resolve();
+  assert.equal(v.calls.length,1);blocked=true;release();await Promise.all([...v.manager.jobs.values()]);
+  assertCodexRepair(v.manager.state({run_id:first.id}));assert.equal(v.manager.row(first.id).stage,'connection_repair_required');assert.equal(v.calls.length,1);
+});
+
+test('Codex ownership protection does not disable another provider login action',async t=>{
+  const v=setup(t,{nativeError:'Claude Code 尚未登录。'});v.service.codex={authOwnershipStatus:()=>({blocked:true,code:'codex_personal_auth_owner_conflict'})};
+  const state=await completed(v,{provider:'claude-code'});assert.equal(state.stage,'awaiting_auth');assert.equal(state.next_actions[0].operation,'login_client');assert.equal(v.calls.length,1);
+});
+
 test('construction and status lookup never discover agents or create sessions and cards',t=>{
   const v=setup(t);assert.equal(v.scans,0);
   const changes=v.changes;const before=v.db.prepare('SELECT count(*) AS n FROM chat_resume_credentials').get().n;

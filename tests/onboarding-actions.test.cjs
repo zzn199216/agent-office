@@ -26,10 +26,19 @@ test('manual clients and arbitrary scripts cannot be used as background login en
   await assert.rejects(f.actions.perform({operation:'login_client',run_id:f.job.id}),error=>error.code==='client_runtime_missing');assert.equal(f.launched.length,0);
   f.job.next_actions=[];await assert.rejects(f.actions.perform({operation:'login_client',run_id:f.job.id}),error=>error.code==='onboarding_action_unavailable');assert.equal(f.launched.length,0);
 });
-test('Codex first login uses the isolated home without changing the parent environment',async t=>{
+test('synthetic login launcher receives only the explicitly supplied private environment',async t=>{
   const f=fixture(t),executable=path.join(f.root,'codex.exe'),home=path.join(f.root,'private-codex'),parent=process.env.CODEX_HOME;fs.writeFileSync(executable,'metadata only');f.job.provider='codex';f.service.store.setting=()=>({executable,executable_args:[]});let prepared=0,invalidated=0;f.service.codex={authenticationEnvironment:async()=>{prepared++;return {...process.env,CODEX_HOME:home};},invalidateAuthentication:()=>{invalidated++;},workspace:{home}};
   f.actions.options.launcher=async request=>{f.launched.push(request);return {pid:process.pid,nonce:request.nonce,process_identity:'fixture-birth',phase:'completed',exit_code:0};};
   await f.actions.perform({run_id:f.job.id,operation:'login_client'});assert.equal(prepared,1);assert.equal(invalidated,1);assert.equal(f.launched[0].options.env.CODEX_HOME,home);assert.equal(process.env.CODEX_HOME,parent);assert.match(Buffer.from(f.launched[0].args.at(-1),'base64').toString('utf16le'),/login/);
+});
+
+test('Codex authentication protection rejects a stale login action before probing or launching any terminal',async t=>{
+  const f=fixture(t),{CodexClient}=require('../src/codex.cjs'),legacyHome=path.join(f.root,'personal');fs.mkdirSync(legacyHome);fs.writeFileSync(path.join(legacyHome,'auth.json'),'preserved personal fixture');
+  f.job.provider='codex';f.service.codex=new CodexClient({executable:process.execPath,dataDir:path.join(f.root,'ao'),legacyHome});
+  f.actions.terminals.set(f.job.id,{pid:process.pid,nonce:'stale-window',process_identity:'fixture-birth'});let probes=0;
+  f.actions.options.processIdentity=async()=>{probes++;throw Error('No process probe is allowed');};
+  await assert.rejects(f.actions.perform({run_id:f.job.id,operation:'login_client'}),{code:'codex_auth_ownership_required'});
+  assert.equal(probes,0);assert.equal(f.launched.length,0);assert.equal(f.service.codex.child,null);assert.equal(fs.existsSync(f.service.codex.workspace.home),false);assert.equal(fs.readFileSync(path.join(legacyHome,'auth.json'),'utf8'),'preserved personal fixture');
 });
 
 test('login success requires a nonce and process birth receipt, never a spawn-only PID',async t=>{

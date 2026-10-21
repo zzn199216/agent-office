@@ -1,6 +1,16 @@
 # 交接说明：从云端会话转到本机 Claude Code
 
-更新：2026-10-15。分支 `claude/pixel-office-overhaul`。`claude/connect-overhaul` 已快进合并进这个分支，可以删除。
+更新：2026-10-21。分支 `claude/pixel-office-overhaul`。`claude/connect-overhaul` 已快进合并进这个分支，可以删除。
+
+## 紧急保护：0.15.0-preview.12 的 Codex 认证边界
+
+用户报告 AO 登录测试后 Codex 桌面退出登录。源码确认旧实现复制个人 `auth.json` 到 AO 私有 HOME，随后由多个 app-server 分别使用、刷新；官方要求同一凭据副本仅用于单机或串行任务。这一机制与事故一致，尚未取得服务端令牌轮换证据，不能宣称已证明本次注销的全部因果。真实 AO 后台已停止，不再进行个人账号登录、刷新或模型验收。
+
+新工作区不再读取或复制个人认证，也不再启动个人 HOME 的 app-server 来读取配置。旧复制标记、来源未能证明的私有认证文件、个人 HOME 回退，在启动进程和登录窗口前暂停。状态检查、秘书接入、历史 ready、重试及旧会话恢复均不能解除；页面说明保护桌面登录，保留原人物、历史、MCP、bindings 与 imports，不诱导重复登录。
+
+这是止损补丁，不代表已完成 Codex 桌面会话复用。后台 CLI 与桌面宿主仍是不同的连接模式；后续需要正式的宿主委托接口或单一认证 owner，不能靠复制凭据、并行刷新、共享文件或仅凭登录命令退出成功来解决。不要运行旧的 `output/validation/check-codex-refresh.cjs`，不要恢复旧复制逻辑。个人认证文件保持原样；回归仅使用隔离假客户端，不能替代后续真实验收。
+
+依据：[官方串行凭据约束](https://learn.chatgpt.com/docs/auth/ci-cd-auth)、[App Server 认证所有权](https://learn.chatgpt.com/docs/app-server)。
 
 ## 最新续修（0.15.0-preview.6，对话接入帮助）
 

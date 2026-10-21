@@ -39,14 +39,27 @@ function backgroundTransport(config={}) {
 }
 class CodexClient extends EventEmitter {
   constructor(options = {}) { super(); this.executable = options.executable || detectCodex(); this.spawnArgs = options.args || []; this.mcpEnvironment=options.mcpEnvironment||{};this.dataDir=options.dataDir;this.extraInstructions=options.developerInstructions||'';this.workspace=options.dataDir&&options.isolate!==false?new CodexWorkspace(options.dataDir,{legacyHome:options.legacyHome}):null;this.legacyHome=options.legacyHome; this.pending = new Map(); this.nextId = 1; this.child = null; this.readyPromise = null; this.closed = false; }
-  legacyClient(){return new CodexClient({executable:this.executable,args:this.spawnArgs,isolate:false,legacyHome:this.workspace?.legacyHome||this.legacyHome});}
-  async authenticationEnvironment(){
-    if(this.workspace)await this.workspace.prepare(async()=>{const legacy=this.legacyClient();try{await legacy.ready();return (await legacy.call('config/read',{includeLayers:false})).config||{};}finally{await legacy.close();}});
-    return this.workspace?this.workspace.environment():this.legacyHome?{...process.env,CODEX_HOME:this.legacyHome}:process.env;
+  legacyClient(){throw new RoomError('为保护已登录的 Codex，AO 不会启动个人登录目录的后台连接。原会话绑定已保留。',409,'codex_personal_auth_owner_conflict');}
+  authOwnershipStatus(){
+    try{
+      if(!this.workspace)throw new RoomError('为保护已登录的 Codex，AO 不会启动个人登录目录的后台连接。原聊天和成员已保留。',409,'codex_personal_auth_owner_conflict');
+      this.workspace.assertAuthenticationOwner();return {blocked:false};
+    }catch(error){return {blocked:true,code:error.code||'codex_workspace_owner',message:error.message};}
+  }
+  assertAuthenticationOwner(){const state=this.authOwnershipStatus();if(state.blocked)throw new RoomError(state.message,409,state.code);}
+  async authenticationEnvironment({purpose='server'}={}){
+    this.assertAuthenticationOwner();
+    if(purpose==='login')throw new RoomError('为保护已登录的 Codex，AO 暂停开启额外的后台登录。原聊天和成员已保留；无需重新配置 MCP。',409,'codex_auth_ownership_required');
+    // Configuration discovery must not launch another owner of personal auth.
+    // Existing private configuration remains intact. New homes use only their
+    // own defaults; importing personal routing needs an explicit safe flow.
+    await this.workspace.prepare(async()=>({}));
+    this.assertAuthenticationOwner();return this.workspace.environment();
   }
   invalidateAuthentication(){this.authenticationDirty=true;}
   async ready() {
     if(this.closed)throw new RoomError('后台连接已停止。',409,'cancelled');
+    this.assertAuthenticationOwner();
     // A completed independent login changes the file-backed account. Reopen an
     // idle owned app-server so it cannot keep reporting its pre-login cache.
     // Pending RPCs and active turn listeners keep their original transport.
@@ -70,6 +83,7 @@ class CodexClient extends EventEmitter {
   }
   async startServer(env) {
     if(this.closed)throw new RoomError('后台连接已停止。',409,'cancelled');
+    this.assertAuthenticationOwner();
     const child = spawn(this.executable, [...this.spawnArgs, 'app-server', '--listen', 'stdio://'], { env, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
     this.child = child;let initialized=false,stateInitFailed=false,stderr='';
     const lost=error=>{if(this.child===child)this.disconnect(error,!initialized);};
