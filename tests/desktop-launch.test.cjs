@@ -2,6 +2,10 @@
 const {test}=require('node:test');const assert=require('node:assert/strict');
 const fs=require('node:fs'),path=require('node:path'),os=require('node:os'),crypto=require('node:crypto');
 const {desktopManifest,installDesktop,PUBLIC_FILES}=require('../src/desktop-launch.cjs');const {VERSION}=require('../src/util.cjs');
+test('desktop package output and runtime verification accept the same complete file set',()=>{
+  const {REQUIRED_FILES,ASSETS}=require('../scripts/build-desktop.cjs');
+  assert.deepEqual([...PUBLIC_FILES].sort(),[...REQUIRED_FILES,...ASSETS].sort());
+});
 function fixture(t){const root=fs.mkdtempSync(path.join(os.tmpdir(),'agentroom-desktop-bundle-')),source=path.join(root,'public'),data=path.join(root,'private');fs.mkdirSync(source);
   const files=[...PUBLIC_FILES].map((relative,index)=>{const file=path.join(source,...relative.split('/'));fs.mkdirSync(path.dirname(file),{recursive:true});const bytes=Buffer.from('fixture '+index);fs.writeFileSync(file,bytes);return {path:relative,sha256:crypto.createHash('sha256').update(bytes).digest('hex'),bytes:bytes.length};});
   const manifest={version:VERSION,files},write=()=>fs.writeFileSync(path.join(source,'desktop-manifest.json'),JSON.stringify(manifest));write();
