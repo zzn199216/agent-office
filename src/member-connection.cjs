@@ -16,11 +16,17 @@ const SHORT_NAMES = {
 };
 const MANAGED = new Set(['codex', 'claude-code', 'qwen-code', 'gemini-cli']);
 const WAKE_CAPABLE = new Set(['qwen-desktop', 'doubao']);
+const DESKTOP = new Set(['claude-desktop', 'qwen-desktop', 'doubao', 'opencode', 'cherry-studio', 'cline', 'roo-code']);
 
 const BUSY_STAGES = new Set(['connecting', 'preparing_connection', 'installing_runtime', 'verifying_reply', 'restoring_native', 'waiting_other_setup', 'authentication']);
 const CODEX_REPAIR_CODES = new Set(['codex_auth_ownership_required', 'codex_personal_auth_owner_conflict']);
 const FAILED = new Set(['error', 'interrupted', 'failed', 'cancelled']);
 const INCOMPATIBLE = /UNSUPPORTED_SOURCE|adapter_unverified|contract|desktop_version|不兼容/i;
+
+// Template strings put spaces around names; keep them only next to Latin text.
+const CJK = '[\\u3000-\\u303f\\u4e00-\\u9fff\\uff00-\\uffef]';
+const CJK_GAP = new RegExp(`(${CJK}) (?=${CJK})`, 'g');
+function tidy(text) { return typeof text === 'string' ? text.replace(CJK_GAP, '$1') : text; }
 
 function shortName(provider, fallback) { return SHORT_NAMES[provider] || fallback || provider || '这位成员'; }
 
@@ -55,7 +61,7 @@ function present(snapshot = {}, context = {}) {
   const actionKind = context.action_kind || snapshot.action_kind || null;
   const ready = status === 'ready' && (snapshot.ready_for_office === true || snapshot.local_verified === true);
   const details = { stage, status, error_code: code, error: errorText || null, member_id: snapshot.member_id || snapshot.target_member_id || null };
-  const result = (state, headline, primary = null, secondary = null, extra = {}) => ({ state, headline, primary, secondary, busy: false, provider, name, details, ...extra });
+  const result = (state, headline, primary = null, secondary = null, extra = {}) => ({ state, headline: tidy(headline), primary: primary && { ...primary, label: tidy(primary.label) }, secondary: secondary && { ...secondary, label: tidy(secondary.label) }, busy: false, provider, name, details, ...extra });
 
   // Protection and repair states come first: they override any readiness.
   if (stage === 'connection_repair_required' || CODEX_REPAIR_CODES.has(code) || actionKind === 'connection_repair')
@@ -97,12 +103,20 @@ function present(snapshot = {}, context = {}) {
     return result('attention', `${name} 没有连上`, pick(snapshot, 'retry', '重试'));
 
   // Steps that wait for the person.
+  // An older member bound to the debug-port route: MCP is the reliable way
+  // forward; reconnecting the debug port stays available as the alternative.
   if (offered(snapshot, 'native_desktop_connect') || stage === 'awaiting_native_desktop' || actionKind === 'native_connect')
-    return result('waiting', `${name} 还没连上`, button('native_connect', `连接 ${name}`), offered(snapshot, 'manual_mcp') ? pick(snapshot, 'manual_mcp', '改用 MCP 连接') : null);
+    return offered(snapshot, 'manual_mcp')
+      ? result('waiting', `${name} 还没连上`, pick(snapshot, 'manual_mcp', '改用 MCP 连接'), button('native_connect', `重新连接 ${name}`))
+      : result('waiting', `${name} 还没连上`, button('native_connect', `连接 ${name}`));
   if (['import_client_config', 'import_mcp', 'desktop_import', 'configure_connector', 'import_connector'].some(op => offered(snapshot, op)) || stage === 'awaiting_import')
     return result('waiting', `在 ${name} 里加上 AO 配置`, button('copy_config', '复制配置'), button('copy_handshake_prompt', '复制那句话'));
+  // A desktop client connected over MCP: AO cannot see whether the config was
+  // pasted, only the handshake proves it. Config first, then the sentence.
+  if ((offered(snapshot, 'copy_handshake_prompt') || ['awaiting_handshake', 'awaiting_reload'].includes(stage) || actionKind === 'manual_handoff') && DESKTOP.has(provider))
+    return result('waiting', `在 ${name} 里加上 AO 配置，再说一句话`, button('copy_config', '复制配置'), button('copy_handshake_prompt', '复制那句话'));
   if (offered(snapshot, 'copy_handshake_prompt') || ['awaiting_handshake', 'awaiting_bridge_handshake', 'awaiting_reload'].includes(stage) || actionKind === 'manual_handoff')
-    return result('waiting', `在 ${name} 里说一句话完成连接`, button('copy_handshake_prompt', '复制那句话'));
+    return result('waiting', `把那句话发给 ${name} 完成连接`, button('copy_handshake_prompt', '复制那句话'));
   if (stage === 'verification_pending')
     return result('waiting', `${name} 已接上，等待确认回复`, pick(snapshot, 'retry', '重新检查'));
   if (stage === 'awaiting_connection')

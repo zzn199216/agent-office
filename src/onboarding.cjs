@@ -170,6 +170,9 @@ class OnboardingManager{
     const selection=this.selection(input),goal=input.goal==null||input.goal===''?'':redact(cleanText(input.goal,1200,'协作目标')),room=this.service.launch.chooseRoom(input);
     const target=this.service.chat.store.participants&&this.service.resume?resolveConnectionTarget(this.service,{provider:selection.provider,room_id:room.id,target_member_id:input.target_member_id}):{member_id:null,blocked:false,reused_connection:false};
     if(input.reauthorize===true&&(!input.target_member_id||input.target_member_id!==target.member_id))throw new RoomError('重新授权必须明确指定原人物。',403,'connection_target_required');
+    // MCP is the default connection for desktop clients. A member that already
+    // uses another delivery mode keeps it unless the person explicitly switches.
+    if(input.connection_method===undefined&&DESKTOP.has(selection.provider))selection.connection_method=target.member?.config.desktop_delivery_mode||(this.options?.defaultDesktopMethod==='native_desktop'&&this.service.desktop?.nativeCapability(selection.provider).available?'native_desktop':'manual_mcp');
     const switchingMethod=!!target.member?.config.desktop_delivery_mode&&target.member.config.desktop_delivery_mode!==selection.connection_method;
     if(!target.blocked&&!target.fixed_proxy)this.setDeliveryMethod(target.member_id,selection.connection_method);
     const previous=!switchingMethod&&this.db.prepare('SELECT * FROM onboarding_runs WHERE room_id=? AND provider=? AND mode=? ORDER BY created DESC,rowid DESC').all(room.id,selection.provider,selection.mode).find(candidate=>{

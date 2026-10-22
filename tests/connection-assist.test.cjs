@@ -26,7 +26,7 @@ function setup(t,options={}){
   service=new RoomService(files.data,{codex:new FakeCodex(),vault:new FakeVault(),fetch:async()=>{throw Error('no external requests in fixture');},
     chat:{clientFactory:member=>new HandshakeFixture(member,service,calls.native)},
     launch:{discover(){calls.scans++;return {candidates};},installer:async()=>{calls.install++;throw Error('installation not authorized');}},
-    onboarding:{desktopConnector:options.manualOnly?null:async input=>{calls.desktop.push(input);if(options.desktopGate)await options.desktopGate;throw Error(options.nativeError||'fixture 本机接口不可用 https://localhost/mcp/private-token token=fixture-private-token');}},
+    onboarding:{defaultDesktopMethod:options.manualOnly?'manual_mcp':'native_desktop',desktopConnector:options.manualOnly?null:async input=>{calls.desktop.push(input);if(options.desktopGate)await options.desktopGate;throw Error(options.nativeError||'fixture 本机接口不可用 https://localhost/mcp/private-token token=fixture-private-token');}},
     connectionAssist:{contextWaitMs:options.contextWaitMs??100}});
   service._localUrl='http://127.0.0.1:47831';
   // These document fixtures explicitly select the optional manual connection;

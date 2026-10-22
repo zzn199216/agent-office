@@ -47,7 +47,8 @@ test('ready connections are connected or auto, and only wake-capable desktop cli
 test('the four tested dead ends each get a direct action',()=>{
   // Qwen/Doubao not reachable: one button that opens and connects.
   const qwen=present({provider:'qwen-desktop',status:'needs_action',stage:'awaiting_native_desktop',next_actions:[{operation:'open_native_client'},{operation:'native_desktop_connect'},{operation:'manual_mcp',target_member_id:'m1'}]});
-  assert.equal(qwen.primary.operation,'native_connect');assert.equal(qwen.secondary.operation,'manual_mcp');assert.equal(qwen.secondary.target_member_id,'m1');
+  assert.equal(qwen.primary.operation,'manual_mcp');assert.equal(qwen.primary.target_member_id,'m1');assert.equal(qwen.secondary.operation,'native_connect');
+  assert.equal(present({provider:'qwen-desktop',status:'needs_action',stage:'awaiting_native_desktop',next_actions:[{operation:'native_desktop_connect'}]}).primary.operation,'native_connect');
   // Grok bound to another room: go there or create a new member.
   const grok=present({provider:'grok-bot',status:'needs_action',stage:'fixed_proxy_scope',next_actions:[{operation:'open_fixed_room',target_member_id:'g1'}]});
   assert.equal(grok.state,'attention');assert.equal(grok.primary.operation,'open_fixed_room');assert.equal(grok.secondary.operation,'new_member');
@@ -68,4 +69,26 @@ test('Codex protection overrides readiness and never offers a login',()=>{
 test('presentation is projection only: input snapshots are not mutated',()=>{
   const input={provider:'doubao',status:'needs_action',stage:'awaiting_handshake',next_actions:[{operation:'copy_handshake_prompt'}]};
   const before=JSON.stringify(input);present(input);assert.equal(JSON.stringify(input),before);
+});
+
+test('a new desktop member defaults to MCP: config first, then the sentence; an existing debug-port member keeps its route',async t=>{
+  const {RoomService}=require('../src/service.cjs'),{fixture,FakeCodex,FakeVault}=require('./helpers.cjs');
+  const files=fixture(),service=new RoomService(files.data,{codex:new FakeCodex(),vault:new FakeVault(),fetch:async()=>{throw Error('external requests prohibited');},
+    launch:{discover:()=>({candidates:['qwen-desktop','doubao'].map(provider=>({id:provider,provider,name:provider,adapter:'mailbox',installed:true,capabilities:{mcp_prepare:true}}))})}});
+  t.after(async()=>{await service.close();fs.rmSync(files.root,{recursive:true,force:true});});
+  const project=service.addProject({name:'defaults',path:files.project}),room=service.chat.addRoom({project_id:project.id,title:'room'});
+  for(const provider of ['doubao','qwen-desktop']){
+    const job=service.onboarding.start({provider,room_id:room.id});await Promise.all([...service.onboarding.jobs.values()]);
+    const state=service.onboarding.state({run_id:job.id});
+    assert.equal(state.connection_method,'manual_mcp',provider);
+    assert.equal(state.presentation.state,'waiting');
+    assert.equal(state.presentation.primary.operation,'copy_config');
+    assert.equal(state.presentation.secondary.operation,'copy_handshake_prompt');
+    assert.doesNotMatch(state.presentation.headline,/ 豆包|豆包 /);
+  }
+  const member=service.chat.addMember({name:'existing doubao',adapter:'mailbox'});
+  service.chat.store.updateMember(member.id,{config:{launch_provider:'doubao',desktop_delivery_mode:'native_desktop'}});service.chat.join(room.id,member.id);
+  const other=service.chat.addRoom({project_id:project.id,title:'other'});
+  const job=service.onboarding.start({provider:'doubao',room_id:other.id,target_member_id:member.id});await Promise.all([...service.onboarding.jobs.values()]);
+  assert.equal(service.onboarding.state({run_id:job.id}).connection_method,'native_desktop');
 });

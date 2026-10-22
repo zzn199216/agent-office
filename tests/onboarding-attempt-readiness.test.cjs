@@ -9,7 +9,7 @@ function setup(t){
     desktop:{serverName:null,pollMs:1,driverFactory:row=>({closed:false,async initialize(){if(control.fail)throw Object.assign(Error('fixture fetch failed ECONNREFUSED'),{code:'ECONNREFUSED'});return {nativeChatId:row.native_session_id||`native-${row.member_id}`,detached:true};},
       async send(nativeId,{requestId,prompt}){calls.sends.push({nativeId,requestId,prompt});return {userMessageId:`u-${requestId}`};},
       async snapshot(requestId){const nonce=calls.sends.find(item=>item.requestId===requestId).prompt.match(/AO-CONNECT-[a-f0-9-]+/i)[0];return {requestId,nativeChatId:row.native_session_id||`native-${row.member_id}`,status:'completed',userMessageId:`u-${requestId}`,responseMessageIds:[`r-${requestId}`],replies:[{id:`r-${requestId}`,parentId:`u-${requestId}`,role:'assistant',done:true,content:nonce}]};},close(){this.closed=true;}})},
-    onboarding:{verification:{pollMs:5,timeoutMs:1000},desktopConnector:async input=>{calls.connect++;return service.desktop.connect(input);}},
+    onboarding:{defaultDesktopMethod:'native_desktop',verification:{pollMs:5,timeoutMs:1000},desktopConnector:async input=>{calls.connect++;return service.desktop.connect(input);}},
     launch:{discover:()=>({candidates:['qwen-desktop','doubao'].map(provider=>({id:provider,provider,name:provider,adapter:'mailbox',installed:true,capabilities:{mcp_prepare:true}}))})}});
   const project=service.addProject({name:'isolated readiness',path:files.project}),room=service.chat.addRoom({project_id:project.id,title:'original room'});
   t.after(async()=>{await service.close();const target=path.resolve(files.root);assert.equal(path.dirname(target),path.resolve(os.tmpdir()));assert.match(path.basename(target),/^agentroom-test-/);fs.rmSync(target,{recursive:true,force:true});});
@@ -72,16 +72,16 @@ test('a current Grok entry handshake can establish manual readiness while preser
   const pending=await v.start({provider:'grok-bot',target_member_id:member.id});assert.equal(pending.ready_for_office,false);assert.equal(pending.stage,'awaiting_bridge_handshake');assert.ok(pending.next_actions.some(action=>action.operation==='copy_handshake_prompt'));
   v.service.entry.accept(card);const ready=v.service.onboarding.state({run_id:pending.id});assert.equal(ready.ready_for_office,true);assert.equal(ready.stage,'ready_mailbox');assert.equal(ready.can_wake,false);assert.equal(ready.model_reply_verified,false);assert.equal(ready.automatic_reply_verified,false);assert.equal(ready.error,null);assert.equal(v.service.chat.store.member(member.id).error,'old native connection failure');assert.deepEqual(fs.readFileSync(entry.file),bytes);assert.equal(v.calls.connect,0);assert.equal(v.calls.sends.length,0);
 });
-test('an unreachable desktop client presents one connect action and an MCP alternative',async t=>{
+test('an unreachable debug-port member is offered MCP first and reconnect second',async t=>{
   const v=setup(t);v.control.fail=true;
   const empty=v.service.onboarding.state({room_id:v.room.id,provider:'doubao'});
   assert.equal(empty.presentation.state,'not_connected');assert.ok(empty.presentation.primary);
   const result=await v.start();
   assert.equal(result.stage,'awaiting_native_desktop');
   assert.equal(result.presentation.state,'waiting');
-  assert.equal(result.presentation.primary.operation,'native_connect');
-  assert.equal(result.presentation.secondary.operation,'manual_mcp');
-  assert.equal(result.presentation.secondary.target_member_id,result.member_id);
+  assert.equal(result.presentation.primary.operation,'manual_mcp');
+  assert.equal(result.presentation.primary.target_member_id,result.member_id);
+  assert.equal(result.presentation.secondary.operation,'native_connect');
   assert.doesNotMatch(result.presentation.headline,/ECONNREFUSED|保留|本人对话/);
   assert.match(result.presentation.details.error,/ECONNREFUSED/);
 });
