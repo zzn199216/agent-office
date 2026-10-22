@@ -2,7 +2,7 @@
 
 ## 日常开发
 
-`npm run build`（或 `npm run build:dev`）完成后，使用固定的 `dev/OPEN_TEST.cmd` 测试。成功构建替换同一个开发目录，最多保留一份 `dev.previous/` 供失败恢复，不生成 ZIP 或逐版历史包。这些目录和构建缓存不提交 Git；源码回退后重新构建即可。
+`npm run build`（或 `npm run build:dev`）完成后，直接双击固定的 `dev/AgentOffice.exe` 测试。成功构建替换同一个开发目录，最多保留一份 `dev.previous/` 供失败恢复，不生成 ZIP 或逐版历史包。这些目录和构建缓存不提交 Git；源码回退后重新构建即可。
 
 首次执行完整 Windows 回归前运行 `npm run prepare:desktop`，准备经过固定版本和 SHA256 校验的 WebView2 SDK。随后运行 `npm run check`、`npm test`。仅明确需要分发时才使用下方完整发布流程或 `npm run build:release`。
 

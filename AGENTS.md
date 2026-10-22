@@ -6,7 +6,7 @@ Work from this checkout. Resolve project paths from the repository root; never h
 
 - Track source, tests, runtime assets, build scripts, lockfiles, licenses, and useful current documentation.
 - Run `npm ci` to regenerate dependencies. Do not copy caches from another checkout.
-- `npm run build` / `npm run build:dev` updates the single ignored `dev/` build. Test with `dev/OPEN_TEST.cmd`.
+- `npm run build` / `npm run build:dev` updates the single ignored `dev/` build. Test by opening `dev/AgentOffice.exe` directly.
 - Create versioned archives only for an explicitly requested distribution using `npm run build:release` or the documented release pipeline.
 - Keep runtime databases, entry cards, tokens, personal configuration, logs, generated packages, screenshots, and validation evidence out of Git. Never include them in a commit or a public artifact.
 - Use Git commits to retain source history; avoid additional historical source copies or package folders.

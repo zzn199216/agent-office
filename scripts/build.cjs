@@ -90,7 +90,6 @@ async function buildPackage({outputRoot=root,localOnly=false}={}){
   const version=run(executable,['--version']).trim();if(version!==expectedVersion)throw new Error('Packaged executable version check failed: '+version);
   fs.copyFileSync(executable,path.join(dist,'AgentOffice.exe'));
   const release=path.join(outputRoot,'release',`AgentOffice-${expectedVersion}-windows-x64`);fs.mkdirSync(release,{recursive:true});fs.copyFileSync(executable,path.join(release,'AgentOffice.exe'));fs.copyFileSync(path.join(root,'LICENSE'),path.join(release,'LICENSE'));
-  fs.writeFileSync(path.join(release,'OPEN_TEST.cmd'),'@echo off\r\nstart "" "%~dp0AgentOffice.exe"\r\n');
   const desktop=await require('./build-desktop.cjs').buildDesktop({outputDir:path.join(dist,'desktop'),version:expectedVersion}),desktopPublic={schema:'agentroom.desktop-bundle',version:desktop.version,sdk_version:desktop.sdk_version,sdk_sha256:desktop.sdk_sha256,files:desktop.files};
   fs.writeFileSync(path.join(desktop.directory,'desktop-manifest.json'),JSON.stringify(desktopPublic,null,2));
   for(const item of [...desktop.files.map(file=>file.path),'desktop-manifest.json']){const target=path.join(release,'desktop',...item.split('/'));fs.mkdirSync(path.dirname(target),{recursive:true});fs.copyFileSync(path.join(desktop.directory,...item.split('/')),target);}
@@ -117,7 +116,7 @@ async function buildPackage({outputRoot=root,localOnly=false}={}){
 
 接入时 AO 自动核对这位同事的真实回复，验证通过后进入办公室。重复检查沿用同一条验证记录；结果不明时保留原请求核对。已有自动连接断线后会逐步恢复原人物对话，版本或授权需要处理时显示具体原因。已授权的日常读取和办公室协作自动处理，需要本人决定的操作在对应成员最新对话中选择；无需回到聊天顶部。详见 OPERATION_POLICY.md。
 
-升级直接打开此文件夹的 OPEN_TEST.cmd，沿用本机已有数据、人物、原生对话与 MCP 配置，无需重新导入。旧 MCP 程序被客户端占用时保留原进程，核对文件后更新原命令路径；原地址和凭据继续使用。稳定入口更新后，原 MCP 进程也能启动新版后台。其他文件锁阻止替换时会保留连接并使用并排安装，稍后打开新版继续更新稳定入口。用户主动撤销的入口仍保持撤销。
+升级直接打开此文件夹的 AgentOffice.exe，沿用本机已有数据、人物、原生对话与 MCP 配置，无需重新导入。旧 MCP 程序被客户端占用时保留原进程，核对文件后更新原命令路径；原地址和凭据继续使用。稳定入口更新后，原 MCP 进程也能启动新版后台。其他文件锁阻止替换时会保留连接并使用并排安装，稍后打开新版继续更新稳定入口。用户主动撤销的入口仍保持撤销。
 
 在 AO 对话说「把 Grok Bot 拉进来」或「拉个豆包进来」，已有适配器可直接连接；需要本人窗口配合时，对话会给出接入文档和复制句。按真实握手更新状态，不把文档生成当成接通。顶部显示实际后台版本，与软件版本不同时分别列出。
 
@@ -146,7 +145,7 @@ Grok 可先连接一个 Bot，直接在当前对话桥接外部成员；群聊�
   // ZIP uses a fresh stage and this explicit public-file manifest. Runtime DBs,
   // entry cards, provider configuration, .local and validation outputs never
   // enter it, even if an older release directory contains additional files.
-  const names=['AgentOffice.exe','OPEN_TEST.cmd','README.md','USER_GUIDE.md','OPERATION_POLICY.md','GROK_GROUP_BRIDGE.md','BRIDGE_SETUP.md','DURABLE_ROOM.md','ZERO_TOUCH_RESEARCH.md','QWEN_DESKTOP_RESEARCH.md','DOUBAO_DESKTOP_RESEARCH.md','NATIVE_DESKTOP.md','GEMINI_CLI_RESEARCH.md','DOUBAO_CONNECTOR_GUIDE.md','ADDITIONAL_AGENTS_RESEARCH.md','GROK_CONNECTION_TROUBLESHOOTING.md','OFFICE_APPEARANCE.md','OFFICE_RESEARCH.md','OFFICE_MASCOT_SOURCES.md','SECRETARY_GUIDE.md','TEAM_COLLABORATION.md','SKILL.md','GROK_SKILL.md','LICENSE','NODE_LICENSE.txt'],stage=fs.mkdtempSync(path.join(dist,'zip-stage-'));
+  const names=['AgentOffice.exe','README.md','USER_GUIDE.md','OPERATION_POLICY.md','GROK_GROUP_BRIDGE.md','BRIDGE_SETUP.md','DURABLE_ROOM.md','ZERO_TOUCH_RESEARCH.md','QWEN_DESKTOP_RESEARCH.md','DOUBAO_DESKTOP_RESEARCH.md','NATIVE_DESKTOP.md','GEMINI_CLI_RESEARCH.md','DOUBAO_CONNECTOR_GUIDE.md','ADDITIONAL_AGENTS_RESEARCH.md','GROK_CONNECTION_TROUBLESHOOTING.md','OFFICE_APPEARANCE.md','OFFICE_RESEARCH.md','OFFICE_MASCOT_SOURCES.md','SECRETARY_GUIDE.md','TEAM_COLLABORATION.md','SKILL.md','GROK_SKILL.md','LICENSE','NODE_LICENSE.txt'],stage=fs.mkdtempSync(path.join(dist,'zip-stage-'));
   names.push('AGENT_INSTALLATION.md');
   const publicFiles=[...names,...referenceFiles.map(name=>'references/'+name.replaceAll('\\','/')),...desktop.files.map(file=>'desktop/'+file.path.replaceAll('\\','/')),'desktop/desktop-manifest.json'];
   if(sourceState(root).fingerprint!==source.fingerprint)throw new Error('Source changed during the build; the package was not accepted.');

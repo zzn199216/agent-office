@@ -11,7 +11,7 @@ function fixture(t){
 function packageFixture(outputRoot,version){
   const directory=path.join(outputRoot,'release','AgentOffice-'+version+'-windows-x64');
   const desktopFiles=['AgentRoom.Desktop.exe','desktop-web/app.js'];
-  const files=['AgentOffice.exe','OPEN_TEST.cmd',...desktopFiles.map(name=>'desktop/'+name)];
+  const files=['AgentOffice.exe',...desktopFiles.map(name=>'desktop/'+name)];
   for(const name of files){const file=path.join(directory,...name.split('/'));fs.mkdirSync(path.dirname(file),{recursive:true});fs.writeFileSync(file,version+' '+name);}
   atomicJson(path.join(directory,'desktop','desktop-manifest.json'),{version,files:desktopFiles.map(name=>{const file=path.join(directory,'desktop',name);return {path:name,bytes:fs.statSync(file).size,sha256:sha(file)};})});
   files.push('desktop/desktop-manifest.json');
@@ -36,6 +36,19 @@ test('successful updates publish one fixed directory, retain one prior version, 
   }
   assert.equal(version(path.join(root,'dev')),'1.0.2');assert.equal(version(path.join(root,'dev.previous')),'1.0.1');
   assert.deepEqual(fs.readdirSync(root).sort(),['dev','dev.previous','output']);
+});
+test('updating a legacy development package leaves the executable as the direct entry point',async t=>{
+  const root=fixture(t);
+  await buildDevelopment({outputRoot:root,build:async options=>{
+    const result=packageFixture(options.outputRoot,'1.0.0'),file=path.join(result.release,'OPEN_TEST.cmd'),manifestPath=path.join(result.release,'release-manifest.json');
+    fs.writeFileSync(file,'@echo off\r\nstart "" "%~dp0AgentOffice.exe"\r\n');
+    const manifest=JSON.parse(fs.readFileSync(manifestPath,'utf8'));manifest.files.push({path:'OPEN_TEST.cmd',bytes:fs.statSync(file).size,sha256:sha(file)});atomicJson(manifestPath,manifest);return result;
+  }});
+  const result=await buildDevelopment({outputRoot:root,build:builder('1.0.1')}),manifest=JSON.parse(fs.readFileSync(path.join(result.release,'release-manifest.json'),'utf8'));
+  assert.equal(fs.readFileSync(result.executable,'utf8'),'1.0.1 AgentOffice.exe');
+  assert.equal(fs.existsSync(path.join(result.release,'OPEN_TEST.cmd')),false);
+  assert.ok(manifest.files.some(file=>file.path==='AgentOffice.exe'));assert.ok(manifest.files.every(file=>file.path!=='OPEN_TEST.cmd'));
+  assert.equal(fs.existsSync(path.join(root,'dev.previous','OPEN_TEST.cmd')),true);
 });
 test('failed builds and checksum validation leave the current and previous development versions usable',async t=>{
   const root=fixture(t);await buildDevelopment({outputRoot:root,build:builder('1.0.0')});await buildDevelopment({outputRoot:root,build:builder('1.0.1')});

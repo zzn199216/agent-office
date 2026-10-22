@@ -14,7 +14,7 @@ npm test
 npm run build
 ```
 
-构建完成后打开 **`dev/OPEN_TEST.cmd`**。`npm run build` 与 `npm run build:dev` 更新同一个 `dev/` 目录，不生成 ZIP 或按版本堆积完整安装包。源码、依赖和构建过程不依赖旧项目目录。首次构建会下载固定版本、校验 SHA256 的官方 WebView2 SDK。
+构建完成后直接双击 **`dev/AgentOffice.exe`**。`npm run build` 与 `npm run build:dev` 更新同一个 `dev/` 目录，不生成 ZIP 或按版本堆积完整安装包。源码、依赖和构建过程不依赖旧项目目录。首次构建会下载固定版本、校验 SHA256 的官方 WebView2 SDK。
 
 打开软件自动启动本机服务；关闭软件停止服务。需要后台继续处理任务时，使用窗口最小化按钮，页面刷新、动画和 WebView 会暂停，恢复窗口后重新读取进度。独立命令行服务仍可用于开发：
 
