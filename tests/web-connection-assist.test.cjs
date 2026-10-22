@@ -47,6 +47,30 @@ test('unsupported Grok never shows a stale copy instruction even if old metadata
   const f=fixture();f.context.history.connection_assists=[f.assist({provider:'grok-bot',action_kind:'unsupported',stage:'unsupported',next_step:'点击复制并发送已有 Grok Bot 对话',summary:'复制旧说明',copy_sentence:'old-copy'})];
   const html=f.render();assert.match(html,/尚未找到这个客户端当前可用的接入入口/);assert.match(html,/查看支持情况/);assert.doesNotMatch(html,/点击复制|复制旧说明|old-copy|data-assist-copy/);
 });
+
+function guidance(kind='handshake',overrides={}){return {kind,target_window:'原来的 AI 对话',copy_label:'复制握手提示词',prompt:'请在原窗口核对 AO 工具并完成握手。',steps:['打开原来的 AI 对话。','粘贴以下提示词，完成后回到 AO 检查连接。'],note:'以真实握手结果为准。',scope:{room_id:'room',target_member_id:'target'},...overrides};}
+
+test('native connection cards expose current-window handshake and a separate scoped MCP installation prompt',async()=>{
+  const f=fixture(),item=f.assist({action_kind:'native_connect',guidance:guidance('native_connect'),installation_guidance:guidance('install_mcp',{target_window:'有本机文件权限的助手',copy_label:'复制安装或更新 MCP 提示词',prompt:'请保留原服务器配置，安装或更新 AO MCP。'})});f.context.history.connection_assists=[item];
+  const html=f.render(),visible=html.split('<details')[0];assert.match(visible,/原来的 AI 对话/);assert.match(visible,/有本机文件权限的助手/);assert.match(visible,/复制握手提示词/);assert.match(visible,/复制安装或更新 MCP 提示词/);assert.match(visible,/readonly/);assert.match(visible,/请保留原服务器配置/);
+  await f.action({assistCopy:item.id});await f.action({assistCopy:item.id,assistInstall:'true'});assert.deepEqual(f.calls.copy,[item.guidance.prompt,item.installation_guidance.prompt]);assert.deepEqual(f.calls.api,[]);
+});
+
+test('unsupported Grok exposes only a scoped capability prompt without inventing executable installation data',async()=>{
+  const f=fixture(),item=f.assist({provider:'grok-bot',target_member_id:null,action_kind:'unsupported',stage:'unsupported',guidance:guidance('check_capability',{target_window:'已有 Grok Bot 对话',copy_label:'复制给 Grok',prompt:'请确认当前 Bot 是否有本机执行或 MCP 工具，并给出对应设置步骤。',scope:{room_id:'room',target_member_id:null}})});f.context.history.connection_assists=[item];
+  assert.match(f.render(),/复制给 Grok/);assert.match(f.render(),/当前 Bot 是否有本机执行或 MCP 工具/);assert.doesNotMatch(f.render(),/old-copy/);await f.action({assistCopy:item.id});assert.deepEqual(f.calls.copy,[item.guidance.prompt]);
+});
+
+test('guidance never bypasses revoked, protected, ready, foreign-room or foreign-person state',async()=>{
+  for(const overrides of [{action_kind:'reauthorize'},{action_kind:'ready',status:'ready'},{stage:'awaiting_credential'},{action_kind:'connection_repair'},{guidance:guidance('handshake',{scope:{room_id:'elsewhere',target_member_id:'target'}})},{guidance:guidance('handshake',{scope:{room_id:'room',target_member_id:'other'}})},{guidance:guidance('handshake',{scope:null})}]){
+    const f=fixture(),item=f.assist({action_kind:'native_connect',guidance:guidance(),...overrides});f.context.history.connection_assists=[item];assert.doesNotMatch(f.render(),/复制握手提示词/);await f.action({assistCopy:item.id});assert.deepEqual(f.calls.copy,[]);
+  }
+  const f=fixture(),item=f.assist({action_kind:'native_connect',guidance:guidance('native_connect',{prompt:'<img src=x> & "test"',target_window:'<script>',steps:['<unsafe>']})});f.context.history.connection_assists=[item];const html=f.render();assert.match(html,/&lt;img/);assert.match(html,/&lt;script&gt;/);assert.match(html,/&lt;unsafe&gt;/);assert.doesNotMatch(html,/<img|<script>|<unsafe>/);
+});
+
+test('a native result awaiting reconciliation displays the specific next step without copy shortcuts',()=>{
+  const f=fixture();f.context.history.connection_assists=[f.assist({action_kind:'native_connect',guidance:null,installation_guidance:null,next_step:'先查看原消息，核对待定的原生请求；不能通过更新 MCP 绕过。'})];const html=f.render();assert.match(html,/先查看原消息/);assert.match(html,/不能通过更新 MCP/);assert.doesNotMatch(html,/data-assist-copy/);
+});
 test('manual fallback escapes every display field and attributes the dialogue to the actual recipient agent',()=>{
   const f=fixture();f.members[0].name='秘书 <script>';const name='豆包 <img src=x>',sentence='读取 "C:\\个人资料\\A&B<connect>.md" 后继续',documentPath='C:\\个人资料\\A&B<connect>.md';
   f.context.history.connection_assists=[f.assist({id:'assist/"one',name,summary:'需要 <approval>',error:'failed <unsafe>',copy_sentence:sentence,document_path:documentPath})];const html=f.render();

@@ -25,6 +25,11 @@ function fixture({provider='qwen-desktop',adapter='mcp',evidence={},verifiedAt='
 }
 function click(attribute,dataset={}){const button={dataset,hasAttribute:name=>name===attribute};return{target:{closest:()=>button}};}
 
+test('revoked manual setup never displays historical success or asks to copy an unavailable entry',()=>{
+  const f=fixture({provider:'claude-desktop'});f.client.kind='reauthorization';f.client.needs_reauthorization=true;f.client.entry_status='revoked';f.client.steps=['请返回原接入记录重新授权。'];f.context.renderSetup();
+  assert.match(f.$('member-setup-status').innerHTML,/原连接已撤销/);assert.doesNotMatch(f.$('member-setup-status').innerHTML,/旧协议已验证|验证于/);assert.equal(f.$('member-setup-content').innerHTML,'');assert.equal(f.$('retry-member-connect').classList.contains('hidden'),true);assert.doesNotMatch(f.$('member-connect-guide').innerHTML,/data-copy-/);
+});
+
 test('protocol verification never claims a loaded native conversation or actual reply',()=>{
   const f=fixture({evidence:{protocol_verified:true}});f.context.renderSetup();
   assert.match(f.$('member-connect-guide').innerHTML,/待连接验证/);assert.match(f.$('member-connect-guide').innerHTML,/待实际任务验证/);
@@ -50,6 +55,9 @@ test('native primary UI hides private values and preserves explicit compatibilit
   f.client.fallback=fallback;f.context.setupData.instructions='PRIVATE-INSTRUCTIONS';f.context.setupData.mcp={token:'PRIVATE-MCP'};f.context.renderSetup();
   const html=f.$('member-connect-guide').innerHTML+f.$('member-setup-content').innerHTML;
   assert.match(html,/data-native-connect/);assert.match(html,/高级：连接诊断与兼容 MCP/);assert.match(html,/data-copy-guide/);assert.doesNotMatch(html,/PRIVATE-|room:one|member\/native/);
+  assert.ok(html.indexOf('复制安装 / 更新 MCP 提示词')<html.indexOf('<details'),'installation is directly visible before diagnostics');
+  assert.ok(html.indexOf('复制本人窗口握手提示词')<html.indexOf('<details'),'handshake is directly visible before diagnostics');
+  assert.match(html,/普通聊天或云端代码解释器不能代装本机 MCP/);
   await f.$('member-connect-guide').onclick(click('data-copy-guide'));await f.$('member-connect-guide').onclick(click('data-copy-bootstrap'));await f.$('member-connect-guide').onclick(click('data-copy-install'));
   f.$('member-setup-content').onclick(click('data-copy-setup',{copySetup:'instructions'}));await new Promise(resolve=>setImmediate(resolve));
   assert.deepEqual(f.copied,['PRIVATE-CONFIG','PRIVATE-BOOTSTRAP','PRIVATE-INSTALL','PRIVATE-INSTRUCTIONS']);assert.equal(f.calls.length,0,'copying a native compatibility guide never starts the legacy connector');
@@ -87,6 +95,87 @@ test('late native results cannot overwrite a newly selected room or member',asyn
     if(change==='room')f.context.roomId='new-room';else f.context.selectedSetupMember='new-member';f.context.setupData=newData;
     gate.resolve({});await first;assert.equal(f.context.setupData,newData);assert.equal(f.context.nativeSetupFailure,null);assert.equal(f.notices.length,0);assert.equal(f.context.nativeSetupPending,null);
     assert.equal(f.calls[0].body.room_id,'room:one');assert.ok(f.calls[1].route.endsWith('room_id=room%3Aone'));
+  }
+});
+
+test('unsupported native source offers visible MCP settings and a separate current-window handshake',()=>{
+  for(const provider of['doubao','qwen-desktop']){
+    const f=fixture({provider,verifiedAt:null});f.client.native_state={error:'原生接口不兼容',error_code:provider==='doubao'?'DOUBAO_NATIVE_PREPARATION_UNSUPPORTED_SOURCE':'desktop_version_unsupported'};
+    f.client.fallback={kind:'http_json',installation_prompt:'PRIVATE-INSTALL',copy:'PRIVATE-HTTP-CONFIG',copy_label:'复制 MCP 配置',bootstrap:'PRIVATE-HANDSHAKE',steps:['保存并启用此客户端的 MCP。']};
+    f.context.renderSetup();const html=f.$('member-connect-guide').innerHTML;
+    assert.match(html,/使用兼容版本，或按下方步骤改用 MCP/);assert.match(html,/复制安装 \/ 更新 MCP 提示词/);assert.match(html,/复制 MCP 配置/);assert.match(html,/复制本人窗口握手提示词/);assert.match(html,/后台自动接手能力另行验证/);assert.doesNotMatch(html,/PRIVATE-/);
+    assert.ok(html.indexOf('用 MCP 连接')<html.indexOf('<details'));assert.equal(f.calls.length,0);
+  }
+});
+
+test('native failure titles explain the situation and keep raw source codes in diagnostics',()=>{
+  for(const [code,title]of[['DOUBAO_NATIVE_PREPARATION_UNSUPPORTED_SOURCE','当前客户端版本的本机连接暂不可用'],['ECONNREFUSED','桌面对话连接尚未开启']]){
+    const f=fixture({provider:'doubao'});f.client.native_state={error:`原始诊断 ${code}`,error_code:code};f.context.renderSetup();const html=f.$('member-connect-guide').innerHTML;
+    assert.ok(html.indexOf(title)<html.indexOf('<details'));assert.ok(html.indexOf(code)>html.indexOf('<details'));
+  }
+});
+
+test('native setup loads only the saved exact-person progress without starting or retrying setup',async()=>{
+  const f=fixture(),job={id:'saved-native',member_id:f.member.id,room_id:'room:one',provider:'qwen-desktop',status:'needs_action',next_actions:[{operation:'open_native_client'},{operation:'manual_mcp',target_member_id:f.member.id}]};
+  f.context.history={connection_assists:[{run_id:job.id,target_member_id:f.member.id,room_id:job.room_id,provider:job.provider}]};
+  f.context.api=async(route,body)=>{f.calls.push({route,body});return route.startsWith('/api/onboarding/jobs/')?job:{member:f.member,client:f.client};};
+  await f.context.showMemberSetup(f.member.id);
+  assert.deepEqual(f.calls.map(value=>value.route),['/api/chat/members/member%2Fnative/setup?room_id=room%3Aone','/api/onboarding/jobs/saved-native']);assert.ok(f.calls.every(value=>value.body===undefined));
+  assert.match(f.$('member-connect-guide').innerHTML,/data-native-operation="open_native_client"/);assert.equal(f.context.onboardingJobs.get(job.id).member_id,f.member.id);
+  for(const property of['member_id','room_id','provider','id']){
+    f.context.onboardingJobs.clear();f.context.api=async route=>route.startsWith('/api/onboarding/jobs/')?{...job,[property]:'foreign'}:{member:f.member,client:f.client};await f.context.showMemberSetup(f.member.id);
+    assert.equal(f.context.onboardingJobs.size,0);assert.doesNotMatch(f.$('member-connect-guide').innerHTML,/data-native-operation="open_native_client"/);
+  }
+});
+
+test('native connection enable button uses its allowed saved operation and never sends a model request',async()=>{
+  const f=fixture(),job={id:'native-open',member_id:f.member.id,room_id:'room:one',provider:'qwen-desktop',status:'needs_action',next_actions:[{operation:'open_native_client'}]};
+  f.context.onboardingJobs.set(job.id,job);f.context.returnSecretaryAfterOnboarding=()=>{};
+  f.context.api=async(route,body)=>{f.calls.push({route,body});return body?{job,action:{kind:'open_native_client',instruction:'正在核对已有连接'}}:{member:f.member,client:f.client};};
+  f.context.renderSetup();assert.match(f.$('member-connect-guide').innerHTML,/开启客户端连接/);
+  await f.$('member-connect-guide').onclick(click('data-native-operation',{nativeOperation:'open_native_client',nativeJob:job.id}));
+  assert.deepEqual(plain(f.calls.filter(value=>value.body)),[{route:'/api/onboarding/action',body:{run_id:job.id,operation:'open_native_client'}}]);assert.equal(f.calls.some(value=>value.route==='/api/desktop/connect'),false);
+  for(const changed of[{member_id:'other'},{room_id:'other'},{provider:'doubao'},{next_actions:[]}]){
+    f.context.onboardingJobs.set(job.id,{...job,...changed});await assert.rejects(f.$('member-connect-guide').onclick(click('data-native-operation',{nativeOperation:'open_native_client',nativeJob:job.id})),/连接步骤已变化/);
+  }
+  assert.equal(f.calls.filter(value=>value.body).length,1);
+});
+
+test('manual MCP choice preserves exact identity and is never selected merely by copying instructions',async()=>{
+  const f=fixture(),job={id:'manual-choice',member_id:f.member.id,room_id:'room:one',provider:'qwen-desktop',status:'needs_action',next_actions:[{operation:'manual_mcp',target_member_id:f.member.id}]};
+  f.context.onboardingJobs.set(job.id,job);f.context.returnSecretaryAfterOnboarding=()=>{};f.client.fallback={installation_prompt:'INSTALL',bootstrap:'HANDSHAKE',copy:'MCP'};
+  f.context.api=async(route,body)=>{f.calls.push({route,body});return body?{...job,id:'manual-attempt',connection_method:'manual_mcp'}:{member:f.member,client:f.client};};
+  await f.$('member-connect-guide').onclick(click('data-copy-install'));await f.$('member-connect-guide').onclick(click('data-copy-bootstrap'));assert.equal(f.calls.length,0);
+  await f.$('member-connect-guide').onclick(click('data-native-operation',{nativeOperation:'manual_mcp',nativeJob:job.id}));
+  assert.deepEqual(plain(f.calls.filter(value=>value.body)),[{route:'/api/onboarding/start',body:{room_id:job.room_id,provider:job.provider,target_member_id:job.member_id,connection_method:'manual_mcp'}}]);
+});
+
+test('revoked native entry blocks configuration and handshake copying until explicit reauthorization',async()=>{
+  const f=fixture();f.client.native_state={error:'原入口已撤销',error_code:'resume_revoked'};f.client.fallback={installation_prompt:'OLD-INSTALL',copy:'OLD-CONFIG',bootstrap:'OLD-HANDSHAKE'};f.context.renderSetup();
+  const html=f.$('member-connect-guide').innerHTML;assert.match(html,/重新授权这位成员/);assert.match(html,/data-native-connect disabled/);assert.doesNotMatch(html,/data-copy-install|data-copy-guide|data-copy-bootstrap|OLD-/);assert.equal(f.calls.length,0);
+  for(const attribute of['data-copy-install','data-copy-guide','data-copy-bootstrap'])await f.$('member-connect-guide').onclick(click(attribute));assert.equal(f.copied.length,0);
+});
+
+test('stale native MCP buttons cannot copy another room, person, provider or newly revoked entry',async()=>{
+  for(const change of['room','person','provider','status','entry','reconnect']){
+    const f=fixture();f.context.setupData.room={id:'room:one'};f.client.fallback={installation_prompt:'OLD-INSTALL',copy:'OLD-CONFIG',bootstrap:'OLD-HANDSHAKE'};f.context.renderSetup();
+    assert.match(f.$('member-connect-guide').innerHTML,/data-copy-install/);
+    if(change==='room')f.context.roomId='different-room';else if(change==='person')f.context.selectedSetupMember='another-person';else if(change==='provider')f.client.provider='doubao';else if(change==='status')f.member.status='revoked';else if(change==='entry')f.client.entry_status='revoked';else f.client.native_state.reconnect={error_code:'resume_revoked'};
+    for(const attribute of['data-copy-install','data-copy-guide','data-copy-bootstrap'])await f.$('member-connect-guide').onclick(click(attribute));
+    assert.equal(f.copied.length,0);assert.equal(f.calls.length,0);
+  }
+});
+
+test('pending and uncertain native attempts cannot be bypassed by compatibility copy buttons',async()=>{
+  for(const state of['running','uncertain','pending','manual_not_allowed']){
+    const f=fixture(),job={id:'native-pending',member_id:f.member.id,room_id:'room:one',provider:'qwen-desktop',status:'running',connection_method:'native_desktop',next_actions:[]};
+    f.client.fallback={installation_prompt:'PRIVATE-INSTALL',copy:'PRIVATE-CONFIG',bootstrap:'PRIVATE-HANDSHAKE'};
+    if(state==='running'||state==='manual_not_allowed')f.context.onboardingJobs.set(job.id,{...job,status:state==='running'?'running':'needs_action'});
+    if(state==='uncertain')f.client.native_state={state:'creation_uncertain',error:'原结果待核对',error_code:'desktop_request_uncertain'};
+    if(state==='pending')f.context.nativeSetupPending={memberId:f.member.id,roomId:'room:one'};
+    f.context.renderSetup();assert.doesNotMatch(f.$('member-connect-guide').innerHTML,/data-copy-install|data-copy-guide|data-copy-bootstrap/);
+    for(const attribute of['data-copy-install','data-copy-guide','data-copy-bootstrap'])await f.$('member-connect-guide').onclick(click(attribute));
+    assert.equal(f.copied.length,0);assert.equal(f.calls.length,0);
   }
 });
 
