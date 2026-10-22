@@ -1,247 +1,113 @@
 'use strict';
+// The connection card under a person's connect request, and the shared
+// connection panel used by the card, the onboarding list and the member dialog.
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
 const source=fs.readFileSync(path.join(__dirname,'../web/app.js'),'utf8');
-function section(start,end){const first=source.indexOf(start),last=source.indexOf(end,first+start.length);assert.ok(first>=0&&last>first);return source.slice(first,last);}
 const plain=value=>JSON.parse(JSON.stringify(value));
+function section(start,end){const first=source.indexOf(start),last=source.indexOf(end,first+start.length);assert.ok(first>=0&&last>first,`missing section ${start}`);return source.slice(first,last);}
+
 function fixture(){
-  const message={id:'human-task',room_id:'room',sender_id:'user',to_member_id:'assistant',kind:'message',text:'把豆包拉进来'},members=[{id:'assistant',name:'负责接入的秘书',adapter:'codex'},{id:'target',name:'豆包',adapter:'doubao-desktop'}];
-  const reply={id:'actual-reply',room_id:'room',sender_id:'assistant',kind:'reply',reply_to:message.id,text:'接入结果已整理。'};
-  const calls={copy:[],toast:[],api:[],refresh:0,avatars:[],blobs:[],revoked:[],anchors:[]};
-  const context=vm.createContext({roomId:'room',history:{messages:[message,reply],participants:members,connection_assists:[]},memberById:id=>members.find(member=>member.id===id),senderName:id=>id==='user'?'你':members.find(member=>member.id===id)?.name||id,
-    desktop:null,messageContent:message=>`<div class="fixture-content">${message.text}</div>`,messageImages:()=>'',messageCanReconcile:()=>false,nativeConnectionMessage:()=>'',pill:()=>'',plainMarkdown:text=>text,
-    avatar:(...args)=>{calls.avatars.push(args);return '<span class="fixture-avatar"></span>';},time:value=>String(value||''),
-    navigator:{clipboard:{writeText:async text=>calls.copy.push(text)}},toast:text=>calls.toast.push(text),refresh:async()=>{calls.refresh++;},
-    api:async(...args)=>{calls.api.push(args);return {text:'# Scoped connection instructions',filename:'agent-office-connect.md'};},
-    Blob:class{constructor(parts,options){calls.blobs.push({parts,options});}},URL:{createObjectURL:()=> 'blob:fixture-document',revokeObjectURL:url=>calls.revoked.push(url)},
-    document:{body:{append:link=>{link.appended=true;}},createElement:tag=>{assert.equal(tag,'a');const link={click(){this.clicked=true;},remove(){this.removed=true;}};calls.anchors.push(link);return link;}}
+  const message={id:'human-task',room_id:'room',sender_id:'user',to_member_id:'assistant',kind:'message',text:'把豆包拉进来'},members=[{id:'assistant',name:'Codex',adapter:'codex'},{id:'target',name:'豆包',adapter:'mailbox'}];
+  const reply={id:'actual-reply',room_id:'room',sender_id:'assistant',kind:'reply',reply_to:message.id,text:'接入进度见下方卡片。'};
+  const calls={copy:[],toast:[],api:[],refresh:0,confirm:[],operations:[],native:[],listeners:[],inspector:[],tutorial:0};
+  const jobs=new Map();
+  const context=vm.createContext({
+    roomId:'room',legacyId:null,history:{messages:[message,reply],participants:members,connection_assists:[]},
+    memberById:id=>members.find(member=>member.id===id),senderName:id=>id==='user'?'你':members.find(member=>member.id===id)?.name||id,
+    desktop:null,messageContent:value=>`<div class="fixture-content">${value.text}</div>`,messageImages:()=>'',messageCanReconcile:()=>false,nativeConnectionMessage:()=>'',pill:()=>'',plainMarkdown:text=>text,
+    avatar:()=>'<span class="fixture-avatar"></span>',time:value=>String(value||''),
+    navigator:{clipboard:{writeText:async text=>calls.copy.push(text)}},toast:text=>calls.toast.push(text),confirm:text=>{calls.confirm.push(text);return context.__confirm!==false;},
+    refresh:async()=>{calls.refresh++;},refreshOnboarding:async()=>{},action:work=>Promise.resolve().then(work).catch(error=>calls.toast.push(`error:${error.message}`)),
+    api:async(url,body)=>{calls.api.push([url,body]);if(url.startsWith('/api/onboarding/jobs/'))return jobs.get(decodeURIComponent(url.split('/').pop()))||null;if(url.includes('/setup'))return context.__setup;return {};},
+    onboardingJobs:jobs,onboardingView:value=>value?.job||value,onboardingActions:job=>job?.next_actions||[],
+    runOnboardingOperation:async(job,operation)=>{calls.operations.push([job.id,operation]);return job;},connectOnboardingNative:async job=>{calls.native.push(job.id);},
+    openInspector:(tab,id)=>calls.inspector.push([tab,id]),openSecretaryTutorial:()=>{calls.tutorial++;},
+    showMemberSetup:async()=>{},nativeSetupJob:()=>null,setupData:null,selectedSetupMember:null,lastSetupSignature:'',
+    $:()=>({open:false}),document:{addEventListener:(type,fn)=>calls.listeners.push([type,fn])}
   });
-  vm.runInContext(section('const escape =','const time =')+section('function renderMessage(', 'function renderTyping('),context);
-  const assist=values=>({id:'assist',message_id:message.id,room_id:'room',member_id:'assistant',target_member_id:'target',provider:'doubao-desktop',name:'豆包',status:'needs_action',ready_for_office:values?.status==='ready',action_kind:values?.status==='ready'?'ready':values?.status==='running'?'wait':'manual_handoff',can_wake:false,summary:'需要本人窗口完成一步',copy_sentence:'请读取这台电脑上的接入文档 C:\\AO\\connect.md，按说明完成连接。',document_path:'C:\\AO\\connect.md',...values});
-  return {context,message,reply,members,calls,assist,render:()=>context.renderConnectionAssists(reply),action:dataset=>context.connectionAssistAction({dataset})};
+  vm.runInContext(section('const escape =','const time =')+section('function renderMessage(','function renderTyping('),context);
+  const view=(state,extra={})=>({state,headline:'豆包还没连上',primary:{operation:'copy_config',label:'复制配置'},secondary:{operation:'copy_handshake_prompt',label:'复制那句话'},busy:false,provider:'doubao',name:'豆包',details:{error:null,member_id:'target'},...extra});
+  const assist=(presentation,extra={})=>({id:'assist',message_id:message.id,room_id:'room',member_id:'assistant',target_member_id:'target',provider:'doubao',name:'豆包',run_id:'run',presentation,...extra});
+  const click=async(operation,{source='assist',id='assist',target=null}={})=>{
+    const handler=calls.listeners.find(([type])=>type==='click')[1];
+    const button={dataset:{connOp:operation,connSource:source,connId:id,...target?{connTarget:target}:{}},disabled:false};
+    await handler({target:{closest:selector=>selector==='[data-conn-op]'?button:null}});
+    for(let i=0;i<5;i++)await new Promise(resolve=>setImmediate(resolve));
+    return button;
+  };
+  return {context,message,reply,calls,jobs,view,assist,click,render:value=>context.renderMessage(value,[message,reply])};
 }
-test('connection cards distinguish verified automatic delivery, manual inbox and an unfinished connection',()=>{
-  const f=fixture();f.context.history.connection_assists=[f.assist({status:'ready',can_wake:true})];let html=f.render();assert.match(html,/已自动接通/);assert.match(html,/可以直接在 AO 给它发消息/);assert.doesNotMatch(html,/data-assist-copy|本人窗口信箱/);
-  f.context.history.connection_assists=[f.assist({status:'ready',can_wake:false})];html=f.render();assert.match(html,/本人入口已接通/);assert.match(html,/消息会保留，由它在本人窗口处理/);assert.doesNotMatch(html,/已自动接通|data-assist-copy/);
-  f.context.history.connection_assists=[f.assist({status:'ready',can_wake:'true'})];assert.doesNotMatch(f.render(),/已自动接通/);
-  f.context.history.connection_assists=[f.assist({status:'running',copy_sentence:null})];html=f.render();assert.match(html,/正在连接/);assert.doesNotMatch(html,/已自动接通|本人入口已接通|data-assist-copy/);
-});
-test('connection actions stay inside the real reply in durable message order with one grouped layout',()=>{
-  const f=fixture(),later={id:'later-user',seq:3,room_id:'room',sender_id:'user',to_member_id:'assistant',kind:'message',text:'下一条工作消息'};
-  Object.assign(f.message,{seq:1,created:'2026-10-21T01:01:00Z'});Object.assign(f.reply,{seq:2,created:'2026-10-21T01:02:00Z'});
-  f.context.history.messages=[f.message,f.reply,later];f.context.history.connection_assists=[f.assist({id:'doubao'}),f.assist({id:'grok',provider:'grok-bot',name:'Grok Bot',target_member_id:null,action_kind:'unsupported',summary:'暂不可用',updated:'2026-10-22T01:00:00Z'})];
-  const user=f.context.renderMessage(f.message,f.context.history.messages),reply=f.context.renderMessage(f.reply,f.context.history.messages),html=f.context.history.messages.map(message=>f.context.renderMessage(message,f.context.history.messages)).join('');
-  assert.doesNotMatch(user,/connection-assist|data-assist-/);assert.equal((reply.match(/<article /g)||[]).length,1);assert.equal((reply.match(/class="message-header"/g)||[]).length,1);assert.equal((reply.match(/class="connection-assist-group"/g)||[]).length,1);assert.equal((reply.match(/data-connection-assist=/g)||[]).length,2);
-  assert.ok(reply.indexOf('接入结果已整理。')<reply.indexOf('接入进度与下一步'));assert.ok(reply.indexOf('data-connection-assist="grok"')<reply.lastIndexOf('</article>'));assert.doesNotMatch(reply,/接入进度 · AO 核对|2026-10-22/);
-  assert.ok(html.indexOf('id="message-human-task"')<html.indexOf('id="message-actual-reply"'));assert.ok(html.indexOf('id="message-actual-reply"')<html.indexOf('id="message-later-user"'));
-  assert.equal((html.match(/data-connection-assist="doubao"/g)||[]).length,1);assert.equal((html.match(/data-assist-copy=/g)||[]).length,1);
-});
-test('a pending source shows compact progress until its own actor replies, without a synthetic agent message',()=>{
-  const f=fixture();f.context.history.connection_assists=[f.assist()];f.context.history.messages=[f.message];
-  let html=f.context.renderMessage(f.message,f.context.history.messages);assert.match(html,/class="connection-assist-pending"/);assert.match(html,/data-assist-open/);assert.doesNotMatch(html,/class="connection-assist-group"|data-assist-copy|接入进度 · AO 核对/);assert.equal((html.match(/<article /g)||[]).length,1);
-  for(const invalid of [{...f.reply,sender_id:'target'},{...f.reply,room_id:'foreign'},{...f.reply,reply_to:'unrelated'},{...f.reply,kind:'message'}]){f.context.history.messages=[f.message,invalid];assert.equal(f.context.renderConnectionAssists(invalid),'');assert.match(f.context.renderConnectionAssists(f.message),/connection-assist-pending/);}
-  f.context.history.messages=[f.message,f.reply];assert.equal(f.context.renderConnectionAssists(f.message),'');assert.match(f.render(),/connection-assist-group/);
-  const duplicate={...f.reply,id:'second-actual-reply'};f.context.history.messages.push(duplicate);assert.equal(f.context.renderConnectionAssists(duplicate),'','a second reply must not duplicate the same action set');
-  f.context.history.messages=[f.message];f.message.status='failed';assert.match(f.context.renderConnectionAssists(f.message),/接入进度已保留/);assert.doesNotMatch(f.context.renderConnectionAssists(f.message),/正在整理|详细步骤会与回复/);
-});
-test('unsupported Grok never shows a stale copy instruction even if old metadata claims a handoff',()=>{
-  const f=fixture();f.context.history.connection_assists=[f.assist({provider:'grok-bot',action_kind:'unsupported',stage:'unsupported',next_step:'点击复制并发送已有 Grok Bot 对话',summary:'复制旧说明',copy_sentence:'old-copy'})];
-  const html=f.render();assert.match(html,/尚未找到这个客户端当前可用的接入入口/);assert.match(html,/查看支持情况/);assert.doesNotMatch(html,/点击复制|复制旧说明|old-copy|data-assist-copy/);
+
+test('the card sits under the person\'s own request as Agent Office, never inside the agent reply',()=>{
+  const f=fixture();f.context.history.connection_assists=[f.assist(f.view('waiting'))];
+  const own=f.render(f.message),answer=f.render(f.reply);
+  assert.match(own,/<\/article><section class="ao-system-card"/);assert.match(own,/Agent Office/);assert.match(own,/豆包还没连上/);
+  assert.doesNotMatch(answer,/ao-system-card|data-conn-op/);
 });
 
-function guidance(kind='handshake',overrides={}){return {kind,target_window:'原来的 AI 对话',copy_label:'复制握手提示词',prompt:'请在原窗口核对 AO 工具并完成握手。',steps:['打开原来的 AI 对话。','粘贴以下提示词，完成后回到 AO 检查连接。'],note:'以真实握手结果为准。',scope:{room_id:'room',target_member_id:'target'},...overrides};}
-
-test('native connection cards expose current-window handshake and a separate scoped MCP installation prompt',async()=>{
-  const f=fixture(),item=f.assist({action_kind:'native_connect',guidance:guidance('native_connect'),installation_guidance:guidance('install_mcp',{target_window:'有本机文件权限的助手',copy_label:'复制安装或更新 MCP 提示词',prompt:'请保留原服务器配置，安装或更新 AO MCP。'})});f.context.history.connection_assists=[item];
-  const html=f.render(),visible=html.split('<details')[0];assert.match(visible,/原来的 AI 对话/);assert.match(visible,/有本机文件权限的助手/);assert.match(visible,/复制握手提示词/);assert.match(visible,/复制安装或更新 MCP 提示词/);assert.match(visible,/readonly/);assert.match(visible,/请保留原服务器配置/);
-  await f.action({assistCopy:item.id});await f.action({assistCopy:item.id,assistInstall:'true'});assert.deepEqual(f.calls.copy,[item.guidance.prompt,item.installation_guidance.prompt]);assert.deepEqual(f.calls.api,[]);
+test('one status line, at most two buttons, and errors only inside closed details',()=>{
+  const f=fixture();f.context.history.connection_assists=[f.assist(f.view('attention',{details:{error:'connect ECONNREFUSED 127.0.0.1:19246',member_id:'target'}}))];
+  const html=f.render(f.message);
+  assert.equal((html.match(/data-conn-op=/g)||[]).length,2);
+  assert.match(html,/class="primary" data-conn-op="copy_config"/);assert.match(html,/class="secondary" data-conn-op="copy_handshake_prompt"/);
+  assert.match(html,/<details class="connection-panel-details"><summary>详情<\/summary><p class="small-note">connect ECONNREFUSED/);
+  assert.doesNotMatch(html,/<details[^>]* open/);
 });
 
-test('unsupported Grok exposes only a scoped capability prompt without inventing executable installation data',async()=>{
-  const f=fixture(),item=f.assist({provider:'grok-bot',target_member_id:null,action_kind:'unsupported',stage:'unsupported',guidance:guidance('check_capability',{target_window:'已有 Grok Bot 对话',copy_label:'复制给 Grok',prompt:'请确认当前 Bot 是否有本机执行或 MCP 工具，并给出对应设置步骤。',scope:{room_id:'room',target_member_id:null}})});f.context.history.connection_assists=[item];
-  assert.match(f.render(),/复制给 Grok/);assert.match(f.render(),/当前 Bot 是否有本机执行或 MCP 工具/);assert.doesNotMatch(f.render(),/old-copy/);await f.action({assistCopy:item.id});assert.deepEqual(f.calls.copy,[item.guidance.prompt]);
-});
-
-test('guidance never bypasses revoked, protected, ready, foreign-room or foreign-person state',async()=>{
-  for(const overrides of [{action_kind:'reauthorize'},{action_kind:'ready',status:'ready'},{stage:'awaiting_credential'},{action_kind:'connection_repair'},{guidance:guidance('handshake',{scope:{room_id:'elsewhere',target_member_id:'target'}})},{guidance:guidance('handshake',{scope:{room_id:'room',target_member_id:'other'}})},{guidance:guidance('handshake',{scope:null})}]){
-    const f=fixture(),item=f.assist({action_kind:'native_connect',guidance:guidance(),...overrides});f.context.history.connection_assists=[item];assert.doesNotMatch(f.render(),/复制握手提示词/);await f.action({assistCopy:item.id});assert.deepEqual(f.calls.copy,[]);
-  }
-  const f=fixture(),item=f.assist({action_kind:'native_connect',guidance:guidance('native_connect',{prompt:'<img src=x> & "test"',target_window:'<script>',steps:['<unsafe>']})});f.context.history.connection_assists=[item];const html=f.render();assert.match(html,/&lt;img/);assert.match(html,/&lt;script&gt;/);assert.match(html,/&lt;unsafe&gt;/);assert.doesNotMatch(html,/<img|<script>|<unsafe>/);
-});
-
-test('a native result awaiting reconciliation displays the specific next step without copy shortcuts',()=>{
-  const f=fixture();f.context.history.connection_assists=[f.assist({action_kind:'native_connect',guidance:null,installation_guidance:null,next_step:'先查看原消息，核对待定的原生请求；不能通过更新 MCP 绕过。'})];const html=f.render();assert.match(html,/先查看原消息/);assert.match(html,/不能通过更新 MCP/);assert.doesNotMatch(html,/data-assist-copy/);
-});
-test('manual fallback escapes every display field and attributes the dialogue to the actual recipient agent',()=>{
-  const f=fixture();f.members[0].name='秘书 <script>';const name='豆包 <img src=x>',sentence='读取 "C:\\个人资料\\A&B<connect>.md" 后继续',documentPath='C:\\个人资料\\A&B<connect>.md';
-  f.context.history.connection_assists=[f.assist({id:'assist/"one',name,summary:'需要 <approval>',error:'failed <unsafe>',copy_sentence:sentence,document_path:documentPath})];const html=f.render();
-  assert.match(html,/秘书 &lt;script&gt;/);assert.match(html,/豆包 &lt;img src=x&gt;/);assert.match(html,/需要 &lt;approval&gt;/);assert.match(html,/failed &lt;unsafe&gt;/);assert.match(html,/A&amp;B&lt;connect&gt;\.md/);assert.match(html,/&quot;C:/);assert.match(html,/data-assist-copy="assist\/&quot;one"/);assert.doesNotMatch(html,/<script>|<img src=x>|<approval>|<unsafe>|<connect>/);
-  assert.match(html,/aria-label="秘书 &lt;script&gt; 核对的接入进度"/);assert.deepEqual(f.calls.avatars,[],'embedded progress never creates another agent header');
-  assert.equal((html.match(/data-assist-copy=/g)||[]).length,1);assert.equal((html.match(/data-assist-document=/g)||[]).length,1);assert.equal((html.match(/data-assist-check=/g)||[]).length,1);
-});
-test('historical ready assist metadata cannot announce connection before current attempt acceptance',()=>{
-  const f=fixture();for(const value of [false,undefined]){f.context.history.connection_assists=[f.assist({status:'ready',can_wake:true,ready_for_office:value})];assert.doesNotMatch(f.render(),/已自动接通|本人入口已接通|已加入办公室，沿用已有连接/);}
-});
-test('connection repair overrides old ready, managed, handoff and reauthorization cards with one protected progress action',()=>{
-  for(const action_kind of ['ready','managed','manual_handoff','reauthorize','connection_repair']){
-    const f=fixture(),item=f.assist({provider:'codex',status:'ready',stage:'connection_repair_required',action_kind,ready_for_office:true,can_wake:true,reused_connection:true,run_id:'protected-run',recovery_action:{operation:'retry'},summary:'OLD SUCCESS',next_step:'OPEN LOGIN AGAIN',error:'OLD LOGIN ERROR'});f.context.history.connection_assists=[item];
-    const html=f.render();assert.match(html,/连接已暂停 · 保护桌面登录/);assert.match(html,/原人物、聊天和 MCP 配置都保留/);assert.match(html,/data-assist-open="assist">查看保护进度/);
-    assert.doesNotMatch(html,/data-assist-(?:copy|document|check|continue|reauthorize)|已自动接通|本人入口已接通|已加入办公室|由 AO 自动接入|OLD SUCCESS|OPEN LOGIN AGAIN|OLD LOGIN ERROR|C:\\AO|请读取/);
-    assert.equal((html.match(/<button /g)||[]).length,1);
-  }
-  for(const extra of [{action_kind:'connection_repair'},{error_code:'codex_auth_ownership_required'},{error_code:'codex_personal_auth_owner_conflict'}]){
-    const f=fixture();f.context.history.connection_assists=[f.assist({status:'ready',stage:'awaiting_auth',can_wake:true,action_kind:'ready',...extra})];assert.match(f.render(),/连接已暂停 · 保护桌面登录/);assert.doesNotMatch(f.render(),/已自动接通/);
-  }
-});
-test('stale repair-card controls cannot copy, refresh, reauthorize, retry or download any data',async()=>{
-  for(const action_kind of ['ready','managed','reauthorize','manual_handoff','connection_repair']){
-    const f=fixture(),item=f.assist({provider:'codex',stage:'connection_repair_required',action_kind,run_id:'protected-run',status:'ready',ready_for_office:true,can_wake:true,recovery_action:{operation:'reauthorize',provider:'codex',room_id:'room',target_member_id:'target'}});f.context.history.connection_assists=[item];
-    for(const field of ['assistCopy','assistDocument','assistCheck','assistContinue','assistReauthorize']){
-      await f.action({[field]:item.id});await f.action({[field]:item.id,assistOpen:item.id});
-    }
-    assert.deepEqual(f.calls.api,[]);assert.deepEqual(f.calls.copy,[]);assert.equal(f.calls.refresh,0);assert.deepEqual(f.calls.anchors,[]);
-  }
-});
-test('real Grok metadata offers the selected person guide and keeps errors and local paths inside closed diagnostics',async()=>{
-  const f=fixture(),opened=[];Object.assign(f.members[1],{name:'指定的 Grok Bot',adapter:'grok-bridge',provider:'grok-bot'});f.context.showMemberSetup=async id=>opened.push(id);
-  const item=f.assist({provider:'grok-bot',name:'Grok Bot',target_member_id:'target',target_window:'已有 Grok Bot 对话',next_step:'把说明发给这位 Bot，确认一次电脑授权。',error:'needs_external_entry desktop_session_missing',document_path:'C:\\AO\\private-path.md'});f.context.history.connection_assists=[item];
-  const html=f.render(),main=html.slice(0,html.indexOf('<details'));
-  assert.match(main,/还差一步，让 Grok 确认连接/);assert.match(main,/已有 Grok Bot 对话/);assert.match(main,/在 Grok 中确认它提示的电脑授权/);assert.match(main,/data-assist-open="assist">查看连接步骤/);assert.doesNotMatch(main,/needs_external_entry|desktop_session_missing|private-path|接入文档 C:/);
-  assert.match(html,/<details class="connection-assist-diagnostics"><summary>查看诊断/);assert.match(html,/needs_external_entry desktop_session_missing/);assert.doesNotMatch(html,/<details[^>]*\sopen(?:\s|>)/);
-  await f.action({assistOpen:item.id,target_member_id:'assistant'});assert.deepEqual(opened,['target']);assert.equal(f.calls.api.length,0);assert.equal(f.calls.refresh,0);
-});
-test('guide actions validate live target membership and Grok identity instead of model prose or button overrides',async()=>{
-  const f=fixture(),opened=[];f.context.showMemberSetup=async id=>opened.push(id);const item=f.assist({provider:'grok-bot',target_member_id:'target'});f.context.history.connection_assists=[item];
-  await f.action({assistOpen:item.id});assert.deepEqual(opened,[]);assert.doesNotMatch(f.render(),/data-assist-copy="assist"/,'a Doubao target cannot receive a Grok handoff');
-  Object.assign(f.members[1],{adapter:'grok-bridge'});f.context.history.participants=[f.members[0]];await f.action({assistOpen:item.id});assert.deepEqual(opened,[]);
-  f.context.history.participants=f.members;f.context.roomId='other-room';await f.action({assistOpen:item.id});assert.deepEqual(opened,[]);
-  f.context.roomId='room';f.message.sender_id='assistant';await f.action({assistOpen:item.id});assert.deepEqual(opened,[]);
-  f.message.sender_id='user';f.context.history.connection_assists=[];f.message.text='Grok 已成功连接，needs_external_entry desktop_session_missing';assert.equal(f.render(),'');assert.equal(f.calls.api.length,0);
-});
-test('other providers reuse their actual existing member setup without changing native connection behavior',async()=>{
-  const f=fixture(),opened=[];f.context.showMemberSetup=async id=>opened.push(id);const item=f.assist({target_member_id:'target'});f.context.history.connection_assists=[item];
-  assert.match(f.render(),/data-assist-open="assist">查看连接步骤/);await f.action({assistOpen:item.id});assert.deepEqual(opened,['target']);assert.deepEqual(f.calls.api,[]);
-});
-test('all managed CLI providers reject stale generic window handoffs in rendering and click handlers',async()=>{
-  for(const provider of ['codex','claude-code','qwen-code','gemini-cli','native'])for(const kind of ['managed','manual_handoff']){
-    const f=fixture(),item=f.assist({provider,action_kind:kind,connection_method:'managed_native'});f.context.history.connection_assists=[item];
-    const html=f.render();assert.doesNotMatch(html,/data-assist-copy|data-assist-document|接入说明发给/);await f.action({assistCopy:item.id});await f.action({assistDocument:item.id});assert.deepEqual(f.calls.copy,[]);assert.deepEqual(f.calls.api,[]);
-  }
-});
-test('reauthorization, unavailable clients, native adapters and unknown legacy cards never offer generic copy',async()=>{
-  for(const action_kind of ['reauthorize','unsupported','native_connect','unknown']){
-    const f=fixture(),item=f.assist({action_kind,stage:action_kind==='reauthorize'?'awaiting_credential':'unsupported'});f.context.history.connection_assists=[item];assert.doesNotMatch(f.render(),/data-assist-copy|data-assist-document/);
-    await f.action({assistCopy:item.id});await f.action({assistDocument:item.id});assert.deepEqual(f.calls.copy,[]);assert.deepEqual(f.calls.api,[]);
-  }
-  const f=fixture(),item=f.assist({action_kind:'manual_handoff',stage:'awaiting_credential'});f.context.history.connection_assists=[item];await f.action({assistCopy:item.id});assert.doesNotMatch(f.render(),/data-assist-copy/);assert.deepEqual(f.calls.copy,[]);
-});
-test('reused connections describe preserved configuration without claiming a new verification',()=>{
-  for(const can_wake of [true,false]){const f=fixture();f.context.history.connection_assists=[f.assist({action_kind:'ready',status:'ready',can_wake,reused_connection:true,verification_scope:'existing_connection',summary:'原配置保留'})];const html=f.render();assert.match(html,/已加入办公室，沿用已有连接/);assert.match(html,/无需重新配置/);assert.doesNotMatch(html.slice(0,html.indexOf('<details')),/重新验证|实际接收/);assert.doesNotMatch(html,/已自动接通|data-assist-copy|本次真实连接/);}
-});
-function recoveryFixture(){
-  const f=fixture();Object.assign(f.members[1],{provider:'codex',adapter:'codex'});Object.assign(f.context,{onboardingJobs:new Map(),onboardingView:value=>value.job||value,beginSecretaryNavigation:()=>({}),returnSecretaryAfterOnboarding(){},refreshOnboarding:async()=>{},action:callback=>callback()});vm.runInContext(section('function onboardingRunning(', 'function onboardingOfficeReady('),f.context);return f;
-}
-function recheckCard(f,overrides={}){return f.assist({provider:'codex',action_kind:'connection_recheck',stage:'connection_recheck_available',auth_mode:'shared-cache',recheck_auth_revision:'native-shared-cache-v1',run_id:'legacy-run',recovery_action:{operation:'retry',run_id:'legacy-run',room_id:'room',provider:'codex',target_member_id:'target'},...overrides});}
-test('cached-login assistant recheck is explicit, preserves the person and never renders old success or extra login',async()=>{
-  const f=recoveryFixture(),item=recheckCard(f,{status:'ready',ready_for_office:true,can_wake:true,reused_connection:true,next_step:'OLD SUCCESS',summary:'OLD SUCCESS'});f.context.history.connection_assists=[item];
-  const html=f.render();assert.match(html,/已有登录可复用 · 等待重新验证/);assert.match(html,/data-assist-continue="assist">沿用已有登录，重新验证/);assert.match(html,/原人物、聊天和 MCP 配置都保留/);assert.doesNotMatch(html,/已自动接通|本人入口已接通|已加入办公室|OLD SUCCESS|data-assist-(?:copy|document|check|reauthorize)/);assert.deepEqual(f.calls.api,[]);
-  f.context.api=async(...args)=>{f.calls.api.push(args);return args.length===1?{id:item.run_id,room_id:'room',provider:'codex',member_id:'target',status:'ready',ready_for_office:true,can_wake:true,stage:item.stage,auth_mode:item.auth_mode,recheck_auth_revision:item.recheck_auth_revision}:{id:'fresh-run',room_id:'room',provider:'codex',member_id:'target',status:'running'};};
-  await f.action({assistContinue:item.id});assert.deepEqual(plain(f.calls.api),[['/api/onboarding/jobs/legacy-run'],['/api/onboarding/jobs/legacy-run/retry',{}]]);assert.equal(f.context.onboardingJobs.get('fresh-run').member_id,'target');assert.deepEqual(f.calls.copy,[]);
-});
-test('cached-login assistant controls require positive cache evidence and fresh exact-job confirmation',async()=>{
-  for(const invalid of [{auth_mode:null},{recheck_auth_revision:null},{error_code:'codex_auth_ownership_required'},{recovery_action:{operation:'retry',run_id:'other',room_id:'room',provider:'codex',target_member_id:'target'}}]){
-    const f=recoveryFixture(),item=recheckCard(f,invalid);f.context.history.connection_assists=[item];assert.doesNotMatch(f.render(),/data-assist-continue/);await f.action({assistContinue:item.id});assert.deepEqual(f.calls.api,[]);
-  }
-  for(const live of [{stage:'connection_repair_required',error_code:'codex_auth_ownership_required'},{stage:'connection_recheck_available',auth_mode:null},{stage:'ready_automatic',status:'ready'},{member_id:'other'}]){
-    const f=recoveryFixture(),item=recheckCard(f);f.context.history.connection_assists=[item];f.context.api=async(...args)=>{f.calls.api.push(args);return{id:item.run_id,room_id:'room',provider:'codex',member_id:'target',status:'needs_action',stage:item.stage,auth_mode:item.auth_mode,recheck_auth_revision:item.recheck_auth_revision,...live};};
-    await f.action({assistContinue:item.id});assert.deepEqual(plain(f.calls.api),[['/api/onboarding/jobs/legacy-run']]);assert.equal(f.context.onboardingJobs.size,0);
-  }
-  const stale=recoveryFixture(),item=stale.assist({provider:'codex',action_kind:'managed',run_id:'old-managed',recovery_action:{operation:'retry'}});stale.context.history.connection_assists=[item];stale.context.api=async(...args)=>{stale.calls.api.push(args);return{id:item.run_id,room_id:'room',provider:'codex',member_id:'target',status:'needs_action',stage:'connection_recheck_available',auth_mode:'shared-cache',recheck_auth_revision:'native-shared-cache-v1'};};await stale.action({assistContinue:item.id});assert.equal(stale.calls.api.length,1);
-});
-test('explicit reauthorization submits only the exact canonical original target to the common controller',async()=>{
-  const f=recoveryFixture(),item=f.assist({provider:'codex',action_kind:'reauthorize',stage:'awaiting_credential',recovery_action:{operation:'reauthorize',room_id:'room',provider:'codex',target_member_id:'target'}});f.context.history.connection_assists=[item];f.context.api=async(...args)=>{f.calls.api.push(args);return {id:'owned-run',room_id:'room',provider:'codex',member_id:'target',status:'running'};};
-  assert.match(f.render(),/data-assist-reauthorize="assist">重新授权这位成员/);assert.doesNotMatch(f.render(),/data-assist-copy/);await f.action({assistReauthorize:item.id,target_member_id:'assistant',provider:'grok-bot'});
-  assert.deepEqual(plain(f.calls.api),[['/api/onboarding/start',{room_id:'room',provider:'codex',target_member_id:'target',reauthorize:true}]]);assert.equal(f.context.onboardingJobs.get('owned-run').member_id,'target');assert.deepEqual(f.calls.copy,[]);
-  item.recovery_action.target_member_id='assistant';await f.action({assistReauthorize:item.id});assert.equal(f.calls.api.length,1,'a mismatched recovery target cannot be authorized');
-});
-test('a revoked original person outside this room is reachable only by the canonical exact reauthorization action',()=>{
-  const f=fixture();f.context.history.participants=[f.members[0]];const item=f.assist({provider:'doubao-desktop',action_kind:'reauthorize',recovery_action:{operation:'reauthorize',room_id:'room',provider:'doubao-desktop',target_member_id:'target'}});f.context.history.connection_assists=[item];assert.match(f.render(),/data-assist-reauthorize/);assert.doesNotMatch(f.render(),/data-assist-copy/);item.recovery_action.room_id='foreign-room';assert.doesNotMatch(f.render(),/data-assist-reauthorize/);
-});
-test('managed recovery uses the same scoped onboarding run and refuses foreign jobs or an already-running job',async()=>{
-  for(const returned of [{member_id:'other'},{room_id:'other'},{provider:'grok-bot'},{status:'running'}]){
-    const f=recoveryFixture(),item=f.assist({provider:'codex',action_kind:'managed',run_id:'owned-run',recovery_action:{operation:'retry'}});f.context.history.connection_assists=[item];f.context.api=async(...args)=>{f.calls.api.push(args);return{id:'owned-run',room_id:'room',provider:'codex',member_id:'target',status:'needs_action',...returned};};
-    await f.action({assistContinue:item.id});assert.equal(f.calls.api.length,1);assert.equal(f.calls.api[0][0],'/api/onboarding/jobs/owned-run');assert.deepEqual(f.calls.copy,[]);
-  }
-  const f=recoveryFixture(),item=f.assist({provider:'codex',action_kind:'managed',run_id:'owned-run',recovery_action:{operation:'retry'}});f.context.history.connection_assists=[item];f.context.api=async(...args)=>{f.calls.api.push(args);return{id:'owned-run',room_id:'room',provider:'codex',member_id:'target',status:args.length===1?'needs_action':'running'};};
-  assert.match(f.render(),/data-assist-continue/);await f.action({assistContinue:item.id});assert.deepEqual(plain(f.calls.api),[['/api/onboarding/jobs/owned-run'],['/api/onboarding/jobs/owned-run/retry',{}]]);assert.equal(f.context.onboardingJobs.get('owned-run').member_id,'target');
-});
-test('a managed card cannot retry when its read-only job observation reveals connection ownership protection',async()=>{
-  const f=recoveryFixture(),item=f.assist({provider:'codex',action_kind:'managed',run_id:'protected-run',recovery_action:{operation:'retry'}});f.context.history.connection_assists=[item];f.context.api=async(...args)=>{f.calls.api.push(args);return{id:item.run_id,room_id:'room',provider:'codex',member_id:'target',status:'needs_action',stage:'connection_repair_required',error_code:'codex_auth_ownership_required'};};
-  await f.action({assistContinue:item.id});assert.deepEqual(plain(f.calls.api),[['/api/onboarding/jobs/protected-run']]);assert.equal(f.calls.refresh,1);assert.equal(f.context.onboardingJobs.size,0);
-});
-test('notification receipt wording distinguishes actual delivery from model execution and manual-only connections',()=>{
-  const f=fixture();Object.assign(f.context,{state:{chat:{activeMessages:[]}},webConnected:true,roomApprovals:()=>[]});Object.assign(f.members[1],{provider:'grok-bot',adapter:'grok-bridge',can_notify:true,manual_wake:true});
-  vm.runInContext(section('function renderTyping(', '// One-line previews'),f.context);const message={id:'queued',to_member_id:'target',status:'queued',notification:{status:'accepted'}};
-  let html=f.context.renderTyping([message]);assert.match(html,/已通知，等待 Grok 处理/);assert.doesNotMatch(html,/不会自己接手|正在思考|请到它的窗口/);
-  for(const [status,expected]of [['sending','正在通知 Grok'],['uncertain','通知结果待核对'],[null,'等待通知 Grok']]){message.notification=status?{status}:null;html=f.context.renderTyping([message]);assert.ok(html.includes(expected));assert.doesNotMatch(html,/不会自己接手/);}
-  f.members[1].can_notify=false;html=f.context.renderTyping([message]);assert.match(html,/不会自己接手/);
-});
-test('only records belonging to the same human source, current room and actual recipient render',()=>{
-  const f=fixture();f.context.history.connection_assists=[f.assist({id:'included'}),f.assist({id:'wrong-message',message_id:'other-message'}),f.assist({id:'wrong-room',room_id:'elsewhere'}),f.assist({id:'wrong-recipient',member_id:'target'})];
-  let html=f.render();assert.match(html,/data-connection-assist="included"/);assert.doesNotMatch(html,/data-connection-assist="wrong-/);
-  for(const change of [{room_id:'elsewhere'},{sender_id:'assistant'},{kind:'reply'},{coordination:{title:'安排'}}]){
-    const original={...f.message};Object.assign(f.message,change);assert.equal(f.render(),'');Object.keys(f.message).forEach(key=>delete f.message[key]);Object.assign(f.message,original);
-  }
-});
-test('copy resolves the current scoped card sentence, never a caller-supplied sentence or another room',async()=>{
-  const f=fixture(),item=f.assist();f.context.history.connection_assists=[item];await f.action({assistCopy:item.id,copy_sentence:'untrusted override',documentUrl:'https://example.invalid'});
-  assert.deepEqual(f.calls.copy,[item.copy_sentence]);assert.equal(f.calls.refresh,0);assert.equal(f.calls.api.length,0);
-  item.copy_sentence='current instructions after refresh';await f.action({assistCopy:item.id});assert.equal(f.calls.copy[1],item.copy_sentence);
-  f.context.history.connection_assists=[{...item,room_id:'other-room'}];await f.action({assistCopy:item.id});await f.action({assistCopy:'stale-card'});assert.equal(f.calls.copy.length,2);
-});
-test('stale source, foreign recipient and non-human records cannot trigger any connection card action',async()=>{
-  const f=fixture(),item=f.assist();
-  for(const change of [{message_id:'missing-source'},{member_id:'target'},{room_id:'elsewhere'}]){
-    f.context.history.connection_assists=[{...item,...change}];for(const field of ['assistCopy','assistCheck','assistDocument','assistOpen'])await f.action({[field]:item.id});
-  }
-  f.context.history.connection_assists=[item];f.message.sender_id='assistant';for(const field of ['assistCopy','assistCheck','assistDocument','assistOpen'])await f.action({[field]:item.id});
-  assert.deepEqual(f.calls.copy,[]);assert.deepEqual(f.calls.api,[]);assert.equal(f.calls.refresh,0);assert.deepEqual(f.calls.anchors,[]);
-});
-test('checking a connection refreshes observations once without invoking a start, grant or retry route',async()=>{
-  const f=fixture(),item=f.assist();f.context.history.connection_assists=[item];await f.action({assistCheck:item.id});
-  assert.equal(f.calls.refresh,1);assert.deepEqual(f.calls.api,[]);assert.deepEqual(f.calls.copy,[]);assert.deepEqual(f.calls.anchors,[]);assert.match(f.calls.toast[0],/没有重新发起接入/);
-});
-test('document download uses only the scoped fixed route, ignoring arbitrary URL and path metadata',async()=>{
-  const f=fixture(),item=f.assist({id:'assist/one?"',document_url:'https://external.invalid/private',document_path:'C:\\outside\\arbitrary.md'});f.context.roomId='room /"';f.message.room_id=f.context.roomId;item.room_id=f.context.roomId;f.context.history.connection_assists=[item];
-  await f.action({assistDocument:item.id,documentUrl:'file:///C:/outside/another.md'});
-  assert.deepEqual(plain(f.calls.api),[[`/api/connection-assists/${encodeURIComponent(item.id)}/document?room_id=${encodeURIComponent(f.context.roomId)}`]]);
-  assert.deepEqual(plain(f.calls.blobs),[{parts:['# Scoped connection instructions'],options:{type:'text/markdown;charset=utf-8'}}]);assert.equal(f.calls.anchors.length,1);const anchor=f.calls.anchors[0];assert.equal(anchor.href,'blob:fixture-document');assert.equal(anchor.download,'agent-office-connect.md');assert.equal(anchor.appended,true);assert.equal(anchor.clicked,true);assert.equal(anchor.removed,true);assert.deepEqual(f.calls.revoked,['blob:fixture-document']);assert.equal(f.calls.refresh,0);
-});
-test('a failed document read does not create or click a download link or silently retry',async()=>{
-  const f=fixture(),item=f.assist();f.context.history.connection_assists=[item];f.context.api=async(...args)=>{f.calls.api.push(args);throw Error('document scope expired');};
-  await assert.rejects(f.action({assistDocument:item.id}),/document scope expired/);assert.equal(f.calls.api.length,1);assert.deepEqual(f.calls.blobs,[]);assert.deepEqual(f.calls.anchors,[]);assert.deepEqual(f.calls.copy,[]);assert.equal(f.calls.refresh,0);
-});
-
-test('interrupted and failed cards without documents expose an explicit continuation view instead of endless preparation',()=>{
+test('connected states have no copy actions and busy states disable their buttons',()=>{
   const f=fixture();
-  for(const [status,title]of [['interrupted','接入已中断'],['error','接入未完成'],['failed','接入未完成']]){
-    f.context.history.connection_assists=[f.assist({status,action_kind:'wait',target_member_id:null,copy_sentence:'',document_path:null,summary:'原进度已保留，等待明确继续。',error:'原连接已结束'})];const html=f.render();
-    assert.ok(html.includes(title));assert.match(html,/原进度保留，请查看所需步骤后明确继续；没有自动重连/);assert.match(html,/data-assist-open="assist">查看接入步骤/);assert.match(html,/data-assist-check="assist">检查连接/);
-    assert.doesNotMatch(html,/正在连接|有需要你完成的步骤时|data-assist-copy=|data-assist-document=|已自动接通/);
-  }
+  f.context.history.connection_assists=[f.assist(f.view('auto',{headline:'豆包已连接，有消息会自动处理',primary:null,secondary:null}))];
+  assert.doesNotMatch(f.render(f.message),/data-conn-op/);
+  f.context.history.connection_assists=[f.assist(f.view('waiting',{busy:true,headline:'正在连接豆包…',primary:{operation:'retry',label:'重试'},secondary:null}))];
+  assert.match(f.render(f.message),/data-conn-op="retry"[^>]* disabled/);
 });
-test('opening interrupted setup reads its exact existing job and renders progress without starting or retrying setup',async()=>{
-  const f=fixture(),item=f.assist({status:'interrupted',action_kind:'wait',target_member_id:null,run_id:'existing/run?one',copy_sentence:'',document_path:null}),job={id:'existing/run?one',room_id:'room',provider:'doubao',status:'interrupted'},views=[],scrolls=[];let rendered=0;
-  f.context.history.connection_assists=[item];f.context.onboardingJobs=new Map();f.context.onboardingView=value=>value.job||value;f.context.setProfessionalView=value=>views.push(value);f.context.renderLaunch=()=>{rendered++;};
-  f.context.checkOnboarding=()=>{throw Error('Opening progress must never retry an interrupted managed job');};f.context.$=id=>{assert.equal(id,'onboarding-progress');return {scrollIntoView:value=>scrolls.push(value)};};f.context.api=async(...args)=>{f.calls.api.push(args);return {job};};
-  await f.action({assistOpen:item.id});
-  assert.deepEqual(plain(f.calls.api),[[`/api/onboarding/jobs/${encodeURIComponent(item.run_id)}`]]);assert.equal(f.context.onboardingJobs.get(job.id),job);assert.deepEqual(views,[false]);assert.equal(rendered,1);assert.deepEqual(plain(scrolls),[{block:'nearest',behavior:'smooth'}]);assert.equal(f.calls.refresh,0);assert.deepEqual(f.calls.copy,[]);assert.deepEqual(f.calls.anchors,[]);
-  item.run_id=null;f.context.onboardingJobs.clear();await f.action({assistOpen:item.id});assert.equal(f.calls.api.length,1,'missing jobs can show setup choices without creating a replacement run');assert.equal(f.context.onboardingJobs.size,0);assert.equal(rendered,2);
+
+test('only records for this room, this human request and its actual recipient render, and every field is escaped',()=>{
+  const f=fixture(),bad='<img src=x onerror=alert(1)>';
+  f.context.history.connection_assists=[f.assist(f.view('waiting',{headline:bad,primary:{operation:'copy_config',label:bad}})),f.assist(f.view('waiting'),{id:'foreign-room',room_id:'other'}),f.assist(f.view('waiting'),{id:'foreign-recipient',member_id:'target'})];
+  const html=f.render(f.message);
+  assert.doesNotMatch(html,/<img/);assert.match(html,/&lt;img src=x/);
+  assert.equal((html.match(/class="connection-panel"/g)||[]).length,1);
+  assert.doesNotMatch(f.render({...f.message,coordination:true}),/ao-system-card/);
+  assert.doesNotMatch(f.render({...f.message,room_id:'other'}),/ao-system-card/);
 });
-test('opening protected progress reads only its owned run and keeps stale ready data behind the repair gate',async()=>{
-  const f=fixture(),item=f.assist({provider:'codex',status:'ready',action_kind:'ready',stage:'connection_repair_required',error_code:'codex_personal_auth_owner_conflict',run_id:'protected/run'}),views=[],scrolls=[],job={id:item.run_id,room_id:'room',provider:'codex',member_id:'target',status:'ready',stage:'ready_automatic',can_wake:true,ready_for_office:true,next_actions:[{operation:'login_client'},{operation:'retry'}]};let renders=0,memberSetups=0;
-  Object.assign(f.context,{onboardingJobs:new Map(),onboardingView:value=>value.job||value,setProfessionalView:value=>views.push(value),renderLaunch:()=>{renders++;},showMemberSetup:()=>{memberSetups++;},$:id=>{assert.equal(id,'onboarding-progress');return{scrollIntoView:value=>scrolls.push(value)};}});
-  f.context.history.connection_assists=[item];f.context.api=async(...args)=>{f.calls.api.push(args);return{job};};await f.action({assistOpen:item.id});
-  assert.deepEqual(plain(f.calls.api),[['/api/onboarding/jobs/protected%2Frun']]);assert.equal(memberSetups,0);assert.equal(f.calls.refresh,0);assert.deepEqual(views,[false]);assert.equal(renders,1);assert.equal(scrolls.length,1);
-  const displayed=f.context.onboardingJobs.get(job.id);assert.equal(displayed.stage,'connection_repair_required');assert.equal(displayed.ready_for_office,false);assert.equal(displayed.can_wake,false);assert.deepEqual(plain(displayed.next_actions),[]);assert.equal(job.stage,'ready_automatic','the observed server payload is not mutated');
-  f.context.onboardingJobs.clear();job.room_id='foreign';await f.action({assistOpen:item.id});assert.equal(f.context.onboardingJobs.size,0);assert.equal(renders,1,'a foreign observation cannot replace protected progress');
+
+test('copy takes text only from the member setup scoped to that person and room',async()=>{
+  const f=fixture();f.context.history.connection_assists=[f.assist(f.view('waiting'))];
+  f.context.__setup={client:{kind:'http_fields',copy:'http://127.0.0.1:47831/mcp/fixture',bootstrap:'fixture handshake sentence'}};
+  await f.click('copy_config');await f.click('copy_handshake_prompt');
+  assert.deepEqual(f.calls.copy,['http://127.0.0.1:47831/mcp/fixture','fixture handshake sentence']);
+  assert.ok(f.calls.api.filter(([url])=>url.includes('/setup')).every(([url])=>url==='/api/chat/members/target/setup?room_id=room'));
+  assert.match(f.calls.toast[0],/豆包电脑版/);
+});
+
+test('a card from another room or a missing record cannot trigger any action',async()=>{
+  const f=fixture();f.context.history.connection_assists=[f.assist(f.view('waiting'),{room_id:'other'})];
+  await assert.rejects(()=>f.context.connectionContext('assist','assist'),/已更新/);
+  for(const operation of ['copy_config','reauthorize','enable_wake','start','new_member'])await f.click(operation);
+  assert.ok(f.calls.toast.every(text=>/^error:/.test(text)));
+  assert.equal(f.calls.copy.length,0);assert.equal(f.calls.operations.length,0);assert.ok(!f.calls.api.some(([url])=>url==='/api/onboarding/start'));
+});
+
+test('controller operations go through the scoped job; enable_wake and restart ask first',async()=>{
+  const f=fixture();f.jobs.set('run',{id:'run',room_id:'room',provider:'doubao',member_id:'target',next_actions:[{operation:'open_native_client'}]});
+  f.context.history.connection_assists=[f.assist(f.view('attention'))];
+  await f.click('reauthorize');assert.deepEqual(f.calls.operations.at(-1),['run','reauthorize']);
+  await f.click('native_connect');assert.deepEqual(f.calls.operations.at(-1),['run','open_native_client']);assert.deepEqual(f.calls.native,['run']);
+  f.context.__confirm=false;await f.click('enable_wake');await f.click('open_native_client');
+  assert.equal(f.calls.confirm.length,2);assert.ok(!f.calls.api.some(([url])=>url==='/api/onboarding/start'));assert.equal(f.calls.operations.filter(([,operation])=>operation==='open_native_client').length,1);
+  f.context.__confirm=true;await f.click('enable_wake');
+  assert.deepEqual(plain(f.calls.api.find(([url])=>url==='/api/onboarding/start')[1]),{room_id:'room',provider:'doubao',target_member_id:'target',connection_method:'native_desktop'});
+  await f.click('new_member');assert.deepEqual(plain(f.calls.api.filter(([url])=>url==='/api/onboarding/start').at(-1)[1]),{room_id:'room',provider:'doubao',new_member:true});
+  await f.click('show_connection_repair');assert.deepEqual(f.calls.inspector,[['connections','target']]);
+});
+
+test('a second click while an operation is running is ignored',async()=>{
+  const f=fixture();f.context.history.connection_assists=[f.assist(f.view('waiting'))];
+  let release;f.context.__setup=new Promise(resolve=>{release=resolve;});
+  const handler=f.calls.listeners.find(([type])=>type==='click')[1],button={dataset:{connOp:'copy_config',connSource:'assist',connId:'assist'},disabled:false};
+  const event={target:{closest:()=>button}};handler(event);await new Promise(resolve=>setImmediate(resolve));
+  button.disabled=false;handler(event);release({client:{copy:'once'}});
+  for(let i=0;i<6;i++)await new Promise(resolve=>setImmediate(resolve));
+  assert.deepEqual(f.calls.copy,['once']);
 });
