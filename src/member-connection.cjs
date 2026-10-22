@@ -65,7 +65,7 @@ function present(snapshot = {}, context = {}) {
 
   // Protection and repair states come first: they override any readiness.
   if (stage === 'connection_repair_required' || CODEX_REPAIR_CODES.has(code) || actionKind === 'connection_repair')
-    return result('attention', `${name} 后台连接已暂停，避免影响你的登录`, button('show_connection_repair', '查看处理办法'));
+    return result('attention', `${name} 后台连接已暂停，避免影响你的登录`, button('show_connection_repair', '查看处理办法'), offered(snapshot, 'choose_connected_member') ? button('choose_connected_member', '换一位已连接的成员') : null);
   if (stage === 'connection_recheck_available' || actionKind === 'connection_recheck')
     return result('waiting', `${name} 可以用已有登录重新连接`, pick(snapshot, 'retry', '重新验证连接'));
 

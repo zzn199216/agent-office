@@ -1,5 +1,6 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
+const {present}=require('../src/member-connection.cjs');
 const source=fs.readFileSync(path.join(__dirname,'../web/app.js'),'utf8');
 function section(start,end){const first=source.indexOf(start),last=source.indexOf(end,first+start.length);assert.ok(first>=0&&last>first);return source.slice(first,last);}
 function deferred(){let resolve,reject;const promise=new Promise((yes,no)=>{resolve=yes;reject=no;});return{promise,resolve,reject};}
@@ -18,7 +19,7 @@ function fixture({provider='qwen-desktop',adapter='mcp',evidence={},verifiedAt='
   });
   context.memberById=id=>context.state.chat.members.find(item=>item.id===id);
   vm.runInContext(section('const escape =','const time =')+section('function nativeConnectionUnavailable(', 'function memberPresence(')+section('function onboardingRepairRequired(', 'function onboardingReady(')+section('function nativeDesktopProvider(', 'function launchSelectable(')+
-    section('function onboardingView(', 'function roomUsesGrok(')+section('async function connectMember(', 'function updateRecipientNote(')+
+    section('function onboardingView(', 'function onboardingApprovalMarkup(')+section('async function connectMember(', 'function updateRecipientNote(')+
     section("$('member-setup-content').onclick =", "$('member-grok-form').onsubmit")+
     section("$('member-connect-guide').onclick =", "$('member-copy-entry').onclick"),context);
   return{context,$,member,client,calls,notices,copied,bridges,timers,get refreshes(){return refreshes;},get onboardingRefreshes(){return onboardingRefreshes;}};
@@ -181,7 +182,7 @@ test('pending and uncertain native attempts cannot be bypassed by compatibility 
 
 test('onboarding native action uses its scoped job and stops after a room switch during setup',async()=>{
   const job={id:'job-owned',member_id:'member/native',room_id:'room:one',provider:'qwen-desktop',status:'needs_action',next_actions:[{operation:'native_desktop_connect'}]};
-  const f=fixture();assert.match(f.context.onboardingActionMarkup(job),/data-onboarding-operation="native_desktop_connect"/);assert.doesNotMatch(f.context.onboardingActionMarkup(job),/我已完成，检查连接/);
+  const f=fixture();assert.equal(present(job).primary.operation,'native_connect');
   await f.context.connectOnboardingNative(job);assert.equal(f.calls.filter(call=>call.route==='/api/desktop/connect').length,1);assert.equal(f.onboardingRefreshes,1);
   const stale=fixture(),gate=deferred();stale.context.api=async(route,body)=>{stale.calls.push({route,body});return gate.promise;};
   const pending=stale.context.connectOnboardingNative(job);stale.context.roomId='different-room';gate.resolve({member:stale.member,client:stale.client});
@@ -201,7 +202,7 @@ test('native setup replaces the picker and preserves only its current member com
 });
 test('ordinary onboarding reauthorization uses its declared exact member instead of a generic retry',async()=>{
   const f=fixture(),job={id:'blocked-run',room_id:'room:one',member_id:f.member.id,provider:'qwen-desktop',status:'needs_action',stage:'awaiting_credential',next_actions:[{operation:'reauthorize',target_member_id:f.member.id}]};f.context.onboardingView=value=>value;f.context.api=async(route,body)=>{f.calls.push({route,body});return{...job,id:'recovery-run',status:'running'};};
-  assert.match(f.context.onboardingActionMarkup(job),/data-onboarding-operation="reauthorize"/);assert.doesNotMatch(f.context.onboardingActionMarkup({...job,next_actions:[{operation:'reauthorize',target_member_id:'other'}]}),/data-onboarding-operation="reauthorize"/);
+  assert.equal(present(job).primary.operation,'reauthorize');assert.equal(present(job).primary.target_member_id,f.member.id);
   const updated=await f.context.reauthorizeOnboarding(job);assert.equal(updated.id,'recovery-run');assert.deepEqual(plain(f.calls),[{route:'/api/onboarding/start',body:{room_id:'room:one',provider:'qwen-desktop',target_member_id:f.member.id,reauthorize:true}}]);
   f.context.roomId='other-room';await assert.rejects(f.context.reauthorizeOnboarding(job),/授权步骤已变化/);assert.equal(f.calls.length,1);
 });

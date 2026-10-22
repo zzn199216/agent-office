@@ -4,10 +4,14 @@ const source=fs.readFileSync(path.join(__dirname,'../web/app.js'),'utf8');
 function section(start,end){const first=source.indexOf(start),last=source.indexOf(end,first+start.length);assert.ok(first>=0&&last>first);return source.slice(first,last);}
 function deferred(){let resolve,reject;const promise=new Promise((yes,no)=>{resolve=yes;reject=no;});return{promise,resolve,reject};}
 const plain=value=>JSON.parse(JSON.stringify(value));
+const {present}=require('../src/member-connection.cjs');
+const presented=value=>value&&typeof value==='object'&&!value.presentation&&value.id?{...value,presentation:present(value)}:value;
 function fixture(overrides={}){
   const elements=new Map(),calls=[],completions=[],events=[];
   const $=id=>{if(!elements.has(id))elements.set(id,{open:id==='secretary-connect-dialog',innerHTML:'',value:'',querySelector:()=>null,querySelectorAll:()=>[],close(){this.open=false;},classList:{toggle(){}}});return elements.get(id);};
   const job={id:'original',provider:'codex',name:'Codex',room_id:'room',member_id:'member',status:'needs_action',stage:'awaiting_auth',ready_for_office:false,next_actions:[{kind:'login',operation:'login_client',instruction:'在弹出的专用配置窗口完成账号授权'},{operation:'retry'}],...overrides};
+  // The service attaches the user-facing presentation to every job it returns.
+  if(!job.presentation)job.presentation=present(job);
   const flow={source:'picker',roomId:'room',projectId:'project',jobId:job.id,memberId:job.member_id};
   const context=vm.createContext({$,Map,Error,roomId:'room',projectId:'project',legacyId:null,secretaryNavigation:flow,secretaryConnectJob:job.id,secretaryConnectRoom:'room',onboardingJobs:new Map([[job.id,job]]),onboardingFeedback:new Map(),onboardingSignature:'',onboardingTimer:null,webConnected:true,
     state:{approvals:[],chat:{rooms:[{id:'room',project_id:'project'},{id:'fixed',project_id:'original-project'}]}},history:{participants:[]},launchCandidates:[],launchSelection:new Set(),launchScanning:false,launchBusy:false,onboardingStarting:new Set(),lastLaunchCandidates:'',
@@ -20,7 +24,9 @@ function fixture(overrides={}){
     rememberSelection:()=>events.push('remember'),setReply:value=>events.push(['reply',value]),setProfessionalView:value=>events.push(['workspace',value]),showMemberSetup:async id=>events.push(['setup',id]),openSecretaryTutorial:()=>events.push('secretary-picker'),
     api:async(route,body)=>{calls.push({route,body});return{...job};}
   });
-  vm.runInContext(section('function launchProvider(', 'const providerDocs')+section('function onboardingCanInstall(', 'function renderLaunch()')+section('function onboardingView(', 'function roomUsesGrok(')+section('function onboardingJobMarkup(', 'async function refreshOnboarding()')+section('async function checkOnboarding(', 'function onboardingProgressTarget()'),context);
+  vm.runInContext(section('function launchProvider(', 'const providerDocs')+section('function onboardingCanInstall(', 'function renderLaunch()')+section('function onboardingView(', 'function onboardingApprovalMarkup(')+section('function onboardingJobMarkup(', 'async function refreshOnboarding()')+section('async function checkOnboarding(', 'function onboardingProgressTarget()'),context);
+  vm.runInContext(section('const connectionOperationsPending=','const CONNECTION_PASTE_HINTS='),context);
+  const view=context.onboardingView;context.onboardingView=value=>presented(view(value));
   return{context,$,job,flow,calls,completions,events};
 }
 
@@ -52,7 +58,7 @@ test('recheck cards reject stale actions and missing positive cache-mode evidenc
 });
 test('ordinary Codex login uses the original account window and blocks stale separate-login actions',async()=>{
   const f=fixture({auth_mode:'shared-cache',next_actions:[{operation:'login_client',url:'https://login.invalid/',instruction:'OLD EXTRA LOGIN'},{operation:'retry'}]});
-  const html=f.context.onboardingJobMarkup(f.job);assert.match(html,/原 Codex 窗口/);assert.match(html,/已在原 Codex 登录，检查连接/);assert.doesNotMatch(html,/data-onboarding-operation="login_client"|打开首次配置|OLD EXTRA LOGIN|https:\/\/login/);
+  const html=f.context.onboardingJobMarkup(f.job);assert.match(html,/Codex 需要登录/);assert.match(html,/我已登录，重新检查/);assert.doesNotMatch(html,/data-conn-op="login_client"|OLD EXTRA LOGIN|https:\/\/login/);
   await f.context.runOnboardingOperation(f.job,'login_client');assert.deepEqual(f.calls,[]);f.context.renderLaunchCandidates();
 });
 test('a visible saved progress action owns its navigation without requiring another candidate click',async()=>{
@@ -95,7 +101,7 @@ test('login is a real action despite an instruction, stays pending in the modal 
   const f=fixture({provider:'claude-code'}),gate=deferred();f.context.api=async(route,body)=>{f.calls.push({route,body});return gate.promise;};
   const pending=f.context.runOnboardingOperation(f.job,'login_client');await f.context.runOnboardingOperation(f.job,'login_client');
   let html=f.$('secretary-connect-progress').innerHTML;
-  assert.match(html,/正在打开账号配置入口/);assert.match(html,/data-onboarding-operation="login_client"/);assert.match(html,/<button disabled/);assert.doesNotMatch(html,/data-onboarding-copy=/);assert.equal(f.calls.length,1);
+  assert.match(html,/正在打开账号配置入口/);assert.match(html,/data-conn-op="login_client"[^>]* disabled/);assert.doesNotMatch(html,/data-onboarding-copy=/);assert.equal(f.calls.length,1);
   gate.resolve({job:f.job,action:{launched:true,instruction:'专用配置窗口已打开，完成授权后再继续接入'}});await pending;
   html=f.$('secretary-connect-progress').innerHTML;assert.match(html,/专用配置窗口已打开/);assert.doesNotMatch(html,/onboarding-job ready/);assert.equal(f.flow.jobId,'original');
   f.context.renderOnboarding();assert.match(f.$('onboarding-jobs').innerHTML,/专用配置窗口已打开/,'polls with identical server state retain the action feedback');
@@ -112,7 +118,7 @@ test('login failure and unconfirmed launch stay as errors inside the current att
 
 test('native client start explains one full exit and keeps a typed restart failure visible',async()=>{
   const f=fixture({provider:'doubao',stage:'awaiting_native_desktop',next_actions:[{kind:'open_native_client',operation:'open_native_client'},{operation:'native_desktop_connect'},{operation:'manual_mcp',target_member_id:'member'}]});
-  f.context.renderLaunch();const before=f.$('secretary-connect-progress').innerHTML;assert.match(before,/开启客户端连接/);assert.match(before,/菜单或托盘完整退出/);assert.match(before,/不用填写端口或命令/);
+  f.context.renderLaunch();const before=f.$('secretary-connect-progress').innerHTML;assert.match(before,/data-conn-op="manual_mcp"[^>]*>改用 MCP 连接/);assert.match(before,/data-conn-op="native_connect"[^>]*>重新连接豆包/);
   f.context.api=async(route,body)=>{f.calls.push({route,body});throw Object.assign(Error('客户端仍在运行。请从菜单或托盘完整退出，再开启连接。'),{code:'desktop_client_restart_required'});};
   await assert.rejects(f.context.runOnboardingOperation(f.job,'open_native_client'),/完整退出/);
   assert.deepEqual(plain(f.calls),[{route:'/api/onboarding/action',body:{run_id:'original',operation:'open_native_client'}}]);assert.match(f.$('secretary-connect-progress').innerHTML,/role="alert"/);assert.match(f.$('secretary-connect-progress').innerHTML,/客户端仍在运行/);
@@ -123,7 +129,7 @@ test('manual compatibility is explicit, scoped to the original member and adopts
   f.context.api=async(route,body)=>{f.calls.push({route,body});return{...f.job,id:'manual',connection_method:'manual_mcp',status:'needs_action',stage:'awaiting_handshake'};};
   await f.context.runOnboardingOperation(f.job,'manual_mcp');assert.deepEqual(plain(f.calls),[{route:'/api/onboarding/start',body:{room_id:'room',provider:'qwen-desktop',target_member_id:'member',connection_method:'manual_mcp'}}]);
   assert.equal(f.flow.jobId,'manual');assert.equal(f.context.secretaryConnectJob,'manual');assert.equal(f.context.onboardingOfficeReady(f.context.onboardingJobs.get('manual')),false);
-  const foreign=fixture({provider:'qwen-desktop',next_actions:[{operation:'manual_mcp',target_member_id:'other'}]});await assert.rejects(foreign.context.runOnboardingOperation(foreign.job,'manual_mcp'),/已更新/);assert.equal(foreign.calls.length,0);assert.doesNotMatch(foreign.context.onboardingActionMarkup(foreign.job),/data-onboarding-operation="manual_mcp"/);
+  const foreign=fixture({provider:'qwen-desktop',next_actions:[{operation:'manual_mcp',target_member_id:'other'}]});await assert.rejects(foreign.context.runOnboardingOperation(foreign.job,'manual_mcp'),/已更新/);assert.equal(foreign.calls.length,0);
 });
 
 test('reauthorization shares run adoption and preserves the exact declared person',async()=>{
@@ -149,7 +155,7 @@ test('the explicit current attempt wins over historical jobs with newer observat
 });
 
 test('fixed Grok scope offers the existing room without rebinding or producing credentials',async()=>{
-  const f=fixture({provider:'grok-bot',stage:'fixed_proxy_scope',next_actions:[{operation:'open_fixed_room',room_id:'fixed',target_member_id:'member'}]});assert.match(f.context.onboardingActionMarkup(f.job),/查看原房间连接/);
+  const f=fixture({provider:'grok-bot',stage:'fixed_proxy_scope',next_actions:[{operation:'open_fixed_room',room_id:'fixed',target_member_id:'member'}]});assert.match(f.context.onboardingJobMarkup(f.job),/data-conn-op="open_fixed_room"[^>]*>去原房间/);
   await f.context.runOnboardingOperation(f.job,'open_fixed_room');assert.equal(f.context.roomId,'fixed');assert.equal(f.context.projectId,'original-project');assert.equal(f.calls.length,0);assert.equal(f.$('secretary-connect-dialog').open,false);assert.ok(f.events.some(value=>Array.isArray(value)&&value[0]==='setup'&&value[1]==='member'));
   const missing=fixture({provider:'grok-bot',next_actions:[{operation:'open_fixed_room',room_id:'removed',target_member_id:'member'}]});await assert.rejects(missing.context.runOnboardingOperation(missing.job,'open_fixed_room'),/原房间暂不可用/);assert.equal(missing.$('secretary-connect-dialog').open,true);assert.equal(missing.calls.length,0);
 });
@@ -173,11 +179,11 @@ test('one identical connection reason is rendered once across detail, action fee
   const f=fixture({provider:'doubao',stage:'awaiting_native_desktop',detail:'本人的连接没有开启，请先开启客户端连接。',error:'本人的连接没有开启，请先开启客户端连接。'});
   f.context.onboardingFeedback.set(f.job.id,{message:f.job.error,error:true,pending:false});const html=f.context.onboardingJobMarkup(f.job);
   assert.equal(html.split(f.job.error).length-1,1);assert.doesNotMatch(html,/class="onboarding-job-error"/);
-  f.job.error='另一个独立的连接失败原因';assert.match(f.context.onboardingJobMarkup(f.job),/另一个独立的连接失败原因/,'distinct causes remain visible');
+  f.job.error='另一个独立的连接失败原因';f.job.presentation=present(f.job);assert.match(f.context.onboardingJobMarkup(f.job),/另一个独立的连接失败原因/,'distinct causes remain visible');
 });
 test('connection ownership repair blocks historical ready, login links and stale automatic retry actions',async()=>{
   const f=fixture({stage:'connection_repair_required',status:'ready_automatic',ready_for_office:true,can_wake:true,next_actions:[{operation:'login_client',url:'https://login.example.test/'},{operation:'retry'},{operation:'install_runtime'}]});
-  assert.equal(f.context.onboardingOfficeReady(f.job),false);const html=f.context.onboardingJobMarkup(f.job);assert.match(html,/连接已暂停 · 保护桌面登录/);assert.match(html,/原人物、聊天和连接配置均已保留/);assert.doesNotMatch(html,/onboarding-job ready|data-onboarding-operation="(?:login_client|retry|install_runtime)"|https:\/\/login|打开首次配置/);
+  assert.equal(f.context.onboardingOfficeReady(f.job),false);const html=f.context.onboardingJobMarkup(f.job);assert.match(html,/Codex 后台连接已暂停/);assert.doesNotMatch(html,/onboarding-job ready|data-conn-op="(?:login_client|retry|install_runtime)"|https:\/\/login/);
   for(const operation of ['login_client','retry','install_runtime'])await f.context.runOnboardingOperation(f.job,operation);
   assert.equal(f.calls.length,0,'stale controls never open login or mutate the protected connection');
   for(const error_code of ['codex_auth_ownership_required','codex_personal_auth_owner_conflict'])assert.equal(f.context.onboardingOfficeReady({...f.job,stage:'awaiting_auth',error_code}),false);
@@ -187,6 +193,6 @@ test('an ownership repair observation is read-only and cannot turn its old manag
   await f.context.checkOnboarding(f.job.id);assert.equal(f.calls.length,1);assert.equal(f.calls[0].body,undefined);assert.match(f.$('secretary-connect-progress').innerHTML,/保护桌面登录/);assert.doesNotMatch(f.$('secretary-connect-progress').innerHTML,/data-onboarding-check|打开首次配置|配置完成后继续接入/);
 });
 test('repair state can return to existing secretary choices without writing configuration or creating another member',async()=>{
-  const f=fixture({stage:'connection_repair_required',next_actions:[{operation:'show_connection_repair'},{operation:'choose_connected_member'}]});assert.match(f.context.onboardingActionMarkup(f.job),/选择其他已接通成员/);
+  const f=fixture({stage:'connection_repair_required',next_actions:[{operation:'show_connection_repair'},{operation:'choose_connected_member'}]});assert.match(f.context.onboardingJobMarkup(f.job),/data-conn-op="choose_connected_member"/);
   await f.context.runOnboardingOperation(f.job,'choose_connected_member');assert.equal(f.calls.length,0);assert.ok(f.events.includes('secretary-picker'));assert.equal(f.context.secretaryNavigation,null);assert.equal(f.context.secretaryConnectJob,null);assert.equal(f.$('secretary-connect-dialog').open,false);
 });

@@ -140,56 +140,6 @@ class ConnectionAssist{
     if(state?.member_id)return 'manual_handoff';
     return 'unsupported';
   }
-  handshakePrompt(member){
-    return `请在当前这个 AI 助手对话中连接 Agent Office 的同事「${member.name}」。沿用此人物已有的 AO / agentroom MCP 配置，不新建身份、不索取房间 ID。先检查当前对话是否实际加载 AO 工具：调用 agentroom_chat_rooms，再调用 agentroom_chat_inbox（参数 {}，不传 room_id）。这是 AO 协作消息，不是电子邮箱。只根据实际工具返回报告自己的身份和收件结果；工具不存在时，明确说明当前对话尚未加载 MCP，并告诉用户在此客户端哪里启用已有 AO 连接器、重新加载后再回到这个对话握手。不要改用云端代码解释器访问用户电脑，不把旧聊天、接口自测或配置存在当成连接成功。`;
-  }
-  nativePending(state){
-    const memberId=state?.member_id;if(!memberId)return false;
-    return state?.error_code==='desktop_request_uncertain'||/desktop_request_uncertain|创建结果待核对|原生请求.*待核对/.test(state?.error||'')||this.service.chat.nativeDeliveryPending(memberId)||this.service.desktop?.row(memberId)?.state==='creation_uncertain'||this.service.chat.active?.get(memberId)?.desktop||this.service.desktop?.jobs.has(memberId)||this.service.desktop?.connecting.has(memberId);
-  }
-  installationGuidance(row,state){
-    const memberId=state?.member_id;if(!memberId||this.nativePending(state))return null;
-    this.service.chat.store.requireParticipant(row.room_id,memberId);
-    const entry=this.service.entry.describePrimary(memberId,row.room_id);if(!entry.available)return null;
-    // Only use artifacts prepared by the explicit setup action. Merely reading
-    // a progress card must never issue an entry or regenerate MCP templates.
-    const templateFiles={},directory=path.join(this.service.store.dir,'client-config','templates');
-    for(const [kind,suffix]of [['stdio','stdio'],['streamable_http','http']]){
-      const file=path.join(directory,`${memberId}-${suffix}.json`);
-      try{const stat=fs.lstatSync(file);if(stat.isFile()&&!stat.isSymbolicLink()&&stat.nlink===1&&stat.size<=128000&&fs.realpathSync.native(file)===file)templateFiles[kind]=file;}catch(error){if(error.code!=='ENOENT')throw error;}
-    }
-    if(!templateFiles.stdio)return null;
-    const member=this.service.chat.store.member(memberId),name=names.get(row.provider)||row.provider;
-    return {kind:'install_mcp',target_window:'可读取这台电脑文件并修改客户端配置的安装助手',copy_label:'复制 MCP 安装/更新说明',
-      prompt:`请安装或更新 ${name} 原有的 Agent Office MCP 连接，沿用同事「${member.name}」的身份和现有连接，不重复添加 AO 服务，不覆盖其他 MCP。下列文件仅供已经获准访问这台电脑的安装助手读取；如果当前助手只有云端工具，请明确说明不能读取，并引导用户在 ${name} 的 MCP 设置导入 AO 提供的配置。不要要求用户把私密配置、入口卡或认证内容发到聊天。\n\n${require('./agent-install.cjs').agentInstallPrompt({member,provider:row.provider,templateFiles})}\n\n配置完成后，请用户回到 ${name} 的本人对话，启用 AO 连接器并发送以下握手提示词：\n${this.handshakePrompt(member)}`,
-      steps:[`把安装/更新说明交给有本机配置权限的安装助手；也可在 ${name} 的 MCP 设置中手动导入 AO 的现有配置。`,`保存并启用后，回到 ${name} 的本人对话发送握手提示词。`],
-      note:'安装配置与本人对话握手分别验证；手动 MCP 不代表 AO 已能自动唤醒客户端。',scope:{room_id:row.room_id,target_member_id:memberId}};
-  }
-  guidance(row,state,kind){
-    if(!['manual_handoff','native_connect','unsupported'].includes(kind)||row.status==='needs_reauthorization'||state?.stage==='awaiting_credential')return null;
-    const name=names.get(row.provider)||row.provider,memberId=state?.member_id||null,scope={room_id:row.room_id,target_member_id:memberId};
-    if(memberId){const credentials=this.service.resume.credentials(memberId);if(credentials.length&&credentials.every(card=>card.status==='revoked'))return null;}
-    if(kind==='unsupported'){
-      const fixed=state?.stage==='fixed_proxy_scope';
-      return {kind:'check_capability',target_window:row.provider==='grok-bot'?'已有 Grok Bot 对话':`${name} 的本人对话`,copy_label:`复制给 ${name} 检查`,scope,
-        prompt:`请帮我核对当前这个 ${name} 对话如何接入我电脑上的 Agent Office。${fixed?'AO 发现的是另一房间的固定群桥接，不能把它静默改绑为当前房间的独立成员。请保留原 Bot、原群路由和其他连接。':'AO 尚未发现当前可用的本人接入入口，不能据此断定你不支持 MCP 或本机工具。'}先报告当前对话实际可用的本机命令工具、MCP / 连接器及其启用状态。${row.provider==='grok-bot'?'如果已有获准的 Windows 本机命令工具，请说明可以复用当前 Bot 的本机入口；不自动创建新 Bot、群聊或定时任务。':''}如果支持 MCP，请告诉我此版本在哪里添加或更新 Agent Office 连接器、采用哪种传输，以及是否需要在当前对话启用或重新加载；已有 AO 工具时实际调用 agentroom_chat_rooms 和 agentroom_chat_inbox（参数 {}）核对。没有本机权限或不支持 MCP 时，明确指出缺少的能力和界面里的具体操作步骤。尚未拿到 AO 为所选人物生成的配置时，请让我回 AO 准备该人物的连接说明；不要猜测本机地址、端口、令牌、成员或房间 ID，不读取其他人物配置，不用云端代码解释器访问本机，不声称已经接通。`,
-        steps:[`把下方检查提示词复制到${row.provider==='grok-bot'?'已有 Grok Bot 对话':`${name} 的本人对话`}并发送。`,fixed?'保留原房间的固定群路由；按检查结果准备独立成员入口，原连接不会自动改绑。':'按助手指出的实际入口启用本机工具或 MCP，再回 AO 继续连接。'],note:'这一步核对客户端能力，不代表已安装 MCP 或接通办公室。'};
-    }
-    if(!memberId||this.nativePending(state))return null;
-    this.service.chat.store.requireParticipant(row.room_id,memberId);
-    const entry=this.service.entry.describePrimary(memberId,row.room_id);if(!entry.available)return null;
-    const member=this.service.chat.store.member(memberId);
-    if(row.provider==='grok-bot'){
-      const guide=this.service.chat.grokGuide(member,row.room_id,{native:false});if(!guide.copy||guide.needs_reauthorization)return null;
-      return {kind:'handshake',target_window:'已有 Grok Bot 对话',copy_label:'复制给 Grok Bot',prompt:guide.copy,steps:guide.steps,note:guide.note,scope};
-    }
-    if(kind==='manual_handoff'&&!row.document_path)return null;
-    if(kind==='manual_handoff'&&entry.status!=='active')return this.installationGuidance(row,state);
-    const native=kind==='native_connect',incompatible=/UNSUPPORTED_SOURCE|不兼容|尚未通过核对/i.test(state?.error||'');
-    return {kind:native?'native_connect':'handshake',target_window:`${name} 的本人对话`,copy_label:`复制给 ${name} 握手`,prompt:this.handshakePrompt(member),scope,
-      steps:native?[incompatible?`${name} 的本机对话接口与当前版本不兼容。可更新到支持的客户端版本，或在连接步骤明确选择「改用手动 MCP」。`:`先在 AO 点击「开启客户端连接」，按提示开启 ${name} 的本机连接，再点击「连接本人对话」。`,'如果准备使用 MCP，在当前本人对话启用已有 AO 连接器，复制下方握手提示词；缺少配置时使用安装/更新说明。']:[`回到 ${name} 的本人对话，启用已有 AO 连接器并发送下方握手提示词。`],
-      note:native?'本人窗口的 MCP 握手与 AO 原生自动连接分别核对；发送提示词不会自动切换连接方式。':'已有 MCP 无需反复安装；找不到 AO 工具时才检查启用、重新加载或更新配置。'};
-  }
   snapshot(row){
     this.source(row.message_id);let state=null,error=row.error;
     try{state=this.state(row);}catch(caught){error=safe(caught.message);}
@@ -211,12 +161,6 @@ class ConnectionAssist{
       guidedGrok?'点击下方「复制给 Grok Bot」，把说明发到已有 Grok Bot 对话。AO 会继续检查真实连接，不需要创建群聊。':
       documentPath?`将下方接入句发到${targetWindow}，让它按文档完成连接；AO 会继续显示实际进度。`:
       status==='running'?'AO 正在接入选定成员，保留当前进度等待结果，不重复发起。':'请打开这条消息的原有接入进度，处理提示的下一步；原人物和连接保留。';
-    let guidance=null,installationGuidance=null;
-    try{guidance=this.guidance(row,state,actionKind);if(actionKind==='native_connect'&&guidance)installationGuidance=this.installationGuidance(row,state);}catch(caught){error=error||safe(caught.message);}
-    if(guidance&&actionKind==='unsupported')nextStep=`点击「${guidance.copy_label}」，把提示词发到${guidance.target_window}，让它核对 MCP 或本机工具并给出具体操作步骤。`;
-    else if(guidance&&actionKind==='native_connect')nextStep=guidance.steps[0];
-    else if(guidance?.kind==='install_mcp')nextStep=`点击「${guidance.copy_label}」，交给${guidance.target_window}；然后回到 ${names.get(row.provider)||row.provider} 的本人对话握手。`;
-    else if(actionKind==='native_connect'&&this.nativePending(state))nextStep='这位同事有正在执行或结果待核对的原生请求。请先查看原消息与本人对话核对结果，不能通过更新 MCP 或重复握手改走其他通路。';
     const presentation=present({...state,provider:row.provider,status:protectedConnection?'needs_action':status,stage,error_code:state?.error_code||null,ready_for_office:ready,local_verified:ready,can_wake:ready&&state?.can_wake===true,error:ready?null:error||state?.error||null},{action_kind:actionKind});
     return {presentation,id:row.id,room_id:row.room_id,message_id:row.message_id,member_id:row.member_id,provider:row.provider,name:names.get(row.provider)||row.provider,
       provider_name:names.get(row.provider)||row.provider,run_id:runId,status,stage,summary,error_code:state?.error_code||null,ready_for_office:ready,local_verified:ready,can_wake:ready&&state?.can_wake===true,
@@ -224,7 +168,6 @@ class ConnectionAssist{
       handoff_kind:guidedGrok?'grok_guided':documentPath?'connection_document':null,connection_method:guidedGrok?'grok_command_bridge':state?.response_mode||null,target_window:targetWindow,next_step:nextStep,
       action_kind:actionKind,reused_connection:reused,verification_scope:'current_attempt',can_notify:state?.can_notify===true,
       selection_reason:state?.selection_reason||null,fixed_proxy:fixed,
-      guidance,installation_guidance:installationGuidance,
       recovery_action:actionKind==='reauthorize'&&state?.member_id?{operation:'reauthorize',room_id:row.room_id,provider:row.provider,target_member_id:state.member_id}:['managed','connection_recheck'].includes(actionKind)&&runId?{operation:'retry',run_id:runId,room_id:row.room_id,provider:row.provider,target_member_id:state?.member_id||row.target_member_id||null}:null,
       protocol_verified:state?.protocol_verified===true,automatic_reply_verified:state?.automatic_reply_verified===true,
       target_member_id:state?.member_id||null,document_path:documentPath,document_url:documentPath?`/api/connection-assists/${row.id}/document?room_id=${encodeURIComponent(row.room_id)}`:null,
@@ -248,12 +191,7 @@ class ConnectionAssist{
     row=this.row(assistId);if(terminalSource.has(this.source(row.message_id).status))return;
     const state=this.state(row);if(state?.status==='ready'||state?.status==='running'||row.document_path)return;
     const kind=this.actionKind(row,state);
-    if(kind==='native_connect'){
-      // Preparing optional MCP help is part of this explicit user request; it
-      // does not change the saved native delivery mode or issue revoked cards.
-      if(state?.member_id&&!this.nativePending(state)){this.service.chat.store.requireParticipant(row.room_id,state.member_id);const entry=this.service.entry.describePrimary(state.member_id,row.room_id);if(entry.available)this.service.chat.clientGuide(this.service.chat.store.member(state.member_id),row.room_id,{native:false});}
-      return;
-    }
+    if(kind==='native_connect')return;
     if(kind!=='manual_handoff')return;
     this.update(row.id,{status:'preparing_document'});
     const reauthorizationRequired=row.status==='needs_reauthorization';
@@ -287,7 +225,7 @@ class ConnectionAssist{
     // The agent's reply only acknowledges it, so nothing is said twice.
     const snapshots=this.snapshotForMessage(messageId).map(item=>({name:item.name,provider:item.provider,state:item.presentation?.state||null,headline:item.presentation?.headline||null,connection_ready:item.ready_for_office===true,automatic_ready:item.ready_for_office===true&&item.can_wake===true,can_wake:item.can_wake===true,action_kind:item.action_kind}));
     return '\n用户请求接入成员。Agent Office 已在这条消息下方显示接入卡片，卡片里有当前状态和要点的按钮。'+
-      '你只需用一句话回应，例如「接入进度见下方卡片」；可以按 headline 简单复述一次结论；connection_ready 为 false 时不能说已接通，can_wake 为 false 时不能说会自动处理。不要列步骤、配置、路径、诊断或状态码，也不要重试、扫描、重建人物或索取凭据。\n'+
+      '你只需用一句话回应，例如「接入进度见接入卡片」；可以按 headline 简单复述一次结论；connection_ready 为 false 时不能说已接通，can_wake 为 false 时不能说会自动处理。不要列步骤、配置、路径、诊断或状态码，也不要重试、扫描、重建人物或索取凭据。\n'+
       `当前状态（只读）：${JSON.stringify(snapshots)}\n`;
   }
   document(assistId,roomId){

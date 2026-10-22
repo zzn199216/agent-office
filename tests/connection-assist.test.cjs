@@ -173,10 +173,10 @@ test('mailbox document is private and read-only polling never scans, issues cred
   assert.equal(v.calls.scans,scans);assert.deepEqual(counts(v),before);assert.equal(v.service.revision,revision);assert.deepEqual(fs.readFileSync(cardFile),bytes);assert.equal(fs.statSync(state.document_path).mtimeMs,first);
   assert.equal(state.local_verified,false);v.service.entry.accept(card);const [ready]=v.manager.snapshotForMessage(message.id);assert.equal(ready.local_verified,true);assert.equal(ready.status,'ready');assert.equal(ready.can_wake,false);assert.equal(ready.automatic_reply_verified,false);
 });
-test('an unsupported Grok replaces its stale document with an honest capability-check prompt',async t=>{
+test('an unsupported Grok replaces its stale document with an honest unsupported card',async t=>{
   const v=setup(t),message=v.message('接入一下grok');v.manager.begin(message);const [first]=await v.finish();assert.ok(first.document_path);assert.ok(first.target_member_id);
   const before=counts(v);v.manager.state=()=>({id:first.run_id,member_id:first.target_member_id,status:'needs_action',stage:'unsupported',local_verified:false,ready_for_office:false});
-  const state=v.manager.snapshotForMessage(message.id)[0];assert.equal(state.action_kind,'unsupported');assert.equal(state.handoff_kind,null);assert.equal(state.document_path,null);assert.equal(state.copy_sentence,'');assert.equal(state.guidance.kind,'check_capability');assert.match(state.next_step,/复制给 Grok Bot 检查/);assert.doesNotMatch(state.guidance.prompt,/--entry|https?:\/\/|secret|token=/);
+  const state=v.manager.snapshotForMessage(message.id)[0];assert.equal(state.action_kind,'unsupported');assert.equal(state.handoff_kind,null);assert.equal(state.document_path,null);assert.equal(state.copy_sentence,'');assert.equal(state.presentation.state,'not_connected');assert.ok(state.presentation.primary);assert.doesNotMatch(JSON.stringify(state),/--entry|secret|token=/);
   const context=await v.manager.prepareContext(message.id);assert.match(context,/一句话回应/);assert.match(context,/"action_kind":"unsupported"/);assert.match(context,/"state":"not_connected"/);assert.doesNotMatch(context,/"copy_sentence":"请读取|"handoff_kind":"grok_guided"/);assert.deepEqual(counts(v),before);
 });
 test('duplicate posts and recreated manager preserve run, identity and credentials without retry',async t=>{
@@ -248,50 +248,11 @@ test('context waiting is bounded and close does not cause a second connection at
   let release;const gate=new Promise(resolve=>release=resolve),v=setup(t,{desktopGate:gate,contextWaitMs:5}),message=v.message('连接豆包');v.manager.begin(message);const started=Date.now(),context=await v.manager.prepareContext(message.id);assert.ok(Date.now()-started<1000);assert.match(context,/正在连接/);
   v.manager.stop();release();await v.manager.close();assert.equal(v.calls.desktop.length,1);assert.equal(v.calls.scans,1);assert.equal(v.manager.snapshotForMessage(message.id)[0].document_path,null);
 });
-
-test('Grok copy guidance contains the real existing Bot command without another identity or leaked credentials',async t=>{
-  const v=setup(t),message=v.message('连接grok');v.manager.begin(message);const [card]=await v.finish(),entry=v.service.entry.describePrimary(card.target_member_id,v.room.id),secret=JSON.parse(fs.readFileSync(entry.file,'utf8')).secret;
-  assert.equal(card.guidance.kind,'handshake');assert.equal(card.guidance.target_window,'已有 Grok Bot 对话');assert.deepEqual(card.guidance.scope,{room_id:v.room.id,target_member_id:card.target_member_id});
-  assert.match(card.guidance.prompt,/先实际执行这份长期恢复入口/);assert.match(card.guidance.prompt,/enter.*--entry/);assert.ok(card.guidance.prompt.includes(entry.file));assert.match(card.guidance.prompt,/不需要创建群聊或新 Bot/);assert.ok(!JSON.stringify(card).includes(secret));
-  const before=counts(v),revision=v.service.revision,scans=v.calls.scans,bytes=fs.readFileSync(entry.file);for(let i=0;i<3;i++)assert.deepEqual(v.manager.snapshotForMessage(message.id)[0].guidance,card.guidance);
-  assert.deepEqual(counts(v),before);assert.equal(v.service.revision,revision);assert.equal(v.calls.scans,scans);assert.deepEqual(fs.readFileSync(entry.file),bytes);
-});
-
-test('missing Grok discovery offers copyable tool and MCP checks without inventing an endpoint or issuing an entry',async t=>{
-  const v=setup(t);v.service.launch.options.discover=()=>{v.calls.scans++;return {candidates:[]};};const before=counts(v),message=v.message('连接grok');v.manager.begin(message);const [card]=await v.finish();
-  assert.equal(card.action_kind,'unsupported');assert.equal(card.target_member_id,null);assert.equal(card.guidance.kind,'check_capability');assert.deepEqual(card.guidance.scope,{room_id:v.room.id,target_member_id:null});assert.match(card.guidance.prompt,/本机命令工具、MCP/);assert.match(card.guidance.prompt,/不要猜测本机地址/);assert.doesNotMatch(card.guidance.prompt,/https?:\/\/|--entry|token=/);assert.equal(card.installation_guidance,null);
-  assert.equal(counts(v).members,before.members);assert.equal(counts(v).credentials,before.credentials);assert.equal(v.calls.desktop.length+v.calls.install+v.calls.native.length,0);
-});
-
-test('an old fixed Grok route gets actionable capability guidance without copying or changing that route',async t=>{
-  const v=setup(t),legacy=v.service.chat.addMember({name:'原群 Grok',adapter:'grok-bridge'}),backend=v.service.chat.addMember({name:'原群后台',adapter:'codex'});
-  v.service.chat.join(v.other.id,legacy.id);v.service.chat.join(v.other.id,backend.id);v.service.chat.store.updateMember(legacy.id,{status:'ready',verified_at:now(),config:{launch_provider:'grok-bot'}});
-  const entry=v.service.entry.issue(legacy.id,v.other.id),bytes=fs.readFileSync(entry.file),route=id();v.service.store.db.prepare("INSERT INTO launch_proxies(id,room_id,provider,name,backend_member_id,proxy_member_id,native_group_status,created,updated) VALUES(?,?,?,?,?,?,'pending',?,?)").run(route,v.other.id,'codex','原群连接',backend.id,legacy.id,now(),now());
-  const before=counts(v),original=v.service.store.db.prepare('SELECT * FROM launch_proxies WHERE id=?').get(route),message=v.message('连接grok');v.manager.begin(message);const [card]=await v.finish();
-  assert.equal(card.stage,'fixed_proxy_scope');assert.equal(card.action_kind,'unsupported');assert.equal(card.guidance.kind,'check_capability');assert.deepEqual(card.guidance.scope,{room_id:v.room.id,target_member_id:legacy.id});assert.match(card.guidance.prompt,/另一房间的固定群桥接/);assert.match(card.guidance.prompt,/保留原 Bot、原群路由/);assert.doesNotMatch(card.guidance.prompt,/--entry|https?:\/\//);assert.ok(!card.guidance.prompt.includes(entry.file));assert.equal(card.document_path,null);
-  assert.deepEqual(v.service.store.db.prepare('SELECT * FROM launch_proxies WHERE id=?').get(route),original);assert.equal(v.service.chat.store.joined(v.room.id,legacy.id),false);assert.equal(counts(v).members,before.members);assert.equal(counts(v).credentials,before.credentials);assert.equal(v.calls.scans,0);assert.deepEqual(fs.readFileSync(entry.file),bytes);
-});
-
-for(const [provider,request,error,expected]of [['qwen-desktop','连接 Qwen','connect ECONNREFUSED 127.0.0.1','开启客户端连接'],['doubao','连接豆包','DOUBAO_NATIVE_PREPARATION_UNSUPPORTED_SOURCE','不兼容']])test(`${provider} failed native contact exposes distinct repair, install-update and handshake steps`,async t=>{
-  const v=setup(t,{nativeError:error}),message=v.message(request);v.manager.begin(message);const [card]=await v.finish();
-  assert.equal(card.action_kind,'native_connect');assert.equal(card.guidance.kind,'native_connect');assert.match(card.guidance.steps[0],new RegExp(expected));assert.match(card.guidance.prompt,/agentroom_chat_rooms/);assert.match(card.guidance.prompt,/agentroom_chat_inbox/);assert.match(card.guidance.note,/不会自动切换连接方式/);
-  const install=card.installation_guidance;assert.equal(install.kind,'install_mcp');assert.match(install.target_window,/这台电脑文件/);assert.match(install.prompt,/安装或更新/);assert.match(install.prompt,/不覆盖其他 MCP/);assert.match(install.prompt,/云端工具/);assert.match(install.prompt,/回到 .* 的本人对话/);assert.deepEqual(install.scope,{room_id:v.room.id,target_member_id:card.target_member_id});assert.deepEqual(card.guidance.scope,install.scope);
-  const entry=v.service.entry.describePrimary(card.target_member_id,v.room.id),bytes=fs.readFileSync(entry.file),secret=JSON.parse(bytes).secret,templates=path.join(v.data,'client-config','templates'),files=fs.readdirSync(templates).map(name=>path.join(templates,name)),times=files.map(file=>fs.statSync(file).mtimeMs),before=counts(v),revision=v.service.revision,mode=v.service.onboarding.row(card.run_id).connection_method;
-  assert.ok(!JSON.stringify(card).includes(secret));assert.doesNotMatch(install.prompt,/https?:\/\//);for(let i=0;i<3;i++)assert.deepEqual(v.manager.snapshotForMessage(message.id)[0].installation_guidance,install);
-  assert.equal(v.service.revision,revision);assert.deepEqual(counts(v),before);assert.deepEqual(fs.readFileSync(entry.file),bytes);assert.deepEqual(files.map(file=>fs.statSync(file).mtimeMs),times);assert.equal(v.service.onboarding.row(card.run_id).connection_method,mode);assert.equal(mode,'native_desktop');assert.equal(card.ready_for_office,false);
-  for(const file of files)fs.unlinkSync(file);assert.equal(v.manager.snapshotForMessage(message.id)[0].installation_guidance,null);assert.deepEqual(fs.readdirSync(templates),[],'polling never recreates missing MCP templates');
-});
-
-test('manual MCP guidance distinguishes first installation from an already loaded connection needing a fresh handshake',async t=>{
-  const v=setup(t,{manualOnly:true}),first=v.message('连接豆包');v.manager.begin(first);const [initial]=await v.finish();assert.equal(initial.guidance.kind,'install_mcp');assert.match(initial.guidance.prompt,/安装或更新/);
-  const entry=v.service.entry.describePrimary(initial.target_member_id,v.room.id),card=JSON.parse(fs.readFileSync(entry.file,'utf8'));v.service.entry.accept(card);const ready=v.manager.snapshotForMessage(first.id)[0];assert.equal(ready.ready_for_office,true);assert.equal(ready.guidance,null);assert.equal(ready.installation_guidance,null);
-  v.service.chat.store.updateMember(initial.target_member_id,{status:'connection_failed',error:'fixture 原 MCP 已配置，但当前对话尚未重新加载'});
-  v.service.store.db.prepare('UPDATE chat_resume_credentials SET last_seen=? WHERE id=?').run(new Date(Date.now()-60000).toISOString(),card.credential_id);
-  await sleep(5);const message=v.message('连接豆包');v.manager.begin(message);const [pending]=v.manager.snapshotForMessage(message.id);await v.finish();const next=v.manager.snapshotForMessage(message.id)[0];assert.equal(next.target_member_id,initial.target_member_id);assert.equal(next.guidance.kind,'handshake');assert.match(next.guidance.note,/无需反复安装/);assert.match(next.guidance.prompt,/当前对话是否实际加载 AO 工具/);assert.equal(next.installation_guidance,null);assert.equal(next.ready_for_office,false);assert.equal(pending.target_member_id,initial.target_member_id);
-});
-
-test('a native request awaiting reconciliation suppresses both copy routes and all template regeneration',async t=>{
-  const v=setup(t),message=v.message('连接豆包');v.manager.begin(message);const [first]=await v.finish(),entry=v.service.entry.describePrimary(first.target_member_id,v.room.id),bytes=fs.readFileSync(entry.file),before=counts(v),revision=v.service.revision;
-  const pending=v.message('等待核对的原问题');v.service.store.db.prepare("INSERT INTO desktop_message_runs(message_id,member_id,native_session_id,native_request_id,status,answer,error,created,updated) VALUES(?,?,?,?,'uncertain',NULL,?,?,?)").run(pending.id,first.target_member_id,'saved-session','saved-request','原生请求结果待核对',now(),now());
-  const card=v.manager.snapshotForMessage(message.id)[0];assert.equal(card.action_kind,'native_connect');assert.equal(card.guidance,null);assert.equal(card.installation_guidance,null);assert.match(card.next_step,/先查看原消息/);assert.match(card.next_step,/不能通过更新 MCP/);assert.deepEqual(counts(v),before);assert.equal(v.service.revision,revision);assert.deepEqual(fs.readFileSync(entry.file),bytes);
+for(const [provider,request,options]of [['doubao','连接豆包',{nativeError:'connect ECONNREFUSED 127.0.0.1'}],['qwen-desktop','连接 Qwen',{manualOnly:true}],['grok-bot','把 Grok 接入',{}]])test(`${provider} connection cards are read-only to read and never carry credentials`,async t=>{
+  const v=setup(t,options),message=v.message(request);v.manager.begin(message);const [card]=await v.finish();
+  assert.ok(card.presentation&&card.presentation.headline);
+  const member=card.target_member_id,entry=member?v.service.entry.describePrimary(member,v.room.id):null,bytes=entry?.file&&fs.existsSync(entry.file)?fs.readFileSync(entry.file):null,secret=bytes?JSON.parse(bytes).secret:null;
+  const before=counts(v),revision=v.service.revision;
+  for(let i=0;i<3;i++){const again=v.manager.snapshotForMessage(message.id)[0];assert.deepEqual(again.presentation,card.presentation);if(secret)assert.ok(!JSON.stringify(again).includes(secret));}
+  assert.deepEqual(counts(v),before);assert.equal(v.service.revision,revision);if(bytes)assert.deepEqual(fs.readFileSync(entry.file),bytes);
 });

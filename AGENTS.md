@@ -26,3 +26,14 @@ Work from this checkout. Resolve project paths from the repository root; never h
 - This is an unreleased local development project. Test data can be discarded; do not add user account infrastructure, production data migration, or retention systems without a concrete requirement. This does not authorize deleting personal files or existing runtime configuration.
 - Keep credentials out of output. Use synthetic identifiers and tokens in regression tests.
 - Ask for current computer availability before operating client windows, as required by the user's computer-use preference. Normal source and isolated command-line checks need no GUI.
+
+## Connection UI rules
+
+Member connection status reaches people through one projection, `src/member-connection.cjs`. Keep it that way.
+
+- Five user states only: `not_connected`, `waiting`, `connected`, `auto`, `attention`. Internal onboarding stages are diagnostics; never branch UI copy on them directly. A new backend stage must map to one of the five (the exhaustive test in `tests/member-connection.test.cjs` reads stage literals from source and fails otherwise).
+- One card shape everywhere (chat card, onboarding list, member dialog): one status line, one primary action, at most one secondary action, and a folded 详情 for errors and manual setup. Every non-final state has a primary action; a dead end is a bug.
+- Desktop clients connect over MCP by default (copy config, then send one sentence). The debug-port route is only the optional automatic-wake add-on for connected Doubao/Qwen members and always asks before restarting a client.
+- Copy rules (enforced by `tests/web-connection-assist.test.cjs` and `tests/member-connection.test.cjs`): no reassurance boilerplate (保留/沿用/没有自动重试/未宣称/不会生成), no internal terms (原生会话/本人对话/握手/兼容 MCP/群桥接) in headlines, buttons or connection-flow messages, and any button named in copy must be a label the panel actually shows.
+- Connect-request cards are posted as Agent Office under the person's own message; the addressed agent only acknowledges them in one sentence.
+- Prefer removing a branch over adding another explanation. A change that adds user-facing text should say what the person can do next, not what the system did not do.

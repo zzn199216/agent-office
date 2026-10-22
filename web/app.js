@@ -341,36 +341,6 @@ async function runOnboardingOperation(job,operation){
   finally{const feedback=onboardingFeedbackFor(current);if(feedback?.pending)setOnboardingFeedback(current,feedback.message,{...feedback,pending:false});}
 }
 function onboardingAction(job) { return onboardingActions(job)[0] || null; }
-function onboardingActionMarkup(job) {
-  if(job?.presentation)return connectionPanelMarkup(job.presentation,{source:'job',id:job.id});
-  if(onboardingRepairRequired(job))return `<div class="onboarding-action"><strong>后台连接已暂停，桌面登录受保护</strong><p>请先修复 AO 的独立后台环境。这里不会打开登录窗口，也不会自动重试。</p>${onboardingActions(job).some(value=>value.operation==='choose_connected_member')?`<div class="onboarding-action-buttons"><button type="button" class="secondary" data-onboarding-operation="choose_connected_member" data-onboarding-action-job="${escape(job.id)}">选择其他已接通成员</button></div>`:''}</div>`;
-  if(onboardingRecheckPending(job))return `<div class="onboarding-action"><strong>沿用已有登录，等待重新验证</strong><p>原人物、聊天和 MCP 配置均保留。只有点击下面的按钮，才会开始新的连接验证。</p>${onboardingCanRecheck(job)&&onboardingActions(job).some(value=>value.operation==='retry')?`<div class="onboarding-action-buttons"><button type="button" class="secondary" data-onboarding-operation="retry" data-onboarding-action-job="${escape(job.id)}" ${onboardingFeedbackFor(job)?.pending?'disabled':''}>沿用已有登录，重新验证</button></div>`:''}</div>`;
-  const values = onboardingActions(job), first = values[0]; if (!first) return '';
-  const buttons = values.map(value => {
-    const id = escape(job.id), operation = value.operation || value.kind || value.type;
-    if(job.provider==='codex'&&operation==='login_client')return '';
-    if (value.url && /^https?:\/\//i.test(value.url)) return `<a class="primary" href="${escape(value.url)}" target="_blank" rel="noopener noreferrer">${escape(value.button_label || value.label || '打开授权页面')} ↗</a>`;
-    if (operation === 'native_desktop_connect') return `<button type="button" class="primary" data-onboarding-operation="native_desktop_connect" data-onboarding-action-job="${id}">连接本人对话</button>`;
-    if(operation==='open_native_client')return `<button type="button" class="primary" data-onboarding-operation="open_native_client" data-onboarding-action-job="${id}">开启客户端连接</button>`;
-    if(operation==='open_fixed_room'&&value.target_member_id===job.member_id)return `<button type="button" class="primary" data-onboarding-operation="open_fixed_room" data-onboarding-action-job="${id}">查看原房间连接</button>`;
-    if(operation==='reauthorize'&&value.target_member_id===job.member_id)return `<button type="button" class="primary" data-onboarding-operation="reauthorize" data-onboarding-action-job="${id}">重新授权这位成员</button>`;
-    if(operation==='manual_mcp'&&value.target_member_id===job.member_id)return `<button type="button" class="secondary" data-onboarding-operation="manual_mcp" data-onboarding-action-job="${id}">改用手动 MCP</button>`;
-    if (['import_client_config','import_mcp','desktop_import','configure_connector','import_connector'].includes(operation)) return `<button type="button" class="primary" data-onboarding-config="${id}">${escape(clientConfigLabel(job))}</button>`;
-    if (operation === 'copy_handshake_prompt' || value.kind === 'self_handshake') return `<button type="button" class="secondary" data-onboarding-copy="${id}" data-onboarding-copy-kind="handshake">复制本人接入说明</button>`;
-    if (operation === 'native_group_handoff') return `<button type="button" class="secondary" data-onboarding-copy="${id}" data-onboarding-copy-kind="group">复制 Grok 加群说明</button>`;
-    if (operation === 'login_client') return job.provider==='codex'?'':`<button type="button" class="primary" data-onboarding-operation="login_client" data-onboarding-action-job="${id}">${job.configuration?.api_mode?'打开 API 配置':'打开首次配置'} ↗</button>`;
-    if (operation === 'retry' || operation === 'install_runtime') return `<button type="button" class="secondary" data-onboarding-operation="${escape(operation)}" data-onboarding-action-job="${id}">${escape(job.stage === 'awaiting_auth' && operation === 'retry' ? job.provider==='codex'?'已在原 Codex 登录，检查连接':'配置完成后继续接入' : value.label || '继续接入')}</button>`;
-    if (value.command || value.instruction || value.prompt) return `<button type="button" class="secondary" data-onboarding-copy="${id}">${escape(value.copy_label || (value.command ? '复制首次配置说明' : '复制本人接入说明'))}</button>`;
-    return '';
-  }).filter(Boolean);
-  if (job.status === 'needs_action'&&!values.some(value=>value.operation==='native_desktop_connect')) buttons.push(`<button type="button" class="secondary" data-onboarding-check="${escape(job.id)}">我已完成，检查连接</button>`);
-  const fallback = first.operation==='native_desktop_connect'?nativeConnectNextStep(job.provider,{code:job.error_code}):first.kind === 'reload_client' ? '请从客户端菜单退出后重新打开，再将本人接入说明交给它。' : first.kind === 'import_mcp' ? clientImportKind(job) === 'form' ? '在本人设置中新建自定义连接器，分别填写字段；启用后，再完成真实工具握手。' : '配置贴到这个客户端的 MCP 设置；启用后，再完成本人的工具握手。' : first.kind === 'self_handshake' ? '将下面的接入说明交给本人窗口，实际调用工具后会显示接通。' : first.kind === 'login' ? job.configuration?.api_mode ? '此成员使用本机 Claude API 配置。密钥只需保存一次；保存后继续接入，无需重新登录订阅账号。' : job.provider === 'qwen-code' ? '在官方命令窗口通过 /auth 配置 API 或计划凭据；完成后继续接入。此入口不复用 Qwen 桌面登录。' : job.provider === 'gemini-cli' ? '请在 Gemini CLI 中完成 Google 登录或 API 配置。它使用自己的认证，不代替你当前网页中的聊天。' : '首次登录或授权需要你本人完成，后续接入会复用账号。' : '';
-  const title = job.provider==='codex'&&job.stage==='awaiting_auth'?'请先在原 Codex 窗口登录':first.kind === 'login' && job.provider === 'qwen-code' ? '配置 Qwen Code 提供商' : first.label || first.title || '需要完成一次操作';
-  const nativeOpening=values.some(value=>value.operation==='open_native_client')?'<p class="small-note">如果客户端已经打开，请先从它的菜单或托盘完整退出，再点「开启客户端连接」。AO 会沿用原人物和登录；不用填写端口或命令。</p>':'';
-  const pending=onboardingFeedbackFor(job)?.pending,markup=pending?buttons.join('').replaceAll('<button ','<button disabled '):buttons.join('');
-  const detail=job.provider==='codex'&&job.stage==='awaiting_auth'?'AO 沿用原 Codex 的已有登录缓存；请在原窗口完成登录后检查连接，不需要额外的后台登录。':first.detail || first.description || fallback;
-  return `<div class="onboarding-action"><strong>${escape(title)}</strong>${detail ? `<p>${escape(detail)}</p>` : ''}${nativeOpening}<div class="onboarding-action-buttons">${markup}</div></div>`;
-}
 async function openOnboardingFixedRoom(job){
   const step=onboardingActions(job).find(value=>value.operation==='open_fixed_room'&&value.target_member_id===job.member_id),target=state?.chat?.rooms?.find(value=>value.id===step?.room_id);
   if(!step||!target||!job.member_id)throw Error('原房间暂不可用。请保留现有人物，在房间列表检查原连接。');
@@ -386,7 +356,6 @@ async function reauthorizeOnboarding(job,attempt=captureOnboardingAttempt(job)){
   if(updated?.member_id&&updated.member_id!==job.member_id)throw Error('返回的接入人物不匹配，原人物和连接保留。');
   return adoptOnboardingJob(updated,job,attempt);
 }
-function roomUsesGrok() { return (history?.participants || []).some(member => member.adapter === 'grok-bridge' && member.verified_at); }
 // A connection that waits for the user's approval must ask right here, where
 // the user is looking, not only in the chat room's approval panel.
 function onboardingApprovalMarkup(job) {
@@ -396,19 +365,10 @@ function onboardingApprovalMarkup(job) {
 function tickOnboardingElapsed() { for (const span of document.querySelectorAll('.onboarding-elapsed[data-since]')) { const seconds = Math.max(0, Math.round((Date.now() - Date.parse(span.dataset.since)) / 1000)); span.textContent = `已用 ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2,'0')}${seconds > 90 ? ' · 比平时久，可能在等登录或确认' : ''}`; } }
 setUIInterval(tickOnboardingElapsed, 1000);
 function onboardingJobMarkup(job) {
-  // Same panel as the chat card; internal stage, steps and backend wording
-  // stay out of the list (errors remain under 详情).
-  if(job?.presentation)return `<article class="onboarding-job ${job.presentation.state==='attention'?'failed':['connected','auto'].includes(job.presentation.state)?'ready':''}" data-onboarding-job="${escape(job.id)}"><div class="onboarding-job-heading">${avatar(job.presentation.name||job.name||job.provider,job.provider)}<div><strong>${escape(job.presentation.name||job.name||job.provider)}</strong></div></div>${connectionPanelMarkup(job.presentation,{source:'job',id:job.id})}${onboardingFeedbackMarkup(job)}</article>`;
-    const repair=onboardingRepairRequired(job),recheck=onboardingRecheckPending(job),ready = onboardingOfficeReady(job), readyType = ready?onboardingReady(job):null, pending = !repair&&!recheck&&onboardingRunning(job), needsAction = repair||recheck||job.status === 'needs_action', failed = ['failed','error','interrupted','cancelled'].includes(job.status), actionValue = onboardingAction(job);
-    const stage = job.stage || job.phase || '', stageNumber = Number.isInteger(job.stage_index) ? Math.max(0,Math.min(3,job.stage_index)) : /handshake|verify|ready|complete|^connecting$/.test(stage) ? 2 : /config|install|auth|start|launch|import|reload|connection/.test(stage) ? 1 : 0;
-    const verifyingReply=stage==='verifying_reply',stageLabels = ['发现','配置',verifyingReply?'验证实际回复':'验证通信','完成'];
-    const steps = stageLabels.map((label,index) => `<li class="${ready || index < stageNumber ? 'done' : index === stageNumber && !failed ? 'current' : ''}"><span>${ready || index < stageNumber ? '✓' : index + 1}</span>${label}</li>`).join('');
-    const replyVerified = job.automatic_reply_verified === true, title = repair ? '连接已暂停 · 保护桌面登录' : recheck?'已有登录可复用 · 等待重新验证':verifyingReply ? '连接已建立 · 正在自动验证实际回复' : readyType === 'ready_automatic' ? replyVerified ? '已核对实际回复 · 可自动处理消息' : '通信已接通 · 实际回复待验证' : readyType === 'ready_mailbox' ? '已接通 · 要在它自己的窗口里处理消息' : needsAction ? job.provider==='codex'&&stage==='awaiting_auth'?'请先在原 Codex 窗口登录':job.configuration?.api_mode ? '核对已保存的 API 配置' : job.provider === 'qwen-code' && stage === 'awaiting_auth' ? '完成首次 API 或计划配置' : job.provider === 'gemini-cli' && stage === 'awaiting_auth' ? '完成 Gemini CLI 账号配置' : '完成一次授权或启用' : failed ? '接入需要核对' : pending ? '正在接入' : '等待接入确认';
-    const detail = repair ? '为保护你已登录的 Codex，AO 已暂停这条后台连接。原人物、聊天和连接配置均已保留，不需要重新登录桌面账号。' : recheck?'原人物、聊天和 MCP 配置均保留。点击「沿用已有登录，重新验证」后，才会重新核对真实连接。':job.provider==='codex'&&stage==='awaiting_auth'?'请先在原 Codex 窗口完成登录，再回这里检查连接。AO 沿用已有登录缓存，无需额外的后台登录。':job.message || job.detail || (verifyingReply ? 'AO 正在核对这位同事的真实回答；完成后会自动进入办公室。' : ready ? readyType === 'ready_automatic' ? replyVerified ? '可以在房间里直接交给它了。' : 'AO 会自动核对原问题对应的实际最终回答。' : '它不会自动开工：给它发消息后，到它自己的窗口里说一句“查看收件箱”。' : stage === 'awaiting_auth' ? '完成首次账号配置后，再继续接入并验证后台通信。' : stage === 'awaiting_runtime_install' ? '还需要安装这个 agent 的后台入口。确认后，只安装你指定的成员。' : stage === 'unsupported' || stage === 'needs_wake_adapter' ? '已发现应用，正式通信或后台任务入口仍待适配。' : needsAction ? '完成下面这一步，接入会自动继续。' : '正在启动它并验证通信，通常不到一分钟。');
-    const errorText=typeof job.error==='string'?job.error:job.error?.message,feedback=onboardingFeedbackFor(job),duplicateError=repair||errorText&&[detail,feedback?.message,actionValue?.detail||actionValue?.description].some(value=>typeof value==='string'&&value.trim()===errorText.trim());
-    const groupState = job.native_group_status || job.group_status, reported = ['host_reported','joined'].includes(groupState);
-    const actionHtml = (needsAction || failed || ready) && (actionValue||repair||recheck) ? onboardingActionMarkup(job) : '';
-    return `<article class="onboarding-job ${failed ? 'failed' : ready ? 'ready' : ''}" data-onboarding-job="${escape(job.id)}"><div class="onboarding-job-heading">${avatar(job.name || job.provider,job.provider)}<div><strong>${escape(job.name || job.provider)}</strong><span>${escape(title)}</span></div>${pending ? '<span class="pulse-dot"></span>' : ''}</div><ol class="onboarding-steps">${steps}</ol><p class="onboarding-job-detail">${escape(detail)}${pending && job.created ? ` <span class="onboarding-elapsed" data-since="${escape(job.created)}"></span>` : ''}</p>${nativeDesktopProvider(job)&&job.native_direct_available!==false ? nativeReadinessMarkup(job,job.connection_evidence) : ''}${pending ? onboardingApprovalMarkup(job) : ''}${actionHtml}${onboardingFeedbackMarkup(job)}${job.error && !duplicateError ? `<p class="onboarding-job-error">${escape(typeof job.error === 'string' ? job.error : job.error.message || '请在专业视图核对接入记录。')}</p>` : ''}${ready && roomUsesGrok() ? `<div class="onboarding-group-note">${escape(reported ? 'Grok 已报告加群。' : 'Grok 群：需要时再让 Grok 把它拉进群。')}</div>` : ''}</article>`;
+  // Same panel as the chat card; internal stage and backend wording stay out
+  // of the list (errors remain under 详情).
+  if(!job?.presentation)return '';
+  return `<article class="onboarding-job ${job.presentation.state==='attention'?'failed':['connected','auto'].includes(job.presentation.state)?'ready':''}" data-onboarding-job="${escape(job.id)}"><div class="onboarding-job-heading">${avatar(job.presentation.name||job.name||job.provider,job.provider)}<div><strong>${escape(job.presentation.name||job.name||job.provider)}</strong></div></div>${connectionPanelMarkup(job.presentation,{source:'job',id:job.id},{pending:onboardingFeedbackFor(job)?.pending===true})}${job.presentation.busy?onboardingApprovalMarkup(job):''}${onboardingFeedbackFor(job)?.message&&onboardingFeedbackFor(job).message===job.presentation.details?.error?'':onboardingFeedbackMarkup(job)}</article>`;
 }
 function renderOnboarding() {
   const jobs = currentOnboardingJobs();
@@ -736,9 +696,9 @@ function renderConnectionAssists(message) {
 }
 // ---- Unified connection panel: one status, one primary action, details. ----
 const connectionOperationsPending=new Set();
-function connectionPanelMarkup(view,scope,{extraDetails=''}={}) {
+function connectionPanelMarkup(view,scope,{extraDetails='',pending:external=false}={}) {
   if(!view)return '';
-  const key=`${scope.source}:${scope.id}`,pending=connectionOperationsPending.has(key),busy=view.busy===true||pending;
+  const key=`${scope.source}:${scope.id}`,pending=connectionOperationsPending.has(key)||external===true,busy=view.busy===true||pending;
   const actionButton=(action,kind)=>action?`<button type="button" class="${kind}" data-conn-op="${escape(action.operation)}" data-conn-source="${escape(scope.source)}" data-conn-id="${escape(scope.id)}"${action.target_member_id?` data-conn-target="${escape(action.target_member_id)}"`:''}${busy?' disabled':''}>${escape(pending&&kind==='primary'?'正在处理…':action.label)}</button>`:'';
   const buttons=actionButton(view.primary,'primary')+actionButton(view.secondary,'secondary');
   const error=view.details?.error?`<p class="small-note">${escape(view.details.error)}</p>`:'';
@@ -814,70 +774,6 @@ document.addEventListener('click',event=>{
     finally{connectionOperationsPending.delete(key);button.disabled=false;}
   });
 });
-function connectionAssistRepairRequired(item){return item?.action_kind==='connection_repair'||item?.stage==='connection_repair_required'||['codex_auth_ownership_required','codex_personal_auth_owner_conflict'].includes(item?.error_code);}
-function connectionAssistKind(item){if(connectionAssistRepairRequired(item))return 'connection_repair';if(item?.stage==='connection_recheck_available'||item?.action_kind==='connection_recheck')return 'connection_recheck';return ['ready','managed','native_connect','manual_handoff','reauthorize','unsupported','wait'].includes(item.action_kind)?item.action_kind:'unknown';}
-function connectionAssistCanRecheck(item){const recovery=item.recovery_action;return connectionAssistKind(item)==='connection_recheck'&&item.stage==='connection_recheck_available'&&item.auth_mode==='shared-cache'&&item.recheck_auth_revision==='native-shared-cache-v1'&&!!item.run_id&&recovery?.operation==='retry'&&recovery.run_id===item.run_id&&recovery.room_id===roomId&&recovery.provider===item.provider&&recovery.target_member_id===item.target_member_id;}
-function connectionAssistTarget(item){
-  const member=item.target_member_id&&memberById(item.target_member_id);
-  const recovery=item.recovery_action,scopedReauthorization=connectionAssistKind(item)==='reauthorize'&&recovery?.operation==='reauthorize'&&recovery.room_id===roomId&&recovery.provider===item.provider&&recovery.target_member_id===member?.id;
-  if(!member||!(history.participants||[]).some(value=>value.id===member.id)&&!scopedReauthorization)return null;
-  if(item.provider==='grok-bot'&&member.provider!=='grok-bot'&&member.adapter!=='grok-bridge')return null;
-  return member;
-}
-function connectionAssistCanHandoff(item){return connectionAssistKind(item)==='manual_handoff'&&!!connectionAssistTarget(item)&&!['codex','claude-code','qwen-code','gemini-cli','native'].includes(item.provider)&&item.stage!=='awaiting_credential'&&item.status!=='needs_reauthorization'&&typeof item.copy_sentence==='string'&&!!item.copy_sentence;}
-function connectionAssistGuidance(item,installation=false){
-  const kind=connectionAssistKind(item),guide=installation?item.installation_guidance:item.guidance;
-  if(['codex','claude-code','qwen-code','gemini-cli','native'].includes(item.provider))return null;
-  if(!['manual_handoff','native_connect','unsupported'].includes(kind)||item.stage==='awaiting_credential'||item.status==='needs_reauthorization'||!guide||!['install_mcp','handshake','native_connect','check_capability'].includes(guide.kind)||typeof guide.prompt!=='string'||!guide.prompt.trim()||typeof guide.target_window!=='string'||!Array.isArray(guide.steps)||!guide.steps.length||guide.steps.some(step=>typeof step!=='string'))return null;
-  if(guide.scope?.room_id!==roomId||(guide.scope.target_member_id||null)!==(item.target_member_id||null))return null;
-  if(guide.kind==='check_capability'?kind!=='unsupported'||installation:!connectionAssistTarget(item))return null;
-  return guide;
-}
-function connectionAssistGuidanceMarkup(item,guide,installation=false){
-  return `<div class="connection-assist-guide"><p>${installation?'需要配置或更新 MCP 时，把以下提示词交给':'下一步在'} <strong>${escape(guide.target_window)}</strong>：</p><ol>${guide.steps.map(step=>`<li>${escape(step)}</li>`).join('')}</ol>${guide.note?`<p class="small-note">${escape(guide.note)}</p>`:''}<textarea class="setup-code connection-assist-prompt" rows="4" readonly aria-label="${escape(guide.copy_label||'接入提示词')}">${escape(guide.prompt)}</textarea><div class="actions"><button type="button" class="primary" data-assist-copy="${escape(item.id)}"${installation?' data-assist-install="true"':''}>${escape(guide.copy_label||`复制给 ${item.name||item.provider}`)}</button></div></div>`;
-}
-function connectionAssistReauthorization(item){
-  if(connectionAssistRepairRequired(item))return false;
-  const recovery=item.recovery_action,target=connectionAssistTarget(item);
-  return !!target&&recovery?.operation==='reauthorize'&&recovery.provider===item.provider&&recovery.room_id===roomId&&recovery.target_member_id===target.id;
-}
-async function connectionAssistAction(button) {
-  if(!button||button.disabled)return;
-  const selected=button.dataset.assistCopy||button.dataset.assistDocument||button.dataset.assistCheck||button.dataset.assistOpen||button.dataset.assistContinue||button.dataset.assistReauthorize;
-  const item=(history.connection_assists||[]).find(value=>value.id===selected&&value.room_id===roomId);
-  if(!item)return;
-  const source=(history.messages||[]).find(message=>message.id===item.message_id&&message.room_id===roomId&&message.sender_id==='user'&&message.kind==='message'&&!message.coordination&&message.to_member_id===item.member_id);
-  if(!source)return;
-  if(connectionAssistRepairRequired(item)&&(!button.dataset.assistOpen||[button.dataset.assistCopy,button.dataset.assistDocument,button.dataset.assistCheck,button.dataset.assistContinue,button.dataset.assistReauthorize].some(Boolean)))return;
-  if(connectionAssistKind(item)==='connection_recheck'&&(!button.dataset.assistOpen&&!button.dataset.assistContinue||button.dataset.assistContinue&&!connectionAssistCanRecheck(item)||[button.dataset.assistCopy,button.dataset.assistDocument,button.dataset.assistCheck,button.dataset.assistReauthorize].some(Boolean)))return;
-  if(button.dataset.assistCopy){const installation=button.dataset.assistInstall==='true',guidance=connectionAssistGuidance(item,installation);if(!guidance&&(installation||!connectionAssistCanHandoff(item)))return;await navigator.clipboard.writeText(guidance?.prompt||item.copy_sentence);toast(`已复制，请发给 ${guidance?.target_window||item.target_window||`${item.name||item.provider} 自己的窗口`}。`);}
-  else if(button.dataset.assistCheck){await refresh();toast('已核对实际连接状态，没有重新发起接入。');}
-  else if(button.dataset.assistContinue||button.dataset.assistReauthorize){
-    const reauthorize=!!button.dataset.assistReauthorize,selectedRoom=roomId,target=connectionAssistTarget(item);
-    if(item.target_member_id&&!target)return;
-    if(reauthorize?connectionAssistKind(item)!=='reauthorize'||!connectionAssistReauthorization(item):!['managed','connection_recheck'].includes(connectionAssistKind(item))||!item.run_id||item.recovery_action?.operation!=='retry')return;
-    button.disabled=true;
-    try{
-      let response;
-      if(reauthorize)response=await api('/api/onboarding/start',{room_id:selectedRoom,provider:item.provider,target_member_id:target.id,reauthorize:true});
-      else{const job=onboardingView(await api(`/api/onboarding/jobs/${encodeURIComponent(item.run_id)}`));if(roomId!==selectedRoom||job?.id!==item.run_id||job.room_id!==selectedRoom||job.provider!==item.provider||target&&job.member_id!==target.id)return;const recheck=connectionAssistKind(item)==='connection_recheck',liveRecheck=job.stage==='connection_recheck_available';if(connectionAssistRepairRequired(job)||liveRecheck&&(!recheck||job.auth_mode!=='shared-cache'||job.recheck_auth_revision!=='native-shared-cache-v1')||recheck&&!liveRecheck||onboardingRunning(job)||onboardingReady(job)){await refresh();return;}response=await api(`/api/onboarding/jobs/${encodeURIComponent(item.run_id)}/retry`,{});}
-      if(roomId!==selectedRoom)return;const job=onboardingView(response);if(job?.id&&job.room_id===selectedRoom&&(!target||!job.member_id||job.member_id===target.id)){onboardingJobs.set(job.id,job);const flow=beginSecretaryNavigation('member');flow.jobId=job.id;flow.memberId=target?.id||job.member_id||null;}
-      await refresh();if(roomId!==selectedRoom)return;returnSecretaryAfterOnboarding();action(refreshOnboarding);toast(reauthorize?'已按你的选择恢复这位成员的授权，正在核对原连接。':'已继续这位成员的原接入进度。');
-    }finally{button.disabled=false;}
-  }
-  else if(button.dataset.assistOpen){
-    const target=connectionAssistTarget(item),kind=connectionAssistKind(item);if(target&&['manual_handoff','native_connect','ready'].includes(kind))return showMemberSetup(target.id);
-    if(item.target_member_id&&!target&&['manual_handoff','native_connect','ready'].includes(kind)){toast('这位成员的连接步骤已变化，请刷新当前办公室后再查看。');return;}
-    const selectedRoom=roomId;if(item.run_id){let job=onboardingView(await api(`/api/onboarding/jobs/${encodeURIComponent(item.run_id)}`));if(roomId!==selectedRoom)return;
-      if(kind==='connection_repair'){
-        if(job?.id!==item.run_id||job.room_id!==selectedRoom||job.provider!==item.provider||item.target_member_id&&job.member_id!==item.target_member_id)return;
-        job={...job,status:'needs_action',stage:'connection_repair_required',ready_for_office:false,can_wake:false,error_code:item.error_code||job.error_code||'codex_auth_ownership_required',next_actions:[]};
-      }
-      if(job?.id)onboardingJobs.set(job.id,job);
-    }if(roomId!==selectedRoom)return;setProfessionalView(false);renderLaunch();$('onboarding-progress').scrollIntoView({block:'nearest',behavior:'smooth'});
-  }
-  else{if(!connectionAssistCanHandoff(item))return;const file=await api(`/api/connection-assists/${encodeURIComponent(item.id)}/document?room_id=${encodeURIComponent(roomId)}`),url=URL.createObjectURL(new Blob([file.text],{type:'text/markdown;charset=utf-8'})),link=document.createElement('a');try{link.href=url;link.download=file.filename;document.body.append(link);link.click();link.remove();}finally{URL.revokeObjectURL(url);}}
-}
 function renderTyping(messages) {
   const states = {queued:'已排队，等待接手',pending:'等待接手',delivered:'已送达，等待接手',consumed:'已读取，等待回复',creating:'正在打开工作会话',running:'正在思考',processing:'正在思考',waiting_input:'在等你确认'};
   const active = new Set(state.chat?.activeMessages || []), approvals = roomApprovals(messages), replies = new Map(), owed = new Map();
@@ -1942,7 +1838,6 @@ $('inspector-member-connect').onclick=()=>inspectorMemberId&&action(()=>showMemb
 $('connection-doctor-run').onclick=()=>action(runConnectionDoctor);
 $('connection-doctor-member').onchange=()=>{$('connection-doctor-old-member').value='';connectionDoctor=null;connectionDoctorError='';renderConnectionDoctor();};
 $('connection-doctor-old-member').oninput=()=>{connectionDoctor=null;connectionDoctorError='';renderConnectionDoctor();};
-document.addEventListener('click',event=>{const button=event.target.closest('[data-assist-copy],[data-assist-document],[data-assist-check],[data-assist-open],[data-assist-continue],[data-assist-reauthorize]');if(button)action(()=>connectionAssistAction(button));});
 $('connection-doctor-copy').onclick=()=>action(async()=>{await navigator.clipboard.writeText(doctorSummary());toast('诊断摘要已复制，不含入口凭据。');});
 $('connection-doctor-select').onclick=()=>{$('connection-doctor-old-member').value='';$('connection-doctor-member').value='';connectionDoctor=null;connectionDoctorError='';renderConnectionDoctor();$('connection-doctor-member').focus();};
 $('connection-doctor-resume').onclick=()=>{const member=doctorMember();if(member)showResume(member.id);};

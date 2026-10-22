@@ -1,39 +1,54 @@
 'use strict';
-// Owned headless browser, temporary data and fake native clients only.
+// End-to-end check of the connection card in a real browser.
+// Owned headless browser, temporary data and fixture clients only: no real
+// client window, model or personal configuration is touched.
 const fs=require('node:fs'),path=require('node:path'),os=require('node:os'),assert=require('node:assert/strict');
 const {RoomService}=require('../src/service.cjs'),{createServer}=require('../src/http.cjs'),{fixture,FakeCodex,FakeVault}=require('../tests/helpers.cjs'),{id,now,VERSION}=require('../src/util.cjs');
-const playwright=require(path.join(os.homedir(),'.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright'));
+
+function loadPlaywright(){
+  const candidates=['playwright',process.env.AGENTOFFICE_PLAYWRIGHT,path.join(os.homedir(),'.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright')].filter(Boolean);
+  for(const candidate of candidates){try{return require(candidate);}catch{}}
+  throw Error('Playwright is not installed. Install it or set AGENTOFFICE_PLAYWRIGHT to its module path.');
+}
+
 (async()=>{
-  const f=fixture(),out=path.resolve('output/playwright/connection-assist'),proof={isolated:true,real_clients_or_models:false,checks:{}},prompts=[],errors=[];fs.mkdirSync(out,{recursive:true});let service,server,browser,page;
+  const playwright=loadPlaywright(),f=fixture(),out=path.resolve('output/playwright/connection-assist'),proof={isolated:true,real_clients_or_models:false,checks:{}},errors=[];
+  fs.mkdirSync(out,{recursive:true});let service,server,browser,page;
   try{
-    const executable=path.join(f.root,'claude.exe');fs.writeFileSync(executable,'fixture, never executed');
-    class Actor extends FakeCodex{constructor(member){super();this.member=member;}async run(input){const thread=input.discussion.thread_id||id();input.onBinding('bound',thread);input.onTurn(id());const check=service.onboarding.verification.row(this.member.id),verifying=check?.message_id===input.request.id;if(input.request.prompt.includes('invite_id=')){const match=input.request.prompt.match(/invite_id=([a-z0-9-]+)[,，]\s*nonce=([A-Za-z0-9_-]+)/i);assert.ok(match);service.chat.completeInvite(match[1],match[2],this.member.id);}else if(!verifying)prompts.push(input.request.prompt);return {threadId:thread,turnId:id(),answer:verifying?check.nonce:'AO 已按你的指令处理，接入进度和需要交给目标窗口的说明见下方卡片。'};}}
-    const candidates=[{id:'claude-code',provider:'claude-code',name:'Claude Code',adapter:'claude-code',executable,installed:true,capabilities:{automatic_launch:true}},{id:'grok-bot',provider:'grok-bot',name:'Grok Bot',adapter:'grok-bridge',installed:true,running:true,capabilities:{manual_connect:true}}];
-    service=new RoomService(f.data,{codex:new FakeCodex(),vault:new FakeVault(),fetch:async()=>{throw Error('No external requests');},chat:{clientFactory:member=>new Actor(member)},launch:{discover:()=>({candidates})},onboarding:{desktopConnector:async()=>{throw Error('此测试客户端没有自动连接接口');}}});clearInterval(service.team.timer);
-    const project=service.addProject({name:'接入流程隔离验收',path:f.project}),room=service.chat.addRoom({project_id:project.id,title:'聊天接入'}),other=service.chat.addRoom({project_id:project.id,title:'其他房间'}),actor=service.chat.addMember({name:'Codex',adapter:'codex'});service.chat.join(room.id,actor.id);service.chat.store.updateMember(actor.id,{status:'ready',verified_at:now()});
-    const token=id();server=createServer(service,{token,port:0});const base='http://127.0.0.1:'+await server.listen();browser=await playwright.chromium.launch({channel:'msedge',headless:true});
-    const context=await browser.newContext({viewport:{width:1440,height:1000},timezoneId:'Asia/Taipei',reducedMotion:'reduce',acceptDownloads:true});await context.route('**/*',route=>route.request().url().startsWith(base+'/')||route.request().url().startsWith('blob:')?route.continue():route.abort('blockedbyclient'));
+    class Actor extends FakeCodex{constructor(member){super();this.member=member;}async run(input){const thread=input.discussion.thread_id||id();input.onBinding('bound',thread);input.onTurn(id());return {threadId:thread,turnId:id(),answer:'接入进度见接入卡片。'};}}
+    const candidates=['doubao','qwen-desktop'].map(provider=>({id:provider,provider,name:provider==='doubao'?'豆包':'Qwen',adapter:'mailbox',installed:true,capabilities:{mcp_prepare:true}}));
+    service=new RoomService(f.data,{codex:new FakeCodex(),vault:new FakeVault(),fetch:async()=>{throw Error('No external requests');},chat:{clientFactory:member=>new Actor(member)},launch:{discover:()=>({candidates})}});clearInterval(service.team.timer);
+    const project=service.addProject({name:'接入流程隔离验收',path:f.project}),room=service.chat.addRoom({project_id:project.id,title:'聊天接入'}),other=service.chat.addRoom({project_id:project.id,title:'其他房间'}),actor=service.chat.addMember({name:'Codex',adapter:'codex'});
+    service.chat.join(room.id,actor.id);service.chat.store.updateMember(actor.id,{status:'ready',verified_at:now()});
+    const token=id();server=createServer(service,{token,port:0});const base='http://127.0.0.1:'+await server.listen();service._localUrl=base;
+    browser=await playwright.chromium.launch({headless:true,...process.env.AGENTOFFICE_BROWSER_CHANNEL?{channel:process.env.AGENTOFFICE_BROWSER_CHANNEL}:{}});
+    const context=await browser.newContext({viewport:{width:1440,height:1000},timezoneId:'Asia/Taipei',reducedMotion:'reduce'});
+    await context.route('**/*',route=>route.request().url().startsWith(base+'/')?route.continue():route.abort());
     await context.addInitScript(({project,room})=>{localStorage.setItem('agentroom-project',project);localStorage.setItem('agentroom-chat-room',room);localStorage.setItem('agentoffice-room-view','chat');Object.defineProperty(navigator,'clipboard',{value:{writeText:async text=>{window.fixtureClipboard=text;}}});},{project:project.id,room:room.id});
-    page=await context.newPage();page.setDefaultTimeout(15000);page.on('pageerror',error=>errors.push(error.message));await page.goto(base+'/#token='+token);await page.locator('#recipient').selectOption(actor.id);await page.evaluate(()=>closeSecretaryTutorial());
+    page=await context.newPage();page.setDefaultTimeout(15000);page.on('pageerror',error=>errors.push(error.message));
+    await page.goto(base+'/#token='+token);await page.evaluate(()=>{try{closeSecretaryTutorial();}catch{}document.querySelectorAll('dialog[open]').forEach(dialog=>dialog.close());});
     assert.equal(await page.locator('#app-version').textContent(),'服务 v'+VERSION);proof.checks.observed_version_visible=true;
-    await page.locator('#prompt').fill('把grok bot拉进群');await page.locator('#send-button').click();await page.locator('[data-assist-copy]').waitFor();
-    await page.locator('#messages').getByText('AO 已按你的指令处理，接入进度和需要交给目标窗口的说明见下方卡片。',{exact:true}).waitFor();
-    let rows=service.connectionAssist.listRoom(room.id),grok=rows[0];assert.equal(grok.provider,'grok-bot');assert.notEqual(grok.status,'ready');assert.ok(grok.document_path);assert.ok(prompts.some(text=>text.includes(JSON.stringify(grok.document_path).slice(1,-1))&&text.includes('AO 控制器')));proof.checks.chat_prepares_handoff_and_actor_context=true;
-    const card=page.locator(`[data-connection-assist="${grok.id}"]`);await card.scrollIntoViewIfNeeded();assert.match(await card.textContent(),/Grok Bot/);await card.locator('[data-assist-copy]').click();assert.equal(await page.evaluate(()=>window.fixtureClipboard),grok.copy_sentence);assert.ok(!grok.copy_sentence.includes('/mcp/'));proof.checks.copy_sentence_targets_native_window=true;
-    const timeline=await page.evaluate(()=>({ids:[...document.querySelectorAll('#messages > article.chat-message')].map(node=>node.id.slice('message-'.length)),owner:document.querySelector('[data-connection-assist]')?.closest('article.chat-message')?.id,groups:document.querySelectorAll('#messages .connection-assist-group').length,syntheticHeaders:[...document.querySelectorAll('#messages .message-target')].filter(node=>node.textContent.includes('接入进度')).length}));
-    const actual=service.store.db.prepare("SELECT id,reply_to,sender_id FROM chat_messages WHERE room_id=? AND kind NOT IN ('system','event') ORDER BY seq").all(room.id),reply=actual.find(message=>message.reply_to===grok.message_id&&message.sender_id===actor.id);
-    assert.ok(reply);assert.deepEqual(timeline.ids,actual.map(message=>message.id));assert.equal(timeline.owner,'message-'+reply.id);assert.equal(timeline.groups,1);assert.equal(timeline.syntheticHeaders,0);assert.equal(await page.locator('#message-'+grok.message_id+' [data-connection-assist]').count(),0);proof.checks.one_real_reply_contains_actions_in_durable_order=true;
-    await page.screenshot({path:path.join(out,'grok-handoff.png')});
-    await card.locator('.connection-assist-diagnostics > summary').click();
-    const [download]=await Promise.all([page.waitForEvent('download'),card.locator('[data-assist-document]').click()]);const file=path.join(out,download.suggestedFilename());await download.saveAs(file);const doc=fs.readFileSync(file,'utf8');assert.match(doc,/连接 Grok Bot/);assert.ok(!doc.includes('/mcp/'));proof.checks.owned_document_download=true;
-    const before=service.store.db.prepare('SELECT count(*) n FROM onboarding_runs').get().n;await card.locator('[data-assist-check]').click();assert.equal(service.store.db.prepare('SELECT count(*) n FROM onboarding_runs').get().n,before);proof.checks.check_is_read_only=true;
-    if(await card.locator('.connection-assist-diagnostics[open]').count())await card.locator('.connection-assist-diagnostics > summary').click();
-    await page.setViewportSize({width:390,height:844});await card.scrollIntoViewIfNeeded();assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));assert.equal(await page.locator('#app-version').isVisible(),true);await page.screenshot({path:path.join(out,'grok-handoff-mobile.png')});proof.checks.mobile_version_and_card_fit=true;
-    await page.setViewportSize({width:1440,height:1000});const entry=service.entry.describe(grok.target_member_id,room.id);service.resume.accept(JSON.parse(fs.readFileSync(entry.file,'utf8')));await page.evaluate(()=>refresh());await page.waitForFunction(()=>document.querySelector('.connection-assist-message').textContent.includes('本人入口已接通'));assert.equal(service.connectionAssist.listRoom(room.id)[0].can_wake,false);assert.equal(await card.locator('[data-assist-copy]').count(),0);proof.checks.actual_fixture_handshake_reports_manual_not_automatic=true;
-    await page.locator('#prompt').fill('把 Claude Code 拉进来');await page.locator('#send-button').click();await page.waitForFunction(()=>[...document.querySelectorAll('.connection-assist-message')].some(node=>node.textContent.includes('Claude Code')&&node.textContent.includes('已自动接通')));rows=service.connectionAssist.listRoom(room.id);assert.equal(rows.find(row=>row.provider==='claude-code').can_wake,true);proof.checks.available_adapter_connects_directly=true;
-    await page.locator('#prompt').fill('把豆包和grok接入');await page.locator('#send-button').click();await page.waitForFunction(()=>[...document.querySelectorAll('.connection-assist-group')].some(group=>group.querySelectorAll('[data-connection-assist]').length===2));const grouped=await page.evaluate(()=>[...document.querySelectorAll('.connection-assist-group')].find(group=>group.querySelectorAll('[data-connection-assist]').length===2)?.closest('article.chat-message')?.querySelectorAll('.message-header').length);assert.equal(grouped,1);proof.checks.multiple_members_share_one_agent_reply=true;
-    await page.locator(`[data-room="${other.id}"]`).click();await page.waitForFunction(()=>document.querySelectorAll('[data-connection-assist]').length===0);proof.checks.other_room_isolated=true;
+    await page.locator('#recipient').selectOption(actor.id);await page.locator('#prompt').fill('把豆包和qwen接入');await page.locator('#send-button').click();
+    const card=page.locator('.ao-system-card').first();await card.waitFor();
+    await page.waitForFunction(()=>document.querySelectorAll('.ao-system-card .connection-panel').length===2);
+    // The card belongs to the person's request, labelled Agent Office, not inside the agent's reply.
+    const placement=await page.evaluate(()=>{const node=document.querySelector('.ao-system-card');return {previous:node.previousElementSibling?.id||'',insideArticle:!!node.closest('article')};});
+    const request=service.chat.store.db.prepare("SELECT id FROM chat_messages WHERE room_id=? AND sender_id='user' ORDER BY seq DESC LIMIT 1").get(room.id);
+    assert.equal(placement.previous,'message-'+request.id);assert.equal(placement.insideArticle,false);assert.match(await card.textContent(),/Agent Office/);proof.checks.card_under_request=true;
+    // One status line and at most two buttons per member.
+    for(const panel of await card.locator('.connection-panel').all())assert.ok(await panel.locator('[data-conn-op]').count()<=2);
+    assert.doesNotMatch(await card.textContent(),/保留|沿用|本人对话|握手|没有自动重试/);proof.checks.plain_copy=true;
+    await page.screenshot({path:path.join(out,'connection-card.png')});
+    // Copy config returns this member's real local MCP address.
+    await card.locator('[data-conn-op="copy_config"]').first().click();await page.waitForFunction(()=>typeof window.fixtureClipboard==='string');
+    assert.match(await page.evaluate(()=>window.fixtureClipboard),new RegExp(base.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'/mcp/'));proof.checks.copy_config=true;
+    await card.locator('[data-conn-op="copy_handshake_prompt"]').first().click();await page.waitForFunction(()=>/agentroom_chat_inbox/.test(window.fixtureClipboard||''));proof.checks.copy_sentence=true;
+    // Narrow screens do not scroll sideways.
+    await page.setViewportSize({width:390,height:844});await card.scrollIntoViewIfNeeded();assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));await page.screenshot({path:path.join(out,'connection-card-mobile.png')});proof.checks.mobile_no_overflow=true;
+    await page.setViewportSize({width:1440,height:1000});
+    // Another room never shows this room's cards.
+    await page.locator(`[data-room="${other.id}"]`).click();await page.waitForFunction(()=>document.querySelectorAll('.ao-system-card').length===0);proof.checks.other_room_isolated=true;
     assert.deepEqual(errors,[]);proof.ok=true;
-  }catch(error){proof.error=error.stack;process.exitCode=1;if(page)await page.screenshot({path:path.join(out,'failure.png')});}
+  }catch(error){proof.error=error.stack;process.exitCode=1;if(page)await page.screenshot({path:path.join(out,'failure.png')}).catch(()=>{});}
   finally{await browser?.close();await server?.close();await service?.close();proof.page_errors=errors;fs.writeFileSync(path.join(out,'result.json'),JSON.stringify(proof,null,2));console.log(JSON.stringify(proof));}
 })().catch(error=>{console.error(error.stack);process.exitCode=1;});
