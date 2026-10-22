@@ -51,7 +51,7 @@ test('a failed program launch is retryable without caching a false success',asyn
 
 test('native discovery reports a readable connection step and retains the retryable transport cause',async()=>{
   const original=Object.assign(Error('fetch failed'),{cause:unavailable()});
-  await assert.rejects(discoverDesktop('http://127.0.0.1:19246','doubao',{fetchImpl:async()=>{throw original;}}),error=>error.code==='desktop_bridge_unavailable'&&error.cause===original&&/开启客户端连接/.test(error.message)&&!/fetch failed/.test(error.message));
+  await assert.rejects(discoverDesktop('http://127.0.0.1:19246','doubao',{fetchImpl:async()=>{throw original;}}),error=>error.code==='desktop_bridge_unavailable'&&error.cause===original&&/改用 MCP 连接/.test(error.message)&&!/fetch failed/.test(error.message));
 });
 
 test('simultaneous attempts share one client launch and do not spawn a duplicate',async t=>{

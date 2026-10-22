@@ -50,9 +50,9 @@ async function prepare(service,job,options={}){
   if(!candidate)throw new RoomError(`没有找到 ${client.name} 的本机安装。请先安装或打开它，再检查连接。`,404,'desktop_client_missing');
   const setting=`desktop_client_path.${job.provider}`;
   if(installedClient(candidate.executable,client))service.store?.setting(setting,candidate.executable);
-  if(candidate.running===true||candidate.instances?.length||candidate.pids?.length)throw new RoomError(`${client.name} 正在运行，但没有开启 AO 本机连接。请先从 ${client.name} 菜单或托盘选择“退出”，再点击“开启客户端连接”。原聊天、人物和 MCP 配置保留。`,409,'desktop_client_restart_required');
+  if(candidate.running===true||candidate.instances?.length||candidate.pids?.length)throw new RoomError(`${client.name} 正在运行，需要重启后才能连接。请从 ${client.name} 的菜单或托盘退出后重试，或改用 MCP 连接。`,409,'desktop_client_restart_required');
   const executable=candidate.executable||service.store?.setting(setting);
-  if(!installedClient(executable,client))throw new RoomError(`未找到可核对的 ${client.name} 正式程序。请先从原安装位置打开它，再点击“开启客户端连接”核对。`,409,'desktop_client_path_unverified');
+  if(!installedClient(executable,client))throw new RoomError(`没有找到 ${client.name} 的程序位置。请先手动打开一次 ${client.name}，再重新连接。`,409,'desktop_client_path_unverified');
   // Only this explicit controller action opens the selected app. Process
   // observation and reconnect polling never close a client or launch a duplicate.
   await launch(executable,[`--remote-debugging-port=${client.port}`,'--remote-debugging-address=127.0.0.1'],options,deadline);

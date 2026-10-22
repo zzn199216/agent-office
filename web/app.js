@@ -315,26 +315,26 @@ async function runOnboardingOperation(job,operation){
     if(operation==='choose_connected_member'&&onboardingActions(job).some(value=>value.operation==='choose_connected_member')){
       secretaryNavigation=null;secretaryConnectJob=null;if($('secretary-connect-dialog').open)$('secretary-connect-dialog').close();openSecretaryTutorial();return job;
     }
-    setOnboardingFeedback(job,'连接已暂停以保护桌面登录。请先修复 AO 的独立后台环境；原人物和聊天都保留，不需要重新登录桌面账号。',{error:true,operation});return job;
+    setOnboardingFeedback(job,'Codex 后台连接已暂停，避免影响你的登录。点「查看处理办法」了解怎么恢复。',{error:true,operation});return job;
   }
   if(onboardingRecheckPending(job)&&(!onboardingCanRecheck(job)||operation!=='retry'||!onboardingActions(job).some(value=>value.operation==='retry'))||job.provider==='codex'&&operation==='login_client'){
-    setOnboardingFeedback(job,onboardingRecheckPending(job)?'请明确点击「沿用已有登录，重新验证」。查看进度不会重新发起连接。':'请先在原 Codex 窗口登录，再检查连接；这里不会打开额外的登录流程。',{error:true,operation});return job;
+    setOnboardingFeedback(job,onboardingRecheckPending(job)?'请点「重新验证连接」。':'请先在 Codex 里登录，再点「我已登录，重新检查」。',{error:true,operation});return job;
   }
   const attempt=captureOnboardingAttempt(job);let current=job;
-  setOnboardingFeedback(job,operation==='login_client'?'正在打开账号配置入口，请稍候…':operation==='open_native_client'?'正在开启客户端连接，请稍候…':operation==='manual_mcp'?'正在为原人物准备本次手动连接…':'正在继续这次接入，请稍候…',{pending:true,operation});
+  setOnboardingFeedback(job,operation==='login_client'?'正在打开账号配置入口，请稍候…':operation==='open_native_client'?'正在开启客户端连接，请稍候…':operation==='manual_mcp'?'正在切换到 MCP 连接…':'正在连接…',{pending:true,operation});
   try{
     if(job.room_id!==attempt.roomId||legacyId)throw Error('这次接入不属于当前房间，请回到原房间查看。');
     if(operation==='open_fixed_room')return await openOnboardingFixedRoom(job);
     let response;
     if(operation==='manual_mcp'){
-      if(!job.member_id||job.room_id!==attempt.roomId||!onboardingActions(job).some(value=>value.operation==='manual_mcp'&&value.target_member_id===job.member_id))throw Error('手动连接步骤已变化，请查看当前成员进度。');
+      if(!job.member_id||job.room_id!==attempt.roomId||!onboardingActions(job).some(value=>value.operation==='manual_mcp'&&value.target_member_id===job.member_id))throw Error('连接状态已更新，请刷新后再试。');
       response=await api('/api/onboarding/start',{room_id:job.room_id,provider:job.provider,target_member_id:job.member_id,connection_method:'manual_mcp'});
     }else if(operation==='reauthorize')response=await reauthorizeOnboarding(job,attempt);
     else response=operation==='retry'||operation==='install_runtime'?await api(`/api/onboarding/jobs/${encodeURIComponent(job.id)}/retry`,operation==='install_runtime'?{install_runtime:true}:{}):await api('/api/onboarding/action',{run_id:job.id,operation});
     if(!response)return;
     current=adoptOnboardingJob(response,job,attempt);
-    if(operation==='login_client'&&response.action?.launched!==true)throw Error('尚未确认账号配置入口已打开。请查看错误后重试，不代表已经登录。');
-    const message=response.action?.instruction||(operation==='login_client'?'账号配置入口已打开。请完成授权，再点击「配置完成后继续接入」；这一步尚未确认连接成功。':operation==='manual_mcp'?'已准备本次手动连接。请在本人窗口调用 AO 工具验证，原人物和连接配置继续沿用。':'已继续原人物的接入，正在核对本次连接。');
+    if(operation==='login_client'&&response.action?.launched!==true)throw Error('登录页没有打开，请重试。');
+    const message=response.action?.instruction||(operation==='login_client'?'登录页已打开。登录完成后点「登录后重新检查」。':operation==='manual_mcp'?'已切换到 MCP。点「复制配置」加到客户端，再点「复制那句话」发给它。':'正在核对连接…');
     setOnboardingFeedback(current,message,{operation});
     returnSecretaryAfterOnboarding();action(refresh);action(refreshOnboarding);return current;
   }catch(error){setOnboardingFeedback(current,error.message||'这一步未完成，请检查当前接入进度。',{error:true,operation});throw error;}
@@ -396,6 +396,9 @@ function onboardingApprovalMarkup(job) {
 function tickOnboardingElapsed() { for (const span of document.querySelectorAll('.onboarding-elapsed[data-since]')) { const seconds = Math.max(0, Math.round((Date.now() - Date.parse(span.dataset.since)) / 1000)); span.textContent = `已用 ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2,'0')}${seconds > 90 ? ' · 比平时久，可能在等登录或确认' : ''}`; } }
 setUIInterval(tickOnboardingElapsed, 1000);
 function onboardingJobMarkup(job) {
+  // Same panel as the chat card; internal stage, steps and backend wording
+  // stay out of the list (errors remain under 详情).
+  if(job?.presentation)return `<article class="onboarding-job ${job.presentation.state==='attention'?'failed':['connected','auto'].includes(job.presentation.state)?'ready':''}" data-onboarding-job="${escape(job.id)}"><div class="onboarding-job-heading">${avatar(job.presentation.name||job.name||job.provider,job.provider)}<div><strong>${escape(job.presentation.name||job.name||job.provider)}</strong></div></div>${connectionPanelMarkup(job.presentation,{source:'job',id:job.id})}${onboardingFeedbackMarkup(job)}</article>`;
     const repair=onboardingRepairRequired(job),recheck=onboardingRecheckPending(job),ready = onboardingOfficeReady(job), readyType = ready?onboardingReady(job):null, pending = !repair&&!recheck&&onboardingRunning(job), needsAction = repair||recheck||job.status === 'needs_action', failed = ['failed','error','interrupted','cancelled'].includes(job.status), actionValue = onboardingAction(job);
     const stage = job.stage || job.phase || '', stageNumber = Number.isInteger(job.stage_index) ? Math.max(0,Math.min(3,job.stage_index)) : /handshake|verify|ready|complete|^connecting$/.test(stage) ? 2 : /config|install|auth|start|launch|import|reload|connection/.test(stage) ? 1 : 0;
     const verifyingReply=stage==='verifying_reply',stageLabels = ['发现','配置',verifyingReply?'验证实际回复':'验证通信','完成'];

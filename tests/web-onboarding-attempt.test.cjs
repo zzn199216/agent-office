@@ -104,8 +104,8 @@ test('login is a real action despite an instruction, stays pending in the modal 
 test('login failure and unconfirmed launch stay as errors inside the current attempt after polling',async()=>{
   for(const failure of [Object.assign(Error('无法打开首次配置窗口'),{code:'login_launch_failed'}),null]){
     const f=fixture({provider:'claude-code'});f.context.api=async()=>{if(failure)throw failure;return{job:f.job,action:{launched:false}};};
-    await assert.rejects(f.context.runOnboardingOperation(f.job,'login_client'),/配置/);f.context.renderOnboarding();
-    assert.match(f.$('onboarding-jobs').innerHTML,/role="alert"/);assert.match(f.$('secretary-connect-progress').innerHTML,/配置/);assert.equal(f.context.onboardingFeedback.get('original').pending,false);
+    await assert.rejects(f.context.runOnboardingOperation(f.job,'login_client'),/配置|登录页/);f.context.renderOnboarding();
+    assert.match(f.$('onboarding-jobs').innerHTML,/role="alert"/);assert.match(f.$('secretary-connect-progress').innerHTML,/配置|登录页/);assert.equal(f.context.onboardingFeedback.get('original').pending,false);
     assert.equal(f.context.onboardingOfficeReady(f.job),false);
   }
 });
@@ -123,7 +123,7 @@ test('manual compatibility is explicit, scoped to the original member and adopts
   f.context.api=async(route,body)=>{f.calls.push({route,body});return{...f.job,id:'manual',connection_method:'manual_mcp',status:'needs_action',stage:'awaiting_handshake'};};
   await f.context.runOnboardingOperation(f.job,'manual_mcp');assert.deepEqual(plain(f.calls),[{route:'/api/onboarding/start',body:{room_id:'room',provider:'qwen-desktop',target_member_id:'member',connection_method:'manual_mcp'}}]);
   assert.equal(f.flow.jobId,'manual');assert.equal(f.context.secretaryConnectJob,'manual');assert.equal(f.context.onboardingOfficeReady(f.context.onboardingJobs.get('manual')),false);
-  const foreign=fixture({provider:'qwen-desktop',next_actions:[{operation:'manual_mcp',target_member_id:'other'}]});await assert.rejects(foreign.context.runOnboardingOperation(foreign.job,'manual_mcp'),/步骤已变化/);assert.equal(foreign.calls.length,0);assert.doesNotMatch(foreign.context.onboardingActionMarkup(foreign.job),/data-onboarding-operation="manual_mcp"/);
+  const foreign=fixture({provider:'qwen-desktop',next_actions:[{operation:'manual_mcp',target_member_id:'other'}]});await assert.rejects(foreign.context.runOnboardingOperation(foreign.job,'manual_mcp'),/已更新/);assert.equal(foreign.calls.length,0);assert.doesNotMatch(foreign.context.onboardingActionMarkup(foreign.job),/data-onboarding-operation="manual_mcp"/);
 });
 
 test('reauthorization shares run adoption and preserves the exact declared person',async()=>{

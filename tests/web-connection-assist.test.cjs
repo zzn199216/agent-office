@@ -111,3 +111,19 @@ test('a second click while an operation is running is ignored',async()=>{
   for(let i=0;i<6;i++)await new Promise(resolve=>setImmediate(resolve));
   assert.deepEqual(f.calls.copy,['once']);
 });
+
+test('connection-flow copy avoids reassurance and internal terms, and every quoted button exists',()=>{
+  const banned=/保留|沿用|没有自动重试|未宣称|不会生成|原生会话|本人对话|握手|兼容 MCP|群桥接/;
+  const functions=['function renderConnectionAssists(','function connectionPanelMarkup(','async function connectionCopy(','async function runConnectionOperation(','function applySetupPresentation(','async function runOnboardingOperation('];
+  const presentationSource=fs.readFileSync(path.join(__dirname,'../src/member-connection.cjs'),'utf8');
+  const labels=new Set([...presentationSource.matchAll(/(?:button\(|pick\(snapshot,\s*)'[a-z_]+',\s*(['`])([^'`]+)\1/g)].map(match=>match[2].replace(/\$\{name\}/g,'').replace(/\s+/g,'')));
+  for(const start of functions){
+    const first=source.indexOf(start);assert.ok(first>=0,start);
+    const body=source.slice(first,source.indexOf('\n}',first));
+    const strings=[...body.matchAll(/(['`])((?:(?!\1).)*[一-鿿](?:(?!\1).)*)\1/g)].map(match=>match[2]);
+    for(const text of strings){
+      assert.doesNotMatch(text,banned,`${start}: ${text}`);
+      for(const quoted of text.matchAll(/「([^」]+)」/g))assert.ok(labels.has(quoted[1].replace(/\s+/g,'')),`${start} mentions a button that the panel never shows: ${quoted[1]}`);
+    }
+  }
+});

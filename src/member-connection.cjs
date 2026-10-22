@@ -84,7 +84,7 @@ function present(snapshot = {}, context = {}) {
   if (stage === 'fixed_proxy_scope')
     return result('attention', `这个 ${name} 已在另一个房间使用`, pick(snapshot, 'open_fixed_room', '去原房间'), button('new_member', '新建一个成员'));
   if (stage === 'awaiting_auth')
-    return result('attention', `${name} 需要登录`, provider === 'codex' ? pick(snapshot, 'retry', '我已登录，重新检查') : offered(snapshot, 'login_client') ? pick(snapshot, 'login_client', `登录 ${name}`) : pick(snapshot, 'retry', '登录后重新检查'));
+    return result('attention', `${name} 需要登录`, provider === 'codex' ? pick(snapshot, 'retry', '我已登录，重新检查') : offered(snapshot, 'login_client') ? pick(snapshot, 'login_client', `登录 ${name}`) : pick(snapshot, 'retry', '登录后重新检查'), provider !== 'codex' && offered(snapshot, 'login_client') ? button('retry', '登录后重新检查') : null);
   if (stage === 'awaiting_quota')
     return result('attention', `${name} 的额度用完了`, pick(snapshot, 'retry', '处理后重新检查'));
   if (stage === 'awaiting_runtime_install')
