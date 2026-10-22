@@ -283,16 +283,12 @@ class ConnectionAssist{
     const rows=this.db.prepare('SELECT id FROM connection_assists WHERE message_id=?').all(messageId);if(!rows.length)return '';
     const work=Promise.allSettled(rows.map(row=>this.jobs.get(row.id)).filter(Boolean)),timeout=Math.max(0,Math.min(10000,this.options.contextWaitMs??10000));
     let timer;try{await Promise.race([work,new Promise(resolve=>{timer=setTimeout(resolve,timeout);})]);}finally{clearTimeout(timer);}
-    const snapshots=this.snapshotForMessage(messageId).map(item=>({name:item.name,provider:item.provider,can_wake:item.can_wake,progress:item.summary,connection_ready:item.ready_for_office===true,automatic_ready:item.ready_for_office===true&&item.can_wake===true,
-      reused_connection:item.reused_connection,verification_scope:item.verification_scope,action_kind:item.action_kind,target_window:item.guidance?.target_window||item.target_window,next_step:item.next_step,copy_sentence:item.copy_sentence,document_path:item.document_path,document_url:item.document_url,
-      guidance:item.guidance?{kind:item.guidance.kind,target_window:item.guidance.target_window,copy_label:item.guidance.copy_label,steps:item.guidance.steps,note:item.guidance.note}:null,installation_guidance_available:!!item.installation_guidance}));
-    return '\n以下接入步骤由 AO 控制器处理，你不需要管理工具。请在一条回复内按成员分成简短段落，每位只说明当前结果和用户需要做的下一步；AO 会把对应操作嵌在这条回复里，不要另发多条进度或重复长配置。请帮助用户继续完成接入，不能只回答“工具不支持”“权限不足”或“接入失败”就结束。只根据真实进度回答：\n'+
-      '1. connection_ready 为 true 时，简短确认已经接通；can_wake 为 false 时补充消息需要由本人窗口处理，不声称自动接手，也不继续输出安装步骤。\n'+
-      '2. 需要本人窗口连接时，用一句话说明还差哪一步和准确的 target_window。AO 会在同一条回复里提供复制说明与查看步骤按钮，不重复输出长安装说明、本地文档路径或配置。不要求用户提供房间 ID、路径或新配置。有 guidance 时按其中的 kind 和 copy_label 说明复制给哪个窗口：install_mcp 交给有本机配置能力的安装助手安装或更新原 MCP，再回本人对话握手；handshake 沿用已有连接在本人窗口实际调用工具；native_connect 先按步骤恢复本机连接，MCP 是需明确选择的兼容方式；check_capability 让对应助手核对实际支持并给出具体步骤，不声称已有可执行连接。没有 guidance 的 unsupported 才引导查看支持情况。\n'+
-      '3. 原入口已撤销、服务中断或仍等待时，说明原进度保留，并给出已有接入步骤中的下一步；不自行重复扫描、重试、重建人物或重签凭据。\n'+
-      '4. action_kind 为 connection_repair 时，说明 AO 为保护现有桌面登录已暂停后台连接，原人物和聊天保留；不要让用户再次登录、重新配置 MCP、复制认证或重试，可查看保护说明或选择其他已接通成员。\n'+
-      '5. action_kind 为 connection_recheck 时，说明新版可以沿用原 Codex 登录，让用户点击「沿用已有登录，重新验证」，原人物和聊天继续使用；还未验证成功，不要求额外登录或复制配置。\n'+
-      '不要把内部状态码、成员 ID、端口、堆栈或原始错误当作给普通用户的答案；用户主动询问诊断时再解释。文档生成、应用打开和历史握手不代表当前自动连接成功；仅按真实证据确认，不读取其他成员凭据，不扩大用户授权。\n'+JSON.stringify(snapshots);
+    // The card under the user's message carries the status and the buttons.
+    // The agent's reply only acknowledges it, so nothing is said twice.
+    const snapshots=this.snapshotForMessage(messageId).map(item=>({name:item.name,provider:item.provider,state:item.presentation?.state||null,headline:item.presentation?.headline||null,connection_ready:item.ready_for_office===true,automatic_ready:item.ready_for_office===true&&item.can_wake===true,can_wake:item.can_wake===true,action_kind:item.action_kind}));
+    return '\n用户请求接入成员。Agent Office 已在这条消息下方显示接入卡片，卡片里有当前状态和要点的按钮。'+
+      '你只需用一句话回应，例如「接入进度见下方卡片」；可以按 headline 简单复述一次结论；connection_ready 为 false 时不能说已接通，can_wake 为 false 时不能说会自动处理。不要列步骤、配置、路径、诊断或状态码，也不要重试、扫描、重建人物或索取凭据。\n'+
+      `当前状态（只读）：${JSON.stringify(snapshots)}\n`;
   }
   document(assistId,roomId){
     const row=this.row(assistId,roomId);if(!row.document_path)throw new RoomError('接入文档尚未准备好。',409,'connection_assist_document_pending');

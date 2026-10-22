@@ -92,3 +92,24 @@ test('a new desktop member defaults to MCP: config first, then the sentence; an 
   const job=service.onboarding.start({provider:'doubao',room_id:other.id,target_member_id:member.id});await Promise.all([...service.onboarding.jobs.values()]);
   assert.equal(service.onboarding.state({run_id:job.id}).connection_method,'native_desktop');
 });
+
+test('an MCP member gets the MCP config guide, the dialog gets the same presentation, and new_member never reuses a person',async t=>{
+  const {RoomService}=require('../src/service.cjs'),{fixture,FakeCodex,FakeVault}=require('./helpers.cjs');
+  const files=fixture(),service=new RoomService(files.data,{codex:new FakeCodex(),vault:new FakeVault(),fetch:async()=>{throw Error('external requests prohibited');},
+    launch:{discover:()=>({candidates:['doubao'].map(provider=>({id:provider,provider,name:provider,adapter:'mailbox',installed:true,capabilities:{mcp_prepare:true}}))})}});
+  t.after(async()=>{await service.close();fs.rmSync(files.root,{recursive:true,force:true});});
+  service._localUrl='http://127.0.0.1:47831';
+  const project=service.addProject({name:'guide',path:files.project}),room=service.chat.addRoom({project_id:project.id,title:'room'});
+  const job=service.onboarding.start({provider:'doubao',room_id:room.id});await Promise.all([...service.onboarding.jobs.values()]);
+  const state=service.onboarding.state({run_id:job.id}),setup=service.chat.setup(state.member_id,room.id);
+  assert.equal(setup.client.kind,'http_fields');assert.match(setup.client.copy,/^http:\/\/127\.0\.0\.1:47831\/mcp\//);assert.ok(setup.client.bootstrap.length>0);
+  assert.deepEqual(setup.presentation,state.presentation);
+  assert.throws(()=>service.onboarding.start({provider:'doubao',room_id:room.id,new_member:true,target_member_id:state.member_id}),error=>error.code==='onboarding_target_conflict');
+  assert.throws(()=>service.onboarding.start({provider:'doubao',room_id:room.id,new_member:true}),error=>error.code==='onboarding_member_exists');
+  // In another room, a normal request reuses the person; an explicit new member does not.
+  const other=service.chat.addRoom({project_id:project.id,title:'other'});
+  const separate=service.onboarding.start({provider:'doubao',room_id:other.id,new_member:true});await Promise.all([...service.onboarding.jobs.values()]);
+  const created=service.onboarding.state({run_id:separate.id});
+  assert.ok(created.member_id);assert.notEqual(created.member_id,state.member_id);
+  assert.notEqual(service.chat.store.member(created.member_id).name,service.chat.store.member(state.member_id).name);
+});

@@ -41,7 +41,7 @@ class OnboardingManager{
     if(!this.db.prepare('PRAGMA table_info(onboarding_runs)').all().some(column=>column.name==='goal'))this.db.exec("ALTER TABLE onboarding_runs ADD COLUMN goal TEXT NOT NULL DEFAULT ''");
     if(!this.db.prepare('PRAGMA table_info(onboarding_runs)').all().some(column=>column.name==='verify_reply'))this.db.exec('ALTER TABLE onboarding_runs ADD COLUMN verify_reply INTEGER NOT NULL DEFAULT 0');
     if(!this.db.prepare('PRAGMA table_info(onboarding_runs)').all().some(column=>column.name==='direct_member_id'))this.db.exec('ALTER TABLE onboarding_runs ADD COLUMN direct_member_id TEXT');
-    for(const [name,type]of [['target_member_id','TEXT'],['connection_reused','INTEGER NOT NULL DEFAULT 0'],['reauthorize','INTEGER NOT NULL DEFAULT 0'],['selection_reason','TEXT'],['connection_method','TEXT'],['started_at','TEXT'],['auth_mode','TEXT'],['auth_revision','TEXT']])if(!this.db.prepare('PRAGMA table_info(onboarding_runs)').all().some(column=>column.name===name))this.db.exec(`ALTER TABLE onboarding_runs ADD COLUMN ${name} ${type}`);
+    for(const [name,type]of [['target_member_id','TEXT'],['connection_reused','INTEGER NOT NULL DEFAULT 0'],['reauthorize','INTEGER NOT NULL DEFAULT 0'],['selection_reason','TEXT'],['connection_method','TEXT'],['started_at','TEXT'],['auth_mode','TEXT'],['auth_revision','TEXT'],['new_member','INTEGER NOT NULL DEFAULT 0']])if(!this.db.prepare('PRAGMA table_info(onboarding_runs)').all().some(column=>column.name===name))this.db.exec(`ALTER TABLE onboarding_runs ADD COLUMN ${name} ${type}`);
     this.db.prepare("UPDATE onboarding_runs SET status='interrupted',stage='interrupted',error='接入期间本机处理程序结束。请点击重试；不会重放业务问题。',updated=? WHERE status='running' AND stage<>'verifying_reply'").run(now());
     this.verification=options.replyVerification===false?null:new (require('./onboarding-verification.cjs').OnboardingVerification)(service,options.verification||{});
     this.verificationPulse=()=>this.advanceVerifications();this.service.on?.('change',this.verificationPulse);
@@ -168,7 +168,10 @@ class OnboardingManager{
   start(input={}){
     if(this.closing)throw new RoomError('AgentRoom 正在停止。',503);
     const selection=this.selection(input),goal=input.goal==null||input.goal===''?'':redact(cleanText(input.goal,1200,'协作目标')),room=this.service.launch.chooseRoom(input);
-    const target=this.service.chat.store.participants&&this.service.resume?resolveConnectionTarget(this.service,{provider:selection.provider,room_id:room.id,target_member_id:input.target_member_id}):{member_id:null,blocked:false,reused_connection:false};
+    // An explicit request for a separate person skips reuse; nothing existing is rebound.
+    const target=input.new_member===true?{member_id:null,blocked:false,reused_connection:false}:this.service.chat.store.participants&&this.service.resume?resolveConnectionTarget(this.service,{provider:selection.provider,room_id:room.id,target_member_id:input.target_member_id}):{member_id:null,blocked:false,reused_connection:false};
+    if(input.new_member===true&&(input.target_member_id||input.reauthorize===true))throw new RoomError('新建成员不能同时指定原人物。',400,'onboarding_target_conflict');
+    if(input.new_member===true&&this.db.prepare('SELECT 1 FROM launch_proxies WHERE room_id=? AND provider=?').get(room.id,selection.provider))throw new RoomError('这个房间已经有这位成员了。',409,'onboarding_member_exists');
     if(input.reauthorize===true&&(!input.target_member_id||input.target_member_id!==target.member_id))throw new RoomError('重新授权必须明确指定原人物。',403,'connection_target_required');
     // MCP is the default connection for desktop clients. A member that already
     // uses another delivery mode keeps it unless the person explicitly switches.
@@ -200,10 +203,10 @@ class OnboardingManager{
     }
     const fixedElsewhere=target.fixed_proxy&&target.fixed_proxy.room_id!==room.id;
     const authentication=this.authOwnership({provider:selection.provider,room_id:room.id,target_member_id:target.member_id||recheckMemberId});
-    const stamp=now(),row={id:id(),room_id:room.id,...selection,status:fixedElsewhere||target.blocked&&input.reauthorize!==true?'needs_action':'running',stage:fixedElsewhere?'fixed_proxy_scope':target.blocked&&input.reauthorize!==true?'awaiting_credential':'preparing',launch_session_id:null,install_client:input.install_client===true?1:0,install_runtime:input.install_runtime===true?1:0,runtime_result:null,error:null,created:stamp,updated:stamp,started_at:stamp,goal,verify_reply:this.verification?1:0,target_member_id:target.member_id||recheckMemberId,connection_reused:target.reused_connection?1:0,reauthorize:input.reauthorize===true?1:0,selection_reason:target.reason||null,
+    const stamp=now(),row={id:id(),room_id:room.id,...selection,status:fixedElsewhere||target.blocked&&input.reauthorize!==true?'needs_action':'running',stage:fixedElsewhere?'fixed_proxy_scope':target.blocked&&input.reauthorize!==true?'awaiting_credential':'preparing',launch_session_id:null,install_client:input.install_client===true?1:0,install_runtime:input.install_runtime===true?1:0,runtime_result:null,error:null,created:stamp,updated:stamp,started_at:stamp,goal,verify_reply:this.verification?1:0,target_member_id:target.member_id||recheckMemberId,connection_reused:target.reused_connection?1:0,reauthorize:input.reauthorize===true?1:0,new_member:input.new_member===true?1:0,selection_reason:target.reason||null,
       auth_mode:typeof authentication?.mode==='string'?authentication.mode:null,auth_revision:typeof authentication?.revision==='string'?authentication.revision:selection.provider==='codex'?SHARED_AUTH_REVISION:null};
     const protection=this.authProtection(row);if(protection)Object.assign(row,{status:'needs_action',stage:'connection_repair_required',error:CODEX_REPAIR_MESSAGE,runtime_result:JSON.stringify({status:'connection_repair_required',error_code:protection})});
-    this.db.prepare('INSERT INTO onboarding_runs(id,room_id,requested_provider,provider,mode,status,stage,launch_session_id,install_client,install_runtime,runtime_result,error,created,updated,goal,verify_reply,target_member_id,connection_reused,reauthorize,selection_reason,connection_method,started_at,auth_mode,auth_revision) VALUES(:id,:room_id,:requested_provider,:provider,:mode,:status,:stage,:launch_session_id,:install_client,:install_runtime,:runtime_result,:error,:created,:updated,:goal,:verify_reply,:target_member_id,:connection_reused,:reauthorize,:selection_reason,:connection_method,:started_at,:auth_mode,:auth_revision)').run(row);
+    this.db.prepare('INSERT INTO onboarding_runs(id,room_id,requested_provider,provider,mode,status,stage,launch_session_id,install_client,install_runtime,runtime_result,error,created,updated,goal,verify_reply,target_member_id,connection_reused,reauthorize,new_member,selection_reason,connection_method,started_at,auth_mode,auth_revision) VALUES(:id,:room_id,:requested_provider,:provider,:mode,:status,:stage,:launch_session_id,:install_client,:install_runtime,:runtime_result,:error,:created,:updated,:goal,:verify_reply,:target_member_id,:connection_reused,:reauthorize,:new_member,:selection_reason,:connection_method,:started_at,:auth_mode,:auth_revision)').run(row);
     if(protection){this.service.changed();return this.snapshot(row);}
     if(fixedElsewhere){this.service.changed();return this.snapshot(row);}
     if(target.blocked&&!row.reauthorize){this.service.changed();return this.snapshot(row);}
@@ -302,7 +305,7 @@ class OnboardingManager{
     if(this.closing||this.service.chat.roomDeleted?.(row.room_id))return;
     this.set(row.id,{stage:'preparing_connection'});
     let launch;
-    try{launch=this.service.launch.prepare({room_id:row.room_id,providers:[row.provider],install_clients:!!row.install_client,goal:row.goal||'',...row.target_member_id?{target_member_id:row.target_member_id}:{},...row.reauthorize?{reauthorize:true}:{}});}
+    try{launch=this.service.launch.prepare({room_id:row.room_id,providers:[row.provider],install_clients:!!row.install_client,goal:row.goal||'',...row.target_member_id?{target_member_id:row.target_member_id}:{},...row.reauthorize?{reauthorize:true}:{},...row.new_member?{new_member:true}:{}});}
     catch(error){
       if(error?.code==='launch_busy'){this.set(row.id,{status:'needs_action',stage:'waiting_other_setup',error:'另一个成员正在接入，请等待完成后点击重试。'});return;}
       if(error?.code==='provider_not_found'){this.set(row.id,{status:'needs_action',stage:MANAGED.has(row.provider)?'awaiting_runtime_install':'unsupported',error:'没有发现这个 agent 的可用入口。'});return;}
@@ -380,6 +383,15 @@ class OnboardingManager{
     }finally{this.advancingVerification=false;}
   }
   setIfDifferent(row,fields){if(Object.entries(fields).some(([key,value])=>row[key]!==value))this.set(row.id,fields);}
+  memberPresentation(memberId,roomId){
+    // Latest attempt for this exact person in this room; otherwise the state
+    // of the existing connection. Reading never starts or retries anything.
+    const member=this.service.chat.store.member(memberId),provider=member.config?.launch_provider||(member.adapter==='grok-bridge'?'grok-bot':member.adapter);
+    const rows=this.db.prepare('SELECT * FROM onboarding_runs WHERE room_id=? AND (provider=? OR target_member_id=? OR direct_member_id=?) ORDER BY created DESC,rowid DESC LIMIT 20').all(roomId,provider,memberId,memberId);
+    for(const row of rows){if(row.target_member_id&&row.target_member_id!==memberId||row.direct_member_id&&row.direct_member_id!==memberId)continue;try{const value=this.snapshot(row);if(value.member_id===memberId)return value.presentation;}catch{}}
+    try{const target=resolveConnectionTarget(this.service,{provider,room_id:roomId,target_member_id:memberId});return present({...existingConnectionState(this.service,provider,roomId,target),provider});}
+    catch{return present({provider,status:'needs_action',stage:'awaiting_connection',member_id:memberId});}
+  }
   snapshot(row){
     const value=this.snapshotCore(row);
     // One user-facing projection; internal stages stay for diagnostics.

@@ -128,13 +128,13 @@ test('selected managed provider follows existing real fixture handshake without 
   assert.equal(v.calls.native.length,2);assert.equal(v.calls.scans,1);assert.equal(v.calls.install,0);
   assert.equal(state.automatic_reply_verified,true);
   const row=v.service.store.db.prepare('SELECT install_client,install_runtime FROM onboarding_runs WHERE id=?').get(state.run_id);assert.equal(row.install_client,0);assert.equal(row.install_runtime,0);
-  const context=await v.manager.prepareContext(message.id);assert.match(context,/已接通/);assert.doesNotMatch(context,/fixture-private-token/);
+  const context=await v.manager.prepareContext(message.id);assert.match(context,/已连接|已接通/);assert.doesNotMatch(context,/fixture-private-token/);
 });
 test('Grok fallback returns a copy sentence and owned document while bot-visible state excludes target credentials',async t=>{
   const v=setup(t),message=v.message('把grok bot拉进群');v.manager.begin(message);const [state]=await v.finish();
   assert.equal(state.status,'needs_action');assert.equal(state.can_wake,false);assert.equal(state.local_verified,false);assert.ok(state.document_path);assert.match(state.copy_sentence,/请读取这台电脑上的接入文档/);assert.match(state.document_url,new RegExp('/api/connection-assists/'+state.id+'/document'));
   const document=v.manager.document(state.id,v.room.id);assert.match(document.filename,/grok-bot/);assert.match(document.text,/长期恢复入口/);assert.match(document.text,/不自动创建群聊/);assert.ok(!document.text.includes('fixture-private-token'));
-  const context=await v.manager.prepareContext(message.id);assert.match(context,/同一条回复里提供复制说明与查看步骤按钮/);assert.match(context,/copy_sentence/);assert.doesNotMatch(context,/fixture-private-token|\/mcp\/private-token|secret/);
+  const context=await v.manager.prepareContext(message.id);assert.match(context,/下方显示接入卡片/);assert.doesNotMatch(context,/copy_sentence|document_path/);assert.doesNotMatch(context,/fixture-private-token|\/mcp\/private-token|secret/);
   assert.equal(v.calls.native.length+v.calls.install,0);assert.equal(v.calls.desktop.length,0,'unverified Grok native adapter must not be contacted');
 });
 test('exact casual user request prepares one existing Grok guide and gives the secretary a concrete continuation',async t=>{
@@ -142,7 +142,7 @@ test('exact casual user request prepares one existing Grok guide and gives the s
   assert.equal(state.provider,'grok-bot');assert.equal(state.handoff_kind,'grok_guided');assert.equal(state.connection_method,'grok_command_bridge');assert.equal(state.target_window,'已有 Grok Bot 对话');assert.match(state.next_step,/复制给 Grok Bot/);assert.match(state.next_step,/不需要创建群聊/);
   assert.ok(state.target_member_id);assert.ok(state.copy_sentence);assert.ok(state.document_path);assert.equal(state.status,'needs_action');assert.equal(state.can_wake,false);
   const before=counts(v),scans=v.calls.scans,credentials=v.service.resume.credentials(state.target_member_id),bytes=fs.readFileSync(v.service.entry.describePrimary(state.target_member_id,v.room.id).file);
-  const context=await v.manager.prepareContext(message.id);assert.match(context,/不能只回答/);assert.match(context,/同一条回复里提供复制说明与查看步骤按钮/);assert.match(context,/target_window/);assert.match(context,/已有 Grok Bot 对话/);assert.doesNotMatch(context,/fixture-private-token|desktop_session_missing|needs_external_entry/);
+  const context=await v.manager.prepareContext(message.id);assert.match(context,/不能说已接通/);assert.match(context,/下方显示接入卡片/);assert.match(context,/"state":/);assert.match(context,/Grok/);assert.doesNotMatch(context,/fixture-private-token|desktop_session_missing|needs_external_entry/);
   v.manager.begin(message);await v.finish();assert.deepEqual(counts(v),before);assert.equal(v.calls.scans,scans);assert.deepEqual(v.service.resume.credentials(state.target_member_id),credentials);assert.deepEqual(fs.readFileSync(v.service.entry.describePrimary(state.target_member_id,v.room.id).file),bytes);assert.equal(v.calls.desktop.length,0);
 });
 test('reported history and deferred requests create no assists, scans, sessions or credentials',async t=>{
@@ -158,7 +158,7 @@ test('historical Grok handshake with a stale connection failure keeps guiding un
   const message=v.message('接入一下grok');v.manager.begin(message);await v.finish();const state=v.manager.snapshotForMessage(message.id)[0];
   assert.equal(state.target_member_id,memberId);assert.equal(state.status,'needs_action');assert.equal(state.local_verified,false);assert.ok(state.document_path);assert.ok(state.copy_sentence);assert.match(state.next_step,/复制给 Grok Bot/);
   const before=counts(v),scans=v.calls.scans,contact=v.service.resume.credential(card.credential_id).last_seen;
-  for(let i=0;i<3;i++){const context=await v.manager.prepareContext(message.id);assert.match(context,/已有 Grok Bot 对话/);assert.doesNotMatch(context,/desktop_session_missing/);assert.equal(v.manager.snapshotForMessage(message.id)[0].status,'needs_action');}
+  for(let i=0;i<3;i++){const context=await v.manager.prepareContext(message.id);assert.match(context,/Grok/);assert.doesNotMatch(context,/desktop_session_missing/);assert.equal(v.manager.snapshotForMessage(message.id)[0].status,'needs_action');}
   assert.equal(v.service.resume.credential(card.credential_id).last_seen,contact);assert.deepEqual(counts(v),before);assert.equal(v.calls.scans,scans);assert.deepEqual(fs.readFileSync(file),bytes);
   await sleep(5);v.service.entry.accept(card);const ready=v.manager.snapshotForMessage(message.id)[0];
   assert.equal(ready.status,'ready');assert.equal(ready.local_verified,true);assert.equal(ready.can_wake,false);assert.equal(ready.automatic_reply_verified,false);assert.equal(ready.error,null);assert.deepEqual(counts(v),before);assert.deepEqual(fs.readFileSync(file),bytes);
@@ -177,7 +177,7 @@ test('an unsupported Grok replaces its stale document with an honest capability-
   const v=setup(t),message=v.message('接入一下grok');v.manager.begin(message);const [first]=await v.finish();assert.ok(first.document_path);assert.ok(first.target_member_id);
   const before=counts(v);v.manager.state=()=>({id:first.run_id,member_id:first.target_member_id,status:'needs_action',stage:'unsupported',local_verified:false,ready_for_office:false});
   const state=v.manager.snapshotForMessage(message.id)[0];assert.equal(state.action_kind,'unsupported');assert.equal(state.handoff_kind,null);assert.equal(state.document_path,null);assert.equal(state.copy_sentence,'');assert.equal(state.guidance.kind,'check_capability');assert.match(state.next_step,/复制给 Grok Bot 检查/);assert.doesNotMatch(state.guidance.prompt,/--entry|https?:\/\/|secret|token=/);
-  const context=await v.manager.prepareContext(message.id);assert.match(context,/一条回复内按成员分成简短段落/);assert.match(context,/"action_kind":"unsupported"/);assert.match(context,/"kind":"check_capability"/);assert.doesNotMatch(context,/"copy_sentence":"请读取|"handoff_kind":"grok_guided"/);assert.deepEqual(counts(v),before);
+  const context=await v.manager.prepareContext(message.id);assert.match(context,/一句话回应/);assert.match(context,/"action_kind":"unsupported"/);assert.match(context,/"state":"not_connected"/);assert.doesNotMatch(context,/"copy_sentence":"请读取|"handoff_kind":"grok_guided"/);assert.deepEqual(counts(v),before);
 });
 test('duplicate posts and recreated manager preserve run, identity and credentials without retry',async t=>{
   const v=setup(t),message=v.message('连接豆包');v.manager.begin(message);const [first]=await v.finish(),before=counts(v),scans=v.calls.scans,bytes=fs.readFileSync(v.service.entry.describe(first.target_member_id,v.room.id).file);
@@ -245,7 +245,7 @@ test('leaving recipient hides its assist card without breaking room history and 
   assert.deepEqual(v.manager.listRoom(v.room.id),[]);assert.throws(()=>v.manager.document(state.id,v.room.id),error=>error.code==='not_in_room');
 });
 test('context waiting is bounded and close does not cause a second connection attempt',async t=>{
-  let release;const gate=new Promise(resolve=>release=resolve),v=setup(t,{desktopGate:gate,contextWaitMs:5}),message=v.message('连接豆包');v.manager.begin(message);const started=Date.now(),context=await v.manager.prepareContext(message.id);assert.ok(Date.now()-started<1000);assert.match(context,/正在接入/);
+  let release;const gate=new Promise(resolve=>release=resolve),v=setup(t,{desktopGate:gate,contextWaitMs:5}),message=v.message('连接豆包');v.manager.begin(message);const started=Date.now(),context=await v.manager.prepareContext(message.id);assert.ok(Date.now()-started<1000);assert.match(context,/正在连接/);
   v.manager.stop();release();await v.manager.close();assert.equal(v.calls.desktop.length,1);assert.equal(v.calls.scans,1);assert.equal(v.manager.snapshotForMessage(message.id)[0].document_path,null);
 });
 

@@ -59,15 +59,18 @@ class LaunchManager{
     const providers=this.selectedProviders(input),room=this.chooseRoom(input),pending=this.db.prepare("SELECT id,selected_providers FROM launch_sessions WHERE room_id=? AND status='preparing' ORDER BY created DESC LIMIT 1").get(room.id);
     if(input.target_member_id&&providers.length!==1)throw new RoomError('精确人物接入每次只处理一位同事。',400,'single_provider_required');
     if(input.reauthorize===true&&!input.target_member_id)throw new RoomError('重新授权必须明确指定原人物。',403,'connection_target_required');
+    if(input.new_member===true&&(input.target_member_id||input.reauthorize===true||providers.length!==1))throw new RoomError('新建成员每次只处理一位，且不能指定原人物。',400,'onboarding_target_conflict');
     if(pending){const previous=JSON.parse(pending.selected_providers||'[]');if(previous.length!==providers.length||providers.some(provider=>!previous.includes(provider)))throw new RoomError('上一次指定成员的接入仍在进行，请等待完成后再选择其他成员。',409,'launch_busy');return this.state({session_id:pending.id});}
     const scan=this.discovery(),unknown=providers.filter(provider=>!scan.candidates.some(candidate=>candidate.provider===provider));
     if(unknown.length)throw new RoomError('所选 agent 没有在本次扫描中发现，请先扫描并选择实际成员。',409,'provider_not_found');
     const session={id:id(),room_id:room.id,status:'preparing',goal:input.goal?redact(cleanText(input.goal,1200,'协作目标')):'',candidates:JSON.stringify(scan.candidates),install_clients:input.install_clients===true?1:0,error:null,created:now(),updated:now(),selected_providers:JSON.stringify(providers)};
     this.db.prepare('INSERT INTO launch_sessions(id,room_id,status,goal,candidates,install_clients,error,created,updated,selected_providers) VALUES(:id,:room_id,:status,:goal,:candidates,:install_clients,:error,:created,:updated,:selected_providers)').run(session);
-    const selected=scan.candidates.filter(candidate=>providers.includes(candidate.provider)).map(candidate=>({...candidate,...input.target_member_id?{target_member_id:input.target_member_id}:{},reauthorize:input.reauthorize===true}));
+    const selected=scan.candidates.filter(candidate=>providers.includes(candidate.provider)).map(candidate=>({...candidate,...input.target_member_id?{target_member_id:input.target_member_id}:{},reauthorize:input.reauthorize===true,new_member:input.new_member===true}));
     const work=this.run(session,selected).catch(e=>{this.db.prepare("UPDATE launch_sessions SET status='needs_setup',error=?,updated=? WHERE id=? AND status!='cancelled'").run(redact(e.message).slice(0,1200),now(),session.id);this.service.changed();}).finally(()=>this.jobs.delete(session.id));this.jobs.set(session.id,work);this.service.changed();return this.state({session_id:session.id});
   }
   backend(room,candidate){
+    // The person asked for a separate colleague: create one, never reuse or rebind.
+    if(candidate.new_member)return this.separateMember(room,candidate,manualProviders.has(candidate.provider)?{adapter:'mailbox',config:{launch_provider:candidate.provider,connection_mode:'manual_mcp'},status:'awaiting_handshake'}:{adapter:candidate.adapter,config:{executable:candidate.executable,executable_args:candidate.executable_args||[]}});
     const chat=this.service.chat,target=resolveConnectionTarget(this.service,{provider:candidate.provider,room_id:room.id,target_member_id:candidate.target_member_id});
     if(target.fixed_proxy&&target.fixed_proxy.room_id!==room.id)throw new RoomError('此连接保留原固定桥接路由，不能跨房复用。',403,'proxy_not_bound');
     if(target.blocked&&!candidate.reauthorize)throw new RoomError('这位同事的连接已撤销，请明确重新授权原人物。',410,'resume_revoked');
@@ -171,8 +174,15 @@ class LaunchManager{
     }
     this.db.prepare("UPDATE launch_sessions SET status='awaiting_grok',updated=? WHERE id=?").run(now(),session.id);this.handoff(session.id);this.service.changed();
   }
+  separateMember(room,candidate,{adapter,config,status}){
+    const chat=this.service.chat,taken=new Set(chat.store.members().map(member=>member.name));let name=candidate.name||adapter;
+    for(let n=2;taken.has(name);n++)name=`${candidate.name||adapter} ${n}`;
+    const member=chat.addMember({name,adapter,config});chat.join(room.id,member.id);
+    if(status)chat.store.updateMember(member.id,{status,config:{...chat.store.member(member.id).config,...config}});
+    return chat.store.member(member.id);
+  }
   prepareGrok(room,options={}){
-    const chat=this.service.chat,target=resolveConnectionTarget(this.service,{provider:'grok-bot',room_id:room.id,target_member_id:options.target_member_id});
+    const chat=this.service.chat,target=options.new_member?{member:null,joined:false,blocked:false,fixed_proxy:null}:resolveConnectionTarget(this.service,{provider:'grok-bot',room_id:room.id,target_member_id:options.target_member_id});
     if(target.fixed_proxy&&target.fixed_proxy.room_id!==room.id)throw new RoomError('此连接保留原固定桥接路由，不能跨房复用。',403,'proxy_not_bound');
     if(target.blocked&&!options.reauthorize)throw new RoomError('这位 Grok 的连接已撤销，请明确重新授权原人物。',410,'resume_revoked');
     // A Grok Bot is an entry into the office, not a proxy pointing at itself.
