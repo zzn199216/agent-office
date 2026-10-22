@@ -2,6 +2,7 @@
 const fs=require('node:fs'),path=require('node:path');
 const {RoomError,id,now,redact,cleanText}=require('./util.cjs');
 const {resolveConnectionTarget,existingConnectionState}=require('./connection-target.cjs');
+const {present}=require('./member-connection.cjs');
 
 const MANAGED=new Set(['codex','claude-code','qwen-code','gemini-cli']);
 const DESKTOP=new Set(['claude-desktop','qwen-desktop','doubao','opencode','cherry-studio','cline','roo-code']);
@@ -330,7 +331,9 @@ class OnboardingManager{
       if(this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='chat_room_tombstones'").get())clauses.push('NOT EXISTS (SELECT 1 FROM chat_room_tombstones t WHERE t.room_id=onboarding_runs.room_id)');
       row=this.db.prepare(`SELECT * FROM onboarding_runs ${clauses.length?'WHERE '+clauses.join(' AND '):''} ORDER BY created DESC,rowid DESC LIMIT 1`).get(...values);
     }
-    return row?this.snapshot(row):{status:'not_started',stage:'not_started',next_actions:[],local_verified:false,can_wake:false,native_group_status:'not_prepared',policy:this.service.launch.policy()};
+    if(row)return this.snapshot(row);
+    const empty={status:'not_started',stage:'not_started',provider:input.provider||null,next_actions:[],local_verified:false,can_wake:false,native_group_status:'not_prepared',policy:this.service.launch.policy()};
+    empty.presentation=present(empty);return empty;
   }
   credentialState(roomId,member){
     // The original file may still name a deleted room. The credential row is
@@ -375,6 +378,12 @@ class OnboardingManager{
   }
   setIfDifferent(row,fields){if(Object.entries(fields).some(([key,value])=>row[key]!==value))this.set(row.id,fields);}
   snapshot(row){
+    const value=this.snapshotCore(row);
+    // One user-facing projection; internal stages stay for diagnostics.
+    value.presentation=present(value);
+    return value;
+  }
+  snapshotCore(row){
     const base=this.connectionSnapshot(row);
     if(['connection_repair_required','connection_recheck_available'].includes(base.stage))return base;
     if(!row.verify_reply||!this.verification)return base;

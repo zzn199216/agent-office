@@ -1,4 +1,5 @@
 'use strict';
+const {present}=require('./member-connection.cjs');
 const fs=require('node:fs'),path=require('node:path');
 const {RoomError,id,now,atomicWrite,redact}=require('./util.cjs');
 const {MANAGED,resolveConnectionTarget,existingConnectionState}=require('./connection-target.cjs');
@@ -216,7 +217,8 @@ class ConnectionAssist{
     else if(guidance&&actionKind==='native_connect')nextStep=guidance.steps[0];
     else if(guidance?.kind==='install_mcp')nextStep=`点击「${guidance.copy_label}」，交给${guidance.target_window}；然后回到 ${names.get(row.provider)||row.provider} 的本人对话握手。`;
     else if(actionKind==='native_connect'&&this.nativePending(state))nextStep='这位同事有正在执行或结果待核对的原生请求。请先查看原消息与本人对话核对结果，不能通过更新 MCP 或重复握手改走其他通路。';
-    return {id:row.id,room_id:row.room_id,message_id:row.message_id,member_id:row.member_id,provider:row.provider,name:names.get(row.provider)||row.provider,
+    const presentation=present({...state,provider:row.provider,status:protectedConnection?'needs_action':status,stage,error_code:state?.error_code||null,ready_for_office:ready,local_verified:ready,can_wake:ready&&state?.can_wake===true,error:ready?null:error||state?.error||null},{action_kind:actionKind});
+    return {presentation,id:row.id,room_id:row.room_id,message_id:row.message_id,member_id:row.member_id,provider:row.provider,name:names.get(row.provider)||row.provider,
       provider_name:names.get(row.provider)||row.provider,run_id:runId,status,stage,summary,error_code:state?.error_code||null,ready_for_office:ready,local_verified:ready,can_wake:ready&&state?.can_wake===true,
       auth_mode:state?.auth_mode||null,auth_revision:state?.auth_revision||null,recheck_auth_revision:state?.recheck_auth_revision||null,
       handoff_kind:guidedGrok?'grok_guided':documentPath?'connection_document':null,connection_method:guidedGrok?'grok_command_bridge':state?.response_mode||null,target_window:targetWindow,next_step:nextStep,
