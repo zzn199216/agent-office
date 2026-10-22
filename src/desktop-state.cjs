@@ -65,8 +65,9 @@ async function desktopState(dir,input={},options={}){
 }
 async function desktopStart(dir,input={},options={}){
   roomInput(input.room_id);const deadline=Math.min(options.deadline??Infinity,(options.clock?.()??Date.now())+30000);options={...options,deadline};
-  const main=options.main||require('./main.cjs'),before=await desktopState(dir,input,{...options,main});
-  const activation=require('./desktop-lifecycle.cjs').activateDesktop(dir,input.activation_id);
+  operationTimeout(options);
+  // Explicit starts must recover the marker before desktopState reads it.
+  const main=options.main||require('./main.cjs'),activation=require('./desktop-lifecycle.cjs').activateDesktop(dir,input.activation_id),before=await desktopState(dir,input,{...options,main});
   if(before.update_available){
     if(before.busy.is_busy)throw new RoomError('旧后台正在处理任务。先完成或停止当前工作，再更新后台；没有中断任务。',409,'desktop_update_busy');
     await desktopStop(dir,input,{...options,main,authenticatedState:before});
@@ -78,7 +79,8 @@ async function desktopStart(dir,input={},options={}){
 }
 async function desktopActivate(dir,input={},options={}){
   if(!ROOM_ID.test(input.activation_id||''))throw new RoomError('软件窗口的启动标识无效。',409,'desktop_service_changed');
-  const state=await desktopState(dir,{},options),activation=require('./desktop-lifecycle.cjs').activateDesktop(dir,input.activation_id);
+  operationTimeout(options);
+  const activation=require('./desktop-lifecycle.cjs').activateDesktop(dir,input.activation_id),state=await desktopState(dir,{},options);
   return {...state,desktop_activation_id:activation.id};
 }
 function closeIdentity(input){
