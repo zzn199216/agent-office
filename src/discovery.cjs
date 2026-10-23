@@ -1,6 +1,6 @@
 'use strict';
 const fs=require('node:fs'),path=require('node:path');
-const {spawnSync}=require('node:child_process');
+const {execFile}=require('node:child_process');
 const GEMINI_MIN=require('./gemini.cjs').MIN_VERSION;
 
 // Discovery is metadata only. A running UI is never proof that its existing
@@ -90,17 +90,19 @@ function defaultCatalog(){return [
     matchProcess:()=>null,executableNames:[],reason:'支持任意能调用标准 MCP 或本机命令的 Agent；自定义适配器须声明可验证的能力。'}
 ];}
 
-function windowsProcessInventory(){
+async function windowsProcessInventory({execFile:run=execFile,signal,timeout=15000}={}){
   // Node arguments are used only to distinguish named vendor entrypoints from
   // ordinary node processes. Neither they nor environment variables are returned.
   const script="$other=Get-CimInstance Win32_Process -Filter \"Name <> 'Grok Bot.exe' AND Name <> 'GrokBot.exe' AND Name <> 'Grok.exe'\" | Where-Object {$_.Name -match '^(codex|claude|Cursor|Qwen|Qwen Studio|Doubao|豆包|opencode|Cherry Studio|CherryStudio|cherry-studio|node|crashpad_handler|chrome_crashpad_handler)\\.exe$'} | Select-Object Name,ProcessId,ParentProcessId,ExecutablePath,CommandLine; $grok=Get-CimInstance Win32_Process -Filter \"Name = 'Grok Bot.exe' OR Name = 'GrokBot.exe' OR Name = 'Grok.exe'\" -Property Name,ProcessId,ParentProcessId,ExecutablePath | Select-Object Name,ProcessId,ParentProcessId,ExecutablePath; @($other)+@($grok) | ConvertTo-Json -Compress";
-  const result=spawnSync('powershell.exe',['-NoProfile','-NonInteractive','-Command',script],{encoding:'utf8',windowsHide:true,timeout:15000,maxBuffer:4*1024*1024});
-  if(result.error||result.status!==0){
+  const query=command=>new Promise(resolve=>run('powershell.exe',['-NoProfile','-NonInteractive','-Command',command],{encoding:'utf8',windowsHide:true,timeout,maxBuffer:4*1024*1024,signal},(error,stdout)=>resolve({error,stdout})));
+  const result=await query(script);
+  if(signal?.aborted)return {processes:[],available:false};
+  if(result.error){
     // A cold PowerShell CIM query can take longer than a busy desktop allows.
     // Get-Process is faster; it lacks parents and command lines, so CLI vendor
     // scripts may be missed, but desktop apps are still recognised.
-    const quick=spawnSync('powershell.exe',['-NoProfile','-NonInteractive','-Command',"Get-Process | Where-Object {$_.ProcessName -match '^(codex|claude|Cursor|Qwen|Qwen Studio|Doubao|豆包|opencode|Cherry Studio|CherryStudio|cherry-studio)$'} | Select-Object @{n='Name';e={$_.ProcessName+'.exe'}},@{n='ProcessId';e={$_.Id}},@{n='ExecutablePath';e={$_.Path}} | ConvertTo-Json -Compress"],{encoding:'utf8',windowsHide:true,timeout:15000,maxBuffer:4*1024*1024});
-    if(quick.error||quick.status!==0)return {processes:[],available:false,reason:'暂时无法读取本机进程清单。'};
+    const quick=await query("Get-Process | Where-Object {$_.ProcessName -match '^(codex|claude|Cursor|Qwen|Qwen Studio|Doubao|豆包|opencode|Cherry Studio|CherryStudio|cherry-studio)$'} | Select-Object @{n='Name';e={$_.ProcessName+'.exe'}},@{n='ProcessId';e={$_.Id}},@{n='ExecutablePath';e={$_.Path}} | ConvertTo-Json -Compress");
+    if(quick.error)return {processes:[],available:false,reason:'暂时无法读取本机进程清单。'};
     try{const rows=JSON.parse(quick.stdout||'[]');return {processes:Array.isArray(rows)?rows:rows?[rows]:[],available:true,partial:true};}catch{return {processes:[],available:false,reason:'进程清单格式无法识别。'};}
   }
   try{const rows=JSON.parse(result.stdout||'[]');return {processes:Array.isArray(rows)?rows:rows?[rows]:[],available:true};}catch{return {processes:[],available:false,reason:'进程清单格式无法识别。'};}
@@ -111,7 +113,7 @@ class DiscoveryCatalog{
     this.platform=options.platform||process.platform;this.env=options.env||process.env;this.path=this.platform==='win32'?path.win32:path.posix;
     this.exists=options.fileExists||fs.existsSync;this.listFiles=options.listFiles||((folder)=>{try{return fs.readdirSync(folder);}catch{return [];}});
     this.readManifest=options.readManifest||((file)=>{try{if(!fs.statSync(file).isFile()||fs.statSync(file).size>256*1024)return null;const value=JSON.parse(fs.readFileSync(file,'utf8'));return {publisher:value.publisher,name:value.name};}catch{return null;}});
-    this.inventory=options.processInventory||options.scan||(()=>this.platform==='win32'?windowsProcessInventory():{processes:[],available:false,reason:'当前平台仅检查已安装的命令入口；未读取进程参数。'});
+    this.inventory=options.processInventory||options.scan||(input=>this.platform==='win32'?windowsProcessInventory(input):{processes:[],available:false,reason:'当前平台仅检查已安装的命令入口；未读取进程参数。'});
     this.queryState=options.queryState||(()=>null);this.clock=options.now||(()=>new Date().toISOString());
     const catalog=options.catalog||[],defaults=options.includeDefaults===false?[]:defaultCatalog();const map=new Map(defaults.map(d=>[d.id,d]));
     for(const item of catalog){if(!item||!/^[a-z0-9][a-z0-9-]{0,79}$/.test(item.id||''))throw new TypeError('Adapter id must contain lowercase letters, numbers or hyphens.');map.set(item.id,{...(map.get(item.id)||{}),...item});}this.catalog=[...map.values()];
@@ -238,8 +240,19 @@ class DiscoveryCatalog{
     let custom=definition.executables||[];if(typeof custom==='function')try{custom=custom({platform:this.platform,env:this.env,path:this.path});}catch{custom=[];}
     candidates.push(...(Array.isArray(custom)?custom:[]));return [...new Set(candidates.filter(v=>typeof v==='string'&&v&&!/[\r\n\u0000]/.test(v)))].filter(v=>this.safeExists(v)&&(definition.id!=='claude-code'||!claudeDesktop(v))&&(definition.id!=='qwen-code'||!qwenDesktop(v)));
   }
-  scan(options={}){
-    let result;try{result=options.processes!==undefined?options.processes:this.inventory();}catch{result={processes:[],available:false,reason:'暂时无法读取本机进程清单。'};}
+  close(){this.closed=true;this.inventoryController?.abort();return this.pendingInventory;}
+  async scan(options={}){
+    if(this.closed)throw new Error('客户端扫描已停止。');
+    let result=options.processes;
+    if(result===undefined){
+      if(!this.pendingInventory){
+        const controller=this.inventoryController=new AbortController();
+        const pending=Promise.resolve().then(()=>this.inventory({signal:controller.signal})).catch(()=>({processes:[],available:false})).finally(()=>{if(this.pendingInventory===pending){this.pendingInventory=null;this.inventoryController=null;}});
+        this.pendingInventory=pending;
+      }
+      result=await this.pendingInventory;
+      if(this.closed)throw new Error('客户端扫描已停止。');
+    }
     const rows=Array.isArray(result)?result:result?.processes||[];const available=Array.isArray(result)||result?.available!==false;
     const processes=rows.filter(p=>p&&typeof p==='object').map(p=>({name:clean(p.Name??p.name,120),pid:positive(p.ProcessId??p.pid),parentPid:positive(p.ParentProcessId??p.parentPid),executable:clean(p.ExecutablePath??p.executable,2048),commandLine:String(p.CommandLine??p.commandLine??'')}));
     const processById=new Map(processes.filter(p=>p.pid).map(p=>[p.pid,p]));

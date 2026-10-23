@@ -73,7 +73,7 @@ function createServer(service,{token,port=47831,onShutdown}={}) {
       if(req.method==='GET'&&pathname==='/api/office')return json(res,service.office.get(new URL(req.url,'http://127.0.0.1').searchParams.get('room_id')));
       if(req.method==='GET'&&pathname==='/api/secretary')return json(res,service.secretary.get(new URL(req.url,'http://127.0.0.1').searchParams.get('room_id')));
       if(req.method==='GET' && pathname==='/api/onboarding')return json(res,onboarding(service));
-      if(req.method==='GET' && pathname==='/api/chat/discover')return json(res,service.chat.discover());
+      if(req.method==='GET' && pathname==='/api/chat/discover')return json(res,await service.chat.discover());
       if(req.method==='GET' && pathname==='/api/chat/state')return json(res,service.chat.snapshot());
       if(req.method==='GET'&&pathname==='/api/runtime'){const q=new URL(req.url,`http://${req.headers.host}`).searchParams;return json(res,service.runtime.offlineSnapshot(q.get('room_id')||undefined,q.get('member_id')||undefined));}
       if(req.method==='GET'&&pathname==='/api/launch/state'){const q=new URL(req.url,`http://${req.headers.host}`).searchParams;return json(res,service.launch.state({room_id:q.get('room_id')||undefined,session_id:q.get('session_id')||undefined}));}
@@ -162,8 +162,8 @@ function createServer(service,{token,port=47831,onShutdown}={}) {
       if(pathname==='/api/office')return json(res,service.office.set(input));
       if(pathname==='/api/secretary')return json(res,service.secretary.set(input));
       if(pathname==='/api/secretary/start')return json(res,service.secretary.start(input),202);
-      if(pathname==='/api/launch/scan')return json(res,service.launch.scan(input));
-      if(pathname==='/api/launch/prepare')return json(res,service.launch.prepare(input),202);
+      if(pathname==='/api/launch/scan')return json(res,await service.launch.scan(input));
+      if(pathname==='/api/launch/prepare')return json(res,await service.launch.prepare(input),202);
       if(pathname==='/api/launch/report')return json(res,service.launch.report(input));
       if(pathname==='/api/launch/sync')return json(res,await service.launch.sync(input));
       if(pathname==='/api/launch/sync-report')return json(res,service.launch.syncReport(input));

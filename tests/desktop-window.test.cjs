@@ -24,6 +24,15 @@ internal static class WindowTests
     private static void Contained(Rectangle bounds, Rectangle area, string name) { Check(bounds.Width > 0 && bounds.Height > 0 && area.Contains(bounds), name); }
     public static int Main(string[] args)
     {
+        string opened = null;
+        Action<string> browser = url => opened = url;
+        Check(ExternalLink.TryOpen("https://accounts.example.com/authorize?code=fixture", true, true, browser), "user authorization opens in system browser");
+        Check(opened == "https://accounts.example.com/authorize?code=fixture", "full authorization URL retained");
+        foreach (string invalid in new string[] { "javascript:alert(1)", "file:///C:/private", "http://example.com/", "https://user:pass@example.com/", "https://localhost/", "https://127.0.0.1/", "https://agentroom.local/", "https://example.com/\r\nrun", "not a URL" })
+            Check(!ExternalLink.TryOpen(invalid, true, true, browser), "reject unsafe URL");
+        Check(!ExternalLink.TryOpen("https://example.com/", false, true, browser), "reject automatic popup");
+        Check(!ExternalLink.TryOpen("https://example.com/", true, false, browser), "reject foreign page");
+        Check(opened == "https://accounts.example.com/authorize?code=fixture", "rejected navigation never launches");
         Rectangle standard = new Rectangle(0, 0, 1920, 1040), small = new Rectangle(0, 0, 640, 400), left = new Rectangle(-1920, 0, 1920, 1040), dense = new Rectangle(0, 0, 3840, 2080);
         Rectangle normal = WindowPlacement.Preferred(standard, 96);
         Contained(normal, standard, "standard bounds"); Check(normal.Width == 1240 && normal.Height == 820, "natural desktop cap");

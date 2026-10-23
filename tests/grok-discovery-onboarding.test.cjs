@@ -9,21 +9,21 @@ const {id}=require('../src/util.cjs');
 // Local protocol fixtures only: no account, model, native chat, browser or
 // webhook is invoked by discovery or by preparing a Grok window's entry.
 function catalog(processes=[],files=[]){const known=new Set(files);return new DiscoveryCatalog({platform:'win32',env:{USERPROFILE:'C:\\Users\\Fixture',LOCALAPPDATA:'C:\\Local',APPDATA:'C:\\Roaming',PATH:''},processInventory:()=>processes,fileExists:value=>known.has(value),listFiles:()=>[]});}
-test('Grok Bot desktop is discovered once without claiming MCP import, native host or wake readiness',()=>{
+test('Grok Bot desktop is discovered once without claiming MCP import, native host or wake readiness',async ()=>{
   const exe='W:\\Programs\\Grok Bot\\Grok Bot.exe',secret='fixture-private-chat-argument';
-  const result=catalog([{Name:'Grok Bot.exe',ProcessId:10,ExecutablePath:exe,CommandLine:secret},{Name:'Grok Bot.exe',ProcessId:11,ParentProcessId:10,ExecutablePath:exe,CommandLine:'--type=renderer '+secret},{Name:'Grok Bot.exe',ProcessId:12,ParentProcessId:10,ExecutablePath:exe}], [exe]).scan();
+  const result=(await catalog([{Name:'Grok Bot.exe',ProcessId:10,ExecutablePath:exe,CommandLine:secret},{Name:'Grok Bot.exe',ProcessId:11,ParentProcessId:10,ExecutablePath:exe,CommandLine:'--type=renderer '+secret},{Name:'Grok Bot.exe',ProcessId:12,ParentProcessId:10,ExecutablePath:exe}], [exe]).scan());
   const grok=result.candidates.find(value=>value.provider==='grok-bot');
   assert.equal(grok.running,true);assert.equal(grok.installed,true);assert.deepEqual(grok.pids,[10]);assert.equal(grok.capabilities.manual_connect,true);assert.equal(grok.capabilities.mcp_prepare,false);assert.equal(grok.capabilities.mcp_install,false);assert.equal(grok.capabilities.automatic_launch,false);assert.equal(grok.identity.handshake_verified,false);assert.equal(grok.support,'needs_setup');assert.equal(JSON.stringify(result).includes(secret),false);
 });
-test('official Grok Build CLI installation and process never become a Grok Bot desktop identity',()=>{
+test('official Grok Build CLI installation and process never become a Grok Bot desktop identity',async ()=>{
   const cli='C:\\Users\\Fixture\\.grok\\bin\\grok.exe',desktop='C:\\Apps\\GrokBot\\GrokBot.exe';
-  const result=catalog([{Name:'grok.exe',ProcessId:20,ExecutablePath:cli},{Name:'GrokBot.exe',ProcessId:21,ExecutablePath:desktop}], [cli,desktop]).scan();
+  const result=(await catalog([{Name:'grok.exe',ProcessId:20,ExecutablePath:cli},{Name:'GrokBot.exe',ProcessId:21,ExecutablePath:desktop}], [cli,desktop]).scan());
   const code=result.candidates.find(value=>value.provider==='grok-cli'),bot=result.candidates.find(value=>value.provider==='grok-bot');
   assert.equal(code.installed,true);assert.deepEqual(code.pids,[20]);assert.equal(code.instances[0].role,'cli');assert.equal(code.support,'unsupported');assert.equal(code.can_connect,false);assert.equal(code.capabilities.automatic_launch,false);assert.deepEqual(bot.pids,[21]);assert.equal(bot.instances[0].role,'desktop');
 });
-test('legacy known Grok desktop path is recognized while arbitrary grok executables do not identify a controllable product',()=>{
+test('legacy known Grok desktop path is recognized while arbitrary grok executables do not identify a controllable product',async ()=>{
   const known='C:\\Programs\\Grok\\Grok.exe',unknown='C:\\Unrelated\\grok.exe';
-  const result=catalog([{Name:'Grok.exe',ProcessId:30,ExecutablePath:known},{Name:'grok.exe',ProcessId:31,ExecutablePath:unknown}],[known,unknown]).scan();
+  const result=(await catalog([{Name:'Grok.exe',ProcessId:30,ExecutablePath:known},{Name:'grok.exe',ProcessId:31,ExecutablePath:unknown}],[known,unknown]).scan());
   assert.deepEqual(result.candidates.find(value=>value.provider==='grok-bot').pids,[30]);assert.deepEqual(result.candidates.find(value=>value.provider==='grok-cli').pids,[]);
 });
 
@@ -59,7 +59,7 @@ test('existing Grok bridge, entry bytes, webhook configuration and fixed proxy r
 test('repeat clicks and an explicit metadata rescan keep the prepared Grok identity and credential',async t=>{
   const v=setup(t),job=await prepared(v),before=card(v,job.member_id),initial=counts(v),scans=v.calls.scan;
   const repeated=v.service.onboarding.start({provider:'grok-bot',room_id:v.room.id});assert.equal(repeated.id,job.id);assert.equal(repeated.reused,true);assert.equal(v.calls.scan,scans);
-  v.service.launch.scan({room_id:v.room.id});const after=v.service.onboarding.state({run_id:job.id});assert.equal(after.member_id,job.member_id);assert.equal(after.stage,'awaiting_bridge_handshake');assert.deepEqual(counts(v),initial);assert.deepEqual(card(v,job.member_id).bytes,before.bytes);
+  (await v.service.launch.scan({room_id:v.room.id}));const after=v.service.onboarding.state({run_id:job.id});assert.equal(after.member_id,job.member_id);assert.equal(after.stage,'awaiting_bridge_handshake');assert.deepEqual(counts(v),initial);assert.deepEqual(card(v,job.member_id).bytes,before.bytes);
 });
 test('read-only onboarding and generic retry preserve revoked Grok entry until exact reauthorization',async t=>{
   const v=setup(t),job=await prepared(v),before=card(v,job.member_id);v.service.entry.accept(before.value);v.service.entry.revoke(job.member_id,v.room.id);const initial=counts(v),scans=v.calls.scan;

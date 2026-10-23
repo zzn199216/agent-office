@@ -5,11 +5,18 @@ const { atomicWrite, RoomError } = require('./util.cjs');
 const { createQwenMcpConfig } = require('./mcp-http.cjs');
 
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
+function createStdioConfig({provider,command,args=[],serverName='agentroom',env}) {
+  if(provider==='opencode')return {$schema:'https://opencode.ai/config.json',mcp:{[serverName]:{type:'local',command:[command,...args],enabled:true}}};
+  const server={command,args,...env?{env}:{}};
+  if(provider==='cline')Object.assign(server,{disabled:false,autoApprove:[]});
+  if(provider==='roo-code')Object.assign(server,{disabled:false,alwaysAllow:[]});
+  return {mcpServers:{[serverName]:server}};
+}
 function createMcpTemplates({ command, args = [], entryFile, localUrl, card }) {
   if (!card || !UUID.test(card.member_id || '')) throw new RoomError('模板需要有效的成员身份。', 400, 'mcp_template_invalid');
   if (typeof command !== 'string' || !path.isAbsolute(command) || /[\0\r\n]/.test(command) || typeof entryFile !== 'string' || !path.isAbsolute(entryFile) || /[\0\r\n]/.test(entryFile) || !Array.isArray(args) || args.some(arg => typeof arg !== 'string' || /[\0\r\n]/.test(arg))) throw new RoomError('模板的本机启动参数无效。', 400, 'mcp_template_invalid');
   const templates = {
-    stdio: { mcpServers: { agentroom: { command, args: [...args, 'mcp', '--entry', entryFile] } } }
+    stdio: createStdioConfig({command,args:[...args,'mcp','--entry',entryFile]})
   };
   if (localUrl) {
     templates.streamable_http = createQwenMcpConfig(localUrl, card);
@@ -41,4 +48,4 @@ function writeMcpTemplates(dataDirectory, memberId, templates) {
   return files;
 }
 
-module.exports = { createMcpTemplates, writeMcpTemplates };
+module.exports = { createMcpTemplates, writeMcpTemplates, createStdioConfig };

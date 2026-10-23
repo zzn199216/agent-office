@@ -4,9 +4,13 @@ Windows 10/11 x64 独立 WinForms 窗口，使用系统 Evergreen WebView2 Runti
 
 `node scripts/build-desktop.cjs` 从官方 NuGet 下载固定、SHA256 验证的 WebView2 SDK，使用 Windows 自带 .NET 编译器编译；不执行远程脚本，不全局安装 SDK，不捆绑整个浏览器 Runtime。只分发 WinForms/Core DLL、x64 Loader、NuGet 许可及应用公共界面资源。
 
-显示品牌为 Agent 办公室 / Agent Office，程序集与互斥实例名仍为 AgentRoom，以兼容已有本机安装。窗口只调用完整安装包固定相邻或父目录 `AgentOffice.exe` 或兼容 `AgentRoom.exe` 的 `desktop-state` / `desktop-start` / `desktop-stop`。`--agentroom` 只接受这四个固定位置之一，`--data-dir` 仅来自桌面进程命令行，网页无法指定文件路径。`desktop-state --room UUID` 只读读取同一实例的房间、成员及历史。初次打开窗口不隐式启动服务；服务关闭仍可查看持久房间历史；关闭窗口保留服务。
+显示品牌为 Agent 办公室 / Agent Office，程序集与互斥实例名仍为 AgentRoom，以兼容已有本机安装。窗口只调用完整安装包固定相邻或父目录 `AgentOffice.exe` 或兼容 `AgentRoom.exe` 的 `desktop-state` / `desktop-activate` / `desktop-start` / `desktop-stop` / `desktop-close`。`--agentroom` 只接受这四个固定位置之一，`--data-dir` 仅来自桌面进程命令行，网页无法指定文件路径。`desktop-state --room UUID` 只读读取同一实例的房间、成员及历史。
+
+打开窗口自动启动本机服务。需要后台继续处理任务时使用最小化；最小化会暂停页面刷新、动画及 WebView，恢复窗口后重新读取进度。关闭窗口会停止本次桌面会话对应的服务；关闭失败时显示处理结果，进程身份校验避免误停其他实例。服务关闭后仍可查看已保存的房间历史。开发时可用 `npm run serve` 独立运行命令行服务。
 
 在线只允许 CLI 返回的精确 `http://127.0.0.1:PORT` 原点；离线只允许公共 `desktop-web` 资源映射的 `https://agentroom.local`。成员自定义形象仅允许受限大小的 PNG/JPEG/WebP data URL 图片子资源，不允许 data 导航、脚本或 frame。导航、frame、popup、下载、网络子请求均受限制。WebView 不提供 native host objects；postMessage 仅接收同原点、已定义 schema 的固定服务操作，无 shell、URL、路径或任意命令。
+
+用户在受信任页面点击外部 HTTPS 链接时，由系统浏览器打开，WebView 留在 AO。自动弹窗、非 HTTPS、带用户名密码的地址和本机地址被拒绝。授权卡另有“复制链接”，浏览器打开失败时也能继续完成授权。
 
 文字和办公室界面共用公共 `office.js` / `office.css` 与显式名单的 `assets/office` 素材。成员外观通过固定只读 CLI 状态返回，无需给 WebView 映射任何私有文件夹。SVG 为随包的公开原创素材，用户替换只能采用服务已校验的 raster data。离线不发送消息或保存新外观。
 

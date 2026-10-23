@@ -148,7 +148,7 @@ class ChatManager {
     const entry=this.service.entry.primary(member.id,roomId);
     if(member.adapter==='grok-bridge')return {kind:'command',provider,title:'交给 Grok Bot',copy:entry.prompt,copy_label:'复制给 Grok 的说明',steps:['在你选定的 Grok Bot 对话里粘贴这段说明。','Grok 会用它在这台电脑上的本机工具进入房间。']};
     const card=JSON.parse(fs.readFileSync(entry.file,'utf8')),own=ownCommand();
-    const {createMcpTemplates,writeMcpTemplates}=require('./mcp-template.cjs');
+    const {createMcpTemplates,writeMcpTemplates,createStdioConfig}=require('./mcp-template.cjs');
     const template_files=writeMcpTemplates(this.service.store.dir,member.id,createMcpTemplates({command:own.command,args:own.args,entryFile:entry.file,localUrl:this.service._localUrl,card}));
     const installation_prompt=require('./agent-install.cjs').agentInstallPrompt({member,provider,templateFiles:template_files});
     if(['qwen-desktop','doubao'].includes(provider)){
@@ -157,8 +157,8 @@ class ChatManager {
       if(provider==='doubao')return {kind:'http_fields',provider,title:'在豆包里连接 AO',installation_prompt,bootstrap,fields:{名称:'Agent Office',传输:'HTTP',地址:config.mcpServers.agentroom.url},copy:config.mcpServers.agentroom.url,copy_label:'复制连接地址',steps:['可以把下方「AI 安装说明」交给有本机配置能力的安装 Agent，由它完成配置并保留已有连接。','手动添加时，打开豆包电脑版 → 技能 / 连接器 → 新建自定义连接器，名称填 Agent Office，传输选 HTTP，粘贴地址，Headers 留空。','保存启用后，把连接器用于当前豆包对话，发送下方「连接人物说明」验证 AO 工具。'],note:'接口自测成功不等于当前对话已加载工具。此路径目前是本人窗口信箱；尚未验证自动启动对话或收信，不能标为自动接管。'};
       return {kind:'http_json',provider,title:'在 Qwen 里连接 AO',installation_prompt,copy:JSON.stringify({mcpServers:{AgentOffice:config.mcpServers.agentroom}},null,2),bootstrap,copy_label:'复制 MCP 配置',steps:['可将「AI 安装说明」交给有本机配置能力的安装 Agent；手动添加则进入 Qwen MCP 设置 → 添加 MCP → 使用 JSON 添加。','确认类型为 StreamableHTTP，不能选 SSE；保存并启用，连接状态应变绿。','在 Qwen 对话启用 AgentOffice MCP，粘贴下方「连接人物说明」，验证实际工具调用。','不要使用「代码解释器」，它运行在云端，访问不到你的电脑。'],note:'这位同事只连接一次，之后加入或更换办公室房间都沿用。此路径尚未实现自动启动 Qwen 对话和收信，不能据此声称 AO 已自动接管窗口。'};
     }
-    const config={mcpServers:{agentoffice:{command:own.command,args:[...own.args,'mcp','--entry',entry.file]}}};
-    const steps=provider==='claude-desktop'?['打开 Claude 桌面版 → 设置 → 开发者 → 编辑配置。','把复制的 agentoffice 条目合并进 mcpServers（保留你已有的其他条目），保存。','完全退出并重新打开 Claude，然后说：用 agentoffice 工具查看我的收件箱。']:['在这个客户端的 MCP 设置里导入或合并下面的配置，启用它。','重新加载后，在它自己的对话里说：用 agentoffice 工具查看我的收件箱。'];
+    const config=createStdioConfig({provider,command:own.command,args:[...own.args,'mcp','--entry',entry.file],serverName:'agentoffice'});
+    const steps=provider==='opencode'?['打开 OpenCode 的 opencode.json 或 opencode.jsonc，将复制的 mcp 配置合并后保存。','重新加载 OpenCode，在对话里发送下方连接说明。']:provider==='claude-desktop'?['打开 Claude 桌面版 → 设置 → 开发者 → 编辑配置。','把复制的 agentoffice 条目合并进 mcpServers（保留你已有的其他条目），保存。','完全退出并重新打开 Claude，然后说：用 agentoffice 工具查看我的收件箱。']:['在这个客户端的 MCP 设置里导入或合并下面的配置，启用它。','重新加载后，在它自己的对话里说：用 agentoffice 工具查看我的收件箱。'];
     return {kind:'stdio_json',provider,title:'添加本机 MCP',installation_prompt,copy:JSON.stringify(config,null,2),bootstrap,copy_label:'复制 MCP 配置',steps,note:'在对应客户端创建这位同事的对话，发一次下方连接人物说明。之后加入或更换房间继续沿用这份连接，不用重新导入。'};
   }
   connect(memberId,roomId){const m=this.store.member(memberId),r=this.store.room(roomId);this.store.join(roomId,memberId);return this.adapter(m).connect(m,r);}
@@ -367,6 +367,6 @@ class ChatManager {
     for(const item of pending)try{const room=this.store.room(item.room_id);const text=`# ${room.title}\n\n项目：${room.project_name}\n\n`+this.store.db.prepare("SELECT * FROM chat_messages WHERE room_id=? ORDER BY seq").all(room.id).map(m=>`## ${m.sender_id==='user'?'你':names.get(m.sender_id)||m.sender_id} · ${m.created}\n\n${m.to_member_id?'发给：'+names.get(m.to_member_id)+'\n\n':''}${m.text}\n\n状态：${m.status} · 消息ID：${m.id}\n${m.error?'\n'+m.error+'\n':''}`).join('\n');atomicWrite(path.join(this.service.store.dir,'chatrooms',room.id,'conversation.md'),text);this.store.exported(room.id,item.revision);}catch{failed=true;}
     this.exportError=failed?'部分聊天室 Markdown 记录暂未写入，稍后补写。':null;
   }
-  async close(){this.closing=true;clearInterval(this.exportTimer);for(const memberId of this.connectedMembers){this.service.runtime?.releaseWorker(`native:${memberId}`);this.service.runtime?.releaseSession(memberId,`native:${memberId}`);}this.connectedMembers.clear();for(const a of this.active.values())a.abort.abort();for(const n of this.notifications.values())n.abort.abort();await Promise.allSettled([...this.clients.values()].map(c=>c.close()).concat([...this.notifications.values()].map(n=>n.work)));for(let i=0;this.active.size&&i<40;i++)await sleep(100);this.exportRooms();}
+  async close(){this.closing=true;await this.discovery.close();clearInterval(this.exportTimer);for(const memberId of this.connectedMembers){this.service.runtime?.releaseWorker(`native:${memberId}`);this.service.runtime?.releaseSession(memberId,`native:${memberId}`);}this.connectedMembers.clear();for(const a of this.active.values())a.abort.abort();for(const n of this.notifications.values())n.abort.abort();await Promise.allSettled([...this.clients.values()].map(c=>c.close()).concat([...this.notifications.values()].map(n=>n.work)));for(let i=0;this.active.size&&i<40;i++)await sleep(100);this.exportRooms();}
 }
 module.exports={ChatManager,done};

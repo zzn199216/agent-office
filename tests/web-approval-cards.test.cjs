@@ -23,6 +23,15 @@ function questionGroup(id,labels,value=''){
   });
   group.querySelectorAll=selector=>selector==='[data-question]'?[input]:selector==='[data-question-choice]'?choices:[];return{group,input,choices};
 }
+test('URL approval offers an external link and a copy fallback without accepting the approval',async()=>{
+  const f=fixture(),url='https://accounts.example.com/authorize?state=one&next=two',copies=[];
+  f.context.navigator={clipboard:{writeText:async value=>copies.push(value)}};
+  const html=f.context.approvalContentMarkup(approval({type:'url',url}));
+  assert.match(html,/target="_blank" rel="noreferrer"/);assert.match(html,/data-copy-approval-url="https:\/\/accounts\.example\.com\/authorize\?state=one&amp;next=two"/);
+  assert.match(html,/复制链接/);assert.match(html,/已完成，继续/);
+  await f.context.copyApprovalLink({dataset:{copyApprovalUrl:url}});
+  assert.deepEqual(copies,[url]);assert.equal(f.calls.length,0);assert.match(f.notices[0],/在浏览器完成确认后/);
+});
 test('session permission appears only for the exact advertised boolean on operation approvals',()=>{
   const f=fixture();for(const value of[undefined,false,1,'true'])assert.doesNotMatch(f.context.approvalContentMarkup(approval({session_allowed:value})),/acceptForSession|本会话允许/);
   const html=f.context.approvalContentMarkup(approval({session_allowed:true}));assert.match(html,/data-decision="acceptForSession"/);assert.match(html,/本会话允许此操作/);assert.match(html,/data-decision="accept"/);assert.match(html,/data-decision="decline"/);

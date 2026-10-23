@@ -112,6 +112,30 @@ test('a second click while an operation is running is ignored',async()=>{
   assert.deepEqual(f.calls.copy,['once']);
 });
 
+test('member connection buttons work without a prior onboarding record',async()=>{
+  for(const operation of ['retry','reauthorize','native_connect']){
+    const f=fixture();f.context.setupData={member:{id:'target'},client:{provider:'claude-desktop'},presentation:f.view('attention')};
+    await f.click(operation,{source:'member',id:'target'});
+    const requests=f.calls.api.filter(([url])=>url==='/api/onboarding/start');assert.equal(requests.length,1);
+    assert.deepEqual(plain(requests[0][1]),{room_id:'room',provider:'claude-desktop',target_member_id:'target',...operation==='reauthorize'?{reauthorize:true}:{}});
+    assert.equal(f.calls.refresh,1);assert.ok(!f.calls.toast.some(text=>text.startsWith('error:')));
+  }
+});
+
+test('OpenCode copy button receives its real provider-specific setup config',async t=>{
+  const {RoomService}=require('../src/service.cjs'),{fixture:filesForTest,FakeCodex,FakeVault}=require('./helpers.cjs');
+  const files=filesForTest(),service=new RoomService(files.data,{codex:new FakeCodex(),vault:new FakeVault()});
+  t.after(async()=>{await service.close();assert.equal(path.dirname(path.resolve(files.root)),path.resolve(require('node:os').tmpdir()));assert.match(path.basename(files.root),/^agentroom-test-/);fs.rmSync(files.root,{recursive:true,force:true});});
+  const project=service.addProject({name:'Copy config',path:files.project}),room=service.chat.addRoom({title:'Copy config',project_id:project.id});
+  const member=service.chat.store.addMember({name:'OpenCode',adapter:'mailbox',config:{launch_provider:'opencode',desktop_delivery_mode:'manual_mcp'}});service.chat.join(room.id,member.id);
+  const f=fixture();f.context.history.connection_assists=[f.assist(f.view('waiting',{provider:'opencode',name:'OpenCode'}),{provider:'opencode',target_member_id:member.id})];
+  f.context.__setup=service.chat.setup(member.id,room.id);await f.click('copy_config');
+  assert.equal(f.calls.copy.length,1);const config=JSON.parse(f.calls.copy[0]);
+  assert.equal(config.mcpServers,undefined);assert.equal(config.mcp.agentoffice.type,'local');assert.equal(config.mcp.agentoffice.enabled,true);
+  assert.ok(Array.isArray(config.mcp.agentoffice.command));assert.equal(config.mcp.agentoffice.command.at(-2),'--entry');
+  assert.equal(JSON.parse(fs.readFileSync(config.mcp.agentoffice.command.at(-1),'utf8')).member_id,member.id);
+});
+
 test('connection-flow copy avoids reassurance and internal terms, and every quoted button exists',()=>{
   const banned=/保留|沿用|没有自动重试|未宣称|不会生成|原生会话|本人对话|握手|兼容 MCP|群桥接/;
   const functions=['function renderConnectionAssists(','function connectionPanelMarkup(','async function connectionCopy(','async function runConnectionOperation(','function applySetupPresentation(','async function runOnboardingOperation('];

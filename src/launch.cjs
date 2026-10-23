@@ -22,14 +22,16 @@ class LaunchManager{
     const {LaunchWatch}=require('./launch-watch.cjs');this.watch=new LaunchWatch(this,options.watch||{});
   }
   policy(){return {scan:'on_request',join:'explicit_selection',automatic_sync:false};}
-  discovery(){const raw=this.options.discover?this.options.discover():this.service.chat.discover();const {publicCandidates}=require('./launch-watch.cjs');return {...raw,candidates:publicCandidates(raw)};}
-  scan(input={}){
+  async discovery(){const raw=await(this.options.discover?this.options.discover():this.service.chat.discover());const {publicCandidates}=require('./launch-watch.cjs');return {...raw,candidates:publicCandidates(raw)};}
+  async scan(input={}){
     if(this.closing)throw new RoomError('AgentRoom 正在停止。',503);
     if(input.room_id)this.service.chat.store.room(input.room_id);
-    const scan=this.discovery();
+    const scan=await this.discovery();
+    if(this.closing)throw new RoomError('AgentRoom 正在停止。',503);
     // A manual inventory update cannot create a room, backend, proxy, model
     // task or profile installation, and cannot change a preparation's scope.
     if(input.room_id){
+      this.service.chat.store.room(input.room_id);
       const prior=this.db.prepare('SELECT id,candidates FROM launch_sessions WHERE room_id=? ORDER BY created DESC,rowid DESC LIMIT 1').get(input.room_id);
       // A metadata refresh cannot discard the durable bridge member selected by
       // the explicit prepare action or turn a running app into a new identity.
@@ -54,14 +56,25 @@ class LaunchManager{
     if(rooms.length>1)throw new RoomError('该项目已有多个房间，请在首页选择一次要协作的房间。',409,'choose_room');
     return rooms[0]||this.service.chat.addRoom({project_id:project.id,title:'项目协作'});
   }
-  prepare(input={}){
+  async prepare(input={}){
     if(this.closing)throw new RoomError('AgentRoom 正在停止。',503);
-    const providers=this.selectedProviders(input),room=this.chooseRoom(input),pending=this.db.prepare("SELECT id,selected_providers FROM launch_sessions WHERE room_id=? AND status='preparing' ORDER BY created DESC LIMIT 1").get(room.id);
+    const providers=this.selectedProviders(input),room=this.chooseRoom(input);
     if(input.target_member_id&&providers.length!==1)throw new RoomError('精确人物接入每次只处理一位同事。',400,'single_provider_required');
     if(input.reauthorize===true&&!input.target_member_id)throw new RoomError('重新授权必须明确指定原人物。',403,'connection_target_required');
     if(input.new_member===true&&(input.target_member_id||input.reauthorize===true||providers.length!==1))throw new RoomError('新建成员每次只处理一位，且不能指定原人物。',400,'onboarding_target_conflict');
-    if(pending){const previous=JSON.parse(pending.selected_providers||'[]');if(previous.length!==providers.length||providers.some(provider=>!previous.includes(provider)))throw new RoomError('上一次指定成员的接入仍在进行，请等待完成后再选择其他成员。',409,'launch_busy');return this.state({session_id:pending.id});}
-    const scan=this.discovery(),unknown=providers.filter(provider=>!scan.candidates.some(candidate=>candidate.provider===provider));
+    const existing=()=>{
+      const pending=this.db.prepare("SELECT id,selected_providers FROM launch_sessions WHERE room_id=? AND status='preparing' ORDER BY created DESC LIMIT 1").get(room.id);
+      if(!pending)return null;
+      const previous=JSON.parse(pending.selected_providers||'[]');
+      if(previous.length!==providers.length||providers.some(provider=>!previous.includes(provider)))throw new RoomError('上一次指定成员的接入仍在进行，请等待完成后再选择其他成员。',409,'launch_busy');
+      return this.state({session_id:pending.id});
+    };
+    const active=existing();if(active)return active;
+    const scan=await this.discovery();
+    if(this.closing)throw new RoomError('AgentRoom 正在停止。',503);
+    this.service.chat.store.room(room.id);
+    const concurrent=existing();if(concurrent)return concurrent;
+    const unknown=providers.filter(provider=>!scan.candidates.some(candidate=>candidate.provider===provider));
     if(unknown.length)throw new RoomError('所选 agent 没有在本次扫描中发现，请先扫描并选择实际成员。',409,'provider_not_found');
     const session={id:id(),room_id:room.id,status:'preparing',goal:input.goal?redact(cleanText(input.goal,1200,'协作目标')):'',candidates:JSON.stringify(scan.candidates),install_clients:input.install_clients===true?1:0,error:null,created:now(),updated:now(),selected_providers:JSON.stringify(providers)};
     this.db.prepare('INSERT INTO launch_sessions(id,room_id,status,goal,candidates,install_clients,error,created,updated,selected_providers) VALUES(:id,:room_id,:status,:goal,:candidates,:install_clients,:error,:created,:updated,:selected_providers)').run(session);

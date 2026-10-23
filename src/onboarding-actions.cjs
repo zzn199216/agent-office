@@ -33,11 +33,11 @@ async function launchInteractive(request,options={}){
 }
 class OnboardingActions{
   constructor(service,options={}){this.service=service;this.options=options;this.terminals=new Map();this.opening=new Map();}
-  cli(job){
+  async cli(job){
     if(!['codex','claude-code','qwen-code','gemini-cli'].includes(job.provider))throw new RoomError('这个桌面客户端没有正式的后台登录入口。',409,'client_login_unavailable');
     const runtime=this.service.store.setting(`runtime.${job.provider}`),member=job.member_id?this.service.chat.store.member(job.member_id):null;
     let executable=member?.config.executable||runtime?.executable,args=member?.config.executable_args||runtime?.executable_args||[];
-    if(!executable){const candidate=this.service.chat.discover().candidates.find(c=>c.provider===job.provider);executable=candidate?.executable;args=candidate?.executable_args||[];}
+    if(!executable){const candidate=(await this.service.chat.discover()).candidates.find(c=>c.provider===job.provider);executable=candidate?.executable;args=candidate?.executable_args||[];}
     const native=args.length===0&&(job.provider==='claude-code'?/[/\\]claude\.exe$/i.test(executable||''):job.provider==='codex'?/[/\\]codex\.exe$/i.test(executable||''):job.provider==='qwen-code'&&/[/\\]qwen\.exe$/i.test(executable||''));
     const node=/[/\\]node\.exe$/i.test(executable||'')&&args.length===1&&(job.provider==='qwen-code'?qwenVendorScript(args[0]):job.provider==='gemini-cli'?geminiVendorScript(args[0]):job.provider==='claude-code'&&/[/\\]@anthropic-ai[/\\]claude-code[/\\](?:cli|bin[/\\]claude)\.(?:js|mjs|cjs)$/i.test(args[0]));
     if(!path.isAbsolute(executable||'')||!fs.existsSync(executable)||!Array.isArray(args)||args.some(a=>typeof a!=='string'||!path.isAbsolute(a)||!fs.existsSync(a))||!native&&!node)throw new RoomError('先安装该成员的正式命令入口，再打开首次配置。',409,'client_runtime_missing');
@@ -76,7 +76,7 @@ class OnboardingActions{
       }else{if(current?.identity===prior.process_identity)return {job,action:{kind:'login_client',launched:true,reused:true,instruction:'此成员的首次配置窗口仍在运行。完成 AO 后台的独立登录后，点击登录后继续接入。'}};if(!current&&livePid(prior.pid))throw loginError('client_login_open_timeout');}
       this.terminals.delete(job.id);
     }
-    const cli=this.cli(job),project=this.service.store.project(this.service.chat.store.room(job.room_id).project_id);
+    const cli=await this.cli(job),project=this.service.store.project(this.service.chat.store.room(job.room_id).project_id);
     // This interactive terminal opens only after the user clicks its action.
     // The program and argv come from a known adapter, not browser command text.
     const command=shellCommand(cli.executable,[...cli.args,...(job.provider==='claude-code'?['auth','login']:job.provider==='codex'?['login']:[])],'win32');

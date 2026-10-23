@@ -17,7 +17,8 @@ function readTeamSnapshot(disk,roomId){
     return {member_id:member.id,name:member.name,adapter:member.adapter,role:'',skills:[],information:'',sources:[],session_ref:'',version:0,ack_version:0,updated_at:null,...saved,can_wake:runtime.can_wake,presence:runtime.presence,registration:runtime.registration,native_session_ref:binding.thread_id,context_status:saved?'self_or_controller_reported':'not_provided'};
   });
   const meetings=rows('meeting').map(value=>({...value,missing_member_ids:(value.expected_member_ids||value.participant_ids).filter(member=>!(value.reports||[]).some(report=>report.member_id===member&&report.round===value.round&&!report.late))}));
-  return {room_id:roomId,secretary_id:secretary.member_id,cards,goals:rows('goal'),tasks:rows('task'),meetings,brief:keyed('brief','current')||{version:0,content:'',updated_at:null},schedule:keyed('schedule','current')||{enabled:false,interval_hours:24,timezone:'Asia/Taipei',next_run_at:null,last_result:''},delivery_issues:hasTable('team_outbox')?disk.store.db.prepare("SELECT id,record_id,error,status FROM team_outbox WHERE room_id=? AND status IN ('failed','uncertain')").all(roomId):[]};
+  const goals=rows('goal'),tasks=rows('task');
+  return {room_id:roomId,...require('./team.cjs').coordinationState(disk.chat,roomId,secretary.member_id,goals,tasks),cards,goals,tasks,meetings,brief:keyed('brief','current')||{version:0,content:'',updated_at:null},schedule:keyed('schedule','current')||{enabled:false,interval_hours:24,timezone:'Asia/Taipei',next_run_at:null,last_result:''},delivery_issues:hasTable('team_outbox')?disk.store.db.prepare("SELECT id,record_id,error,status FROM team_outbox WHERE room_id=? AND status IN ('failed','uncertain')").all(roomId):[]};
 }
 
 module.exports={readTeamSnapshot};

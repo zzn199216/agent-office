@@ -19,6 +19,17 @@ using Microsoft.Win32.SafeHandles;
 
 namespace AgentRoomDesktop
 {
+    internal static class ExternalLink
+    {
+        internal static bool TryOpen(string value, bool userInitiated, bool trustedPage, Action<string> open)
+        {
+            Uri uri;
+            if (!userInitiated || !trustedPage || String.IsNullOrWhiteSpace(value) || value.Length > 8192 || Regex.IsMatch(value, @"[\x00-\x20\x7f]") || !Uri.TryCreate(value, UriKind.Absolute, out uri)) return false;
+            if (uri.Scheme != Uri.UriSchemeHttps || !String.IsNullOrEmpty(uri.UserInfo) || uri.IsLoopback || uri.Host.Equals("agentroom.local", StringComparison.OrdinalIgnoreCase)) return false;
+            open(uri.AbsoluteUri); return true;
+        }
+    }
+
     internal sealed class Options
     {
         public string DataDirectory;
@@ -647,7 +658,18 @@ namespace AgentRoomDesktop
                 core.SetVirtualHostNameToFolderMapping("agentroom.local", assets, CoreWebView2HostResourceAccessKind.DenyCors);
                 core.NavigationStarting += delegate(object sender, CoreWebView2NavigationStartingEventArgs e) { if (!AllowedOrigin(e.Uri)) { e.Cancel = true; rejectedNavigations++; } };
                 core.FrameNavigationStarting += delegate(object sender, CoreWebView2NavigationStartingEventArgs e) { if (!AllowedOrigin(e.Uri)) { e.Cancel = true; rejectedNavigations++; } };
-                core.NewWindowRequested += delegate(object sender, CoreWebView2NewWindowRequestedEventArgs e) { e.Handled = true; rejectedNavigations++; };
+                core.NewWindowRequested += delegate(object sender, CoreWebView2NewWindowRequestedEventArgs e)
+                {
+                    e.Handled = true;
+                    try
+                    {
+                        if (!ExternalLink.TryOpen(e.Uri, e.IsUserInitiated, AllowedOrigin(core.Source), url => Process.Start(new ProcessStartInfo(url) { UseShellExecute = true }))) rejectedNavigations++;
+                    }
+                    catch
+                    {
+                        MessageBox.Show(this, "无法打开系统浏览器。请复制授权链接，在浏览器中打开后回来继续。", "打开授权链接", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    }
+                };
                 core.PermissionRequested += delegate(object sender, CoreWebView2PermissionRequestedEventArgs e) { e.State = CoreWebView2PermissionState.Deny; };
                 core.DownloadStarting += delegate(object sender, CoreWebView2DownloadStartingEventArgs e) { e.Cancel = true; };
                 core.AddWebResourceRequestedFilter("*", CoreWebView2WebResourceContext.All);

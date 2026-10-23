@@ -23,11 +23,19 @@ function sources(value, currentTime = Date.now()) {
   });
 }
 function hash(value) { return crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex'); }
+function coordinationState(chat,roomId,secretaryId,goals,tasks,error){
+  const memberId=secretaryId&&chat.joined(roomId,secretaryId)?secretaryId:null,issues=[];
+  if(goals.some(goal=>goal.status==='active')&&!memberId)issues.push('秘书暂时不可用，请连接或选择一位秘书继续协作。');
+  for(const task of tasks)if(task.status==='queued'&&!task.message_id&&!chat.joined(roomId,task.assignee_id))issues.push(`「${task.title}」等待负责人加入办公室；也可以取消后交给其他成员。`);
+  if(error)issues.push('此房间的协作需要处理：'+error);
+  return {secretary_id:memberId,coordination_issues:issues};
+}
 
 class TeamManager {
   constructor(service, options = {}) {
     this.service = service; this.store = service.store; this.db = this.store.db;
     this.clock = options.clock || (() => Date.now()); this.running = false; this.closed = false;
+    this.roomErrors = new Map();
     this.db.exec(`CREATE TABLE IF NOT EXISTS team_records (
       id TEXT PRIMARY KEY,room_id TEXT NOT NULL REFERENCES chat_rooms(id),kind TEXT NOT NULL,
       record_key TEXT NOT NULL,body TEXT NOT NULL,version INTEGER NOT NULL,updated_at TEXT NOT NULL,
@@ -45,7 +53,7 @@ class TeamManager {
   date() { return new Date(this.clock()).toISOString(); }
   room(roomId) { return this.service.chat.store.room(text(roomId, 200, '房间标识')); }
   actor(input) { const room = this.room(input.room_id); if (input.caller_member_id != null) this.service.chat.store.requireParticipant(room.id, input.caller_member_id); return input.caller_member_id || null; }
-  secretary(roomId) { return this.service.secretary.get(roomId).member_id; }
+  secretary(roomId) { const role=this.service.secretary.get(roomId);return role.member_id&&this.service.chat.store.joined(roomId,role.member_id)?role.member_id:null; }
   coordinate(input) {
     const actor = this.actor(input);
     if (actor && actor !== this.secretary(input.room_id)) throw new RoomError('只有本房间当前秘书可以协调任务与会议。', 403, 'team_role_forbidden');
@@ -92,7 +100,8 @@ class TeamManager {
   }
   snapshot(roomId) {
     this.room(roomId);
-    return { room_id: roomId, secretary_id: this.secretary(roomId), cards: this.cards(roomId), goals: this.rows(roomId, 'goal'), tasks: this.rows(roomId, 'task'), meetings: this.rows(roomId, 'meeting').map(m => this.meetingView(m)), brief: this.brief(roomId), schedule: this.scheduleState(roomId), delivery_issues: this.db.prepare("SELECT id,record_id,error,status FROM team_outbox WHERE room_id=? AND status IN ('failed','uncertain')").all(roomId) };
+    const goals=this.rows(roomId,'goal'),tasks=this.rows(roomId,'task');
+    return { room_id: roomId, ...coordinationState(this.service.chat.store,roomId,this.secretary(roomId),goals,tasks,this.roomErrors.get(roomId)), cards: this.cards(roomId), goals, tasks, meetings: this.rows(roomId, 'meeting').map(m => this.meetingView(m)), brief: this.brief(roomId), schedule: this.scheduleState(roomId), delivery_issues: this.db.prepare("SELECT id,record_id,error,status FROM team_outbox WHERE room_id=? AND status IN ('failed','uncertain')").all(roomId) };
   }
   brief(roomId) { return this.keyed(roomId, 'brief', 'current') || { version: 0, content: '', updated_at: null }; }
   ack(input) {
@@ -300,7 +309,8 @@ class TeamManager {
         if(!accepted && event.event_key.startsWith('task:')){const task=this.record(event.record_id,'task',event.room_id);if(task.status!=='queued'||event.event_key!==`task:${task.id}:${task.attempt}`){this.db.prepare("UPDATE team_outbox SET status='superseded' WHERE id=?").run(event.id);continue;}}
         if(!accepted&&(event.event_key.startsWith('goal:')||event.event_key.startsWith('task-event:'))){const record=this.record(event.record_id,event.event_key.startsWith('goal:')?'goal':'task',event.room_id),goal=record.goal_id?this.record(record.goal_id,'goal',event.room_id):record;if(goal.status!=='active'){this.db.prepare("UPDATE team_outbox SET status='superseded' WHERE id=?").run(event.id);continue;}}
         const member = this.service.chat.store.member(event.recipient_id);
-        if(event.event_key.includes(':secretary:') && event.recipient_id !== this.secretary(event.room_id)) { this.db.prepare("UPDATE team_outbox SET status='superseded' WHERE id=?").run(event.id); continue; }
+        if(event.event_key.includes(':secretary:') && event.recipient_id !== this.service.secretary.get(event.room_id).member_id) { this.db.prepare("UPDATE team_outbox SET status='superseded' WHERE id=?").run(event.id); continue; }
+        if(!accepted&&!this.service.chat.store.joined(event.room_id,event.recipient_id))continue;
         if (!accepted && (member.status !== 'ready' || !member.verified_at)) continue;
         if(!accepted&&dispatched>=30)continue;
         const message = accepted || this.service.chat.post({ room_id: event.room_id, sender_id: 'user', to_member_id: event.recipient_id, text: '【办公室调度：来自已授权协作目标】\n' + event.body, idempotency_key: key });
@@ -315,56 +325,62 @@ class TeamManager {
     this.running = true;
     try {
       for (const room of this.service.chat.store.rooms()) {
-        for(const goal of this.rows(room.id,'goal').filter(g=>g.status==='active')) {
-          if(goal.initial_message_key){const initial=this.db.prepare("SELECT id,to_member_id FROM chat_messages WHERE room_id=? AND sender_id='user' AND idempotency_key=?").get(room.id,goal.initial_message_key);if(initial)this.linkTutorialGoal(goal,initial.to_member_id,initial.id);}
-          if(!this.rows(room.id,'task').some(t=>t.goal_id===goal.id)) this.notifySecretary(goal,'goal:'+goal.id,'请读取信息卡并分解这个目标，创建有交付物和验收条件的任务后结束当前轮。\n'+JSON.stringify(goal));
-        }
-        for (let task of this.rows(room.id, 'task')) {
-          if(!task.message_id){const accepted=this.db.prepare('SELECT message_id FROM team_outbox WHERE event_key=?').get(`task:${task.id}:${task.attempt}`);if(accepted?.message_id) task=this.save(task,{message_id:accepted.message_id},null,'task_dispatched');}
-          if (task.status === 'queued' && !task.message_id && task.depends_on.every(d => this.record(d, 'task', room.id).status === 'completed')) {
-            const eventKey = `task:${task.id}:${task.attempt}`;
-            this.enqueue(room.id, task.assignee_id, task.id, eventKey, `请在已授权范围内完成任务。先阅读 agentroom_team_state 中本任务的完整要求、补充说明和本人信息卡，再 agentroom_task_update action=accept；缺资料则 action=block 说明缺口并结束本轮，不等待其他agent；完成则 action=submit 提供 result 和 evidence，之后结束本轮等待验收。不冒充其他窗口掌握的知识。\nroom_id=${room.id}\ntask_id=${task.id}\n任务：${task.title}\n验收要求：${task.acceptance}\n补充说明：${task.note}`);
-            const outbox = this.db.prepare('SELECT message_id FROM team_outbox WHERE event_key=?').get(eventKey);
-            if (outbox?.message_id) task = this.save(task, { message_id: outbox.message_id }, null, 'task_dispatched');
+        try {
+          for(const goal of this.rows(room.id,'goal').filter(g=>g.status==='active')) {
+            if(goal.initial_message_key){const initial=this.db.prepare("SELECT id,to_member_id FROM chat_messages WHERE room_id=? AND sender_id='user' AND idempotency_key=?").get(room.id,goal.initial_message_key);if(initial&&this.service.chat.store.joined(room.id,initial.to_member_id))this.linkTutorialGoal(goal,initial.to_member_id,initial.id);}
+            if(!this.rows(room.id,'task').some(t=>t.goal_id===goal.id)) this.notifySecretary(goal,'goal:'+goal.id,'请读取信息卡并分解这个目标，创建有交付物和验收条件的任务后结束当前轮。\n'+JSON.stringify(goal));
           }
-          if (task.message_id) {
-            const message = this.service.chat.store.message(task.message_id), active = this.service.chat.active.get(task.assignee_id)?.messageId === message.id;
-            if (['queued', 'running','review','blocked'].includes(task.status) && ['uncertain', 'cancelled', 'failed'].includes(message.status)) task = this.save(task, { status: message.status, note: message.error || '执行已结束，需核查。' }, null, 'execution_stopped');
-            if (['queued', 'running'].includes(task.status) && message.status === 'answered' && !active) {
-              task = this.save(task, { status: 'blocked', note: '成员已回复，但尚未通过任务工具提交带来源的交付物。请秘书核实或安排补交。' }, null, 'missing_deliverable');
+          for (let task of this.rows(room.id, 'task')) {
+            if(!task.message_id){const accepted=this.db.prepare('SELECT message_id FROM team_outbox WHERE event_key=?').get(`task:${task.id}:${task.attempt}`);if(accepted?.message_id) task=this.save(task,{message_id:accepted.message_id},null,'task_dispatched');}
+            if (task.status === 'queued' && !task.message_id && this.service.chat.store.joined(room.id,task.assignee_id) && task.depends_on.every(d => this.record(d, 'task', room.id).status === 'completed')) {
+              const eventKey = `task:${task.id}:${task.attempt}`;
+              this.enqueue(room.id, task.assignee_id, task.id, eventKey, `请在已授权范围内完成任务。先阅读 agentroom_team_state 中本任务的完整要求、补充说明和本人信息卡，再 agentroom_task_update action=accept；缺资料则 action=block 说明缺口并结束本轮，不等待其他agent；完成则 action=submit 提供 result 和 evidence，之后结束本轮等待验收。不冒充其他窗口掌握的知识。\nroom_id=${room.id}\ntask_id=${task.id}\n任务：${task.title}\n验收要求：${task.acceptance}\n补充说明：${task.note}`);
+              const outbox = this.db.prepare('SELECT message_id FROM team_outbox WHERE event_key=?').get(eventKey);
+              if (outbox?.message_id) task = this.save(task, { message_id: outbox.message_id }, null, 'task_dispatched');
             }
+            if (task.message_id) {
+              const message = this.service.chat.store.message(task.message_id), active = this.service.chat.active.get(task.assignee_id)?.messageId === message.id;
+              if (['queued', 'running','review','blocked'].includes(task.status) && ['uncertain', 'cancelled', 'failed'].includes(message.status)) task = this.save(task, { status: message.status, note: message.error || '执行已结束，需核查。' }, null, 'execution_stopped');
+              if (['queued', 'running'].includes(task.status) && message.status === 'answered' && !active) {
+                task = this.save(task, { status: 'blocked', note: '成员已回复，但尚未通过任务工具提交带来源的交付物。请秘书核实或安排补交。' }, null, 'missing_deliverable');
+              }
+            }
+            if (this.record(task.goal_id,'goal',room.id).status==='active' && this.service.chat.active.get(task.assignee_id)?.messageId !== task.message_id && ['review', 'blocked', 'uncertain', 'failed', 'cancelled'].includes(task.status)) this.notifySecretary(task, `task-event:${task.id}:${task.version}`, `任务有新状态：${task.status}。请读取 team_state 中的完整目标、任务交付和证据再推进；有阻塞时安排澄清或补充资料，待验收时核实交付。不要仅确认收到。\ntask_id=${task.id}\ngoal_id=${task.goal_id}\n任务：${task.title}`);
           }
-          if (this.record(task.goal_id,'goal',room.id).status==='active' && this.service.chat.active.get(task.assignee_id)?.messageId !== task.message_id && ['review', 'blocked', 'uncertain', 'failed', 'cancelled'].includes(task.status)) this.notifySecretary(task, `task-event:${task.id}:${task.version}`, `任务有新状态：${task.status}。请读取 team_state 中的完整目标、任务交付和证据再推进；有阻塞时安排澄清或补充资料，待验收时核实交付。不要仅确认收到。\ntask_id=${task.id}\ngoal_id=${task.goal_id}\n任务：${task.title}`);
-        }
-        for (const m of this.rows(room.id, 'meeting')) {
-          const expected = m.expected_member_ids || m.participant_ids;
-          if (m.status === 'collecting' && (this.clock() >= Date.parse(m.deadline_at) || expected.every(member => m.reports.some(r => r.member_id === member && r.round === m.round)))) {
-            const updated = this.save(m, { status: 'review' }, null, 'meeting_collected');
-            this.notifySecretary(updated, `meeting-review:${m.id}:${m.round}`, '会议报告已收集或截止。请读取报告，标明缺席和历史信息；有分歧可进行定向澄清（最多两轮），否则保存纪要、关联行动任务并结束会议。\nmeeting_id=' + m.id);
-            this.changed();
+          for (const m of this.rows(room.id, 'meeting')) {
+            const expected = m.expected_member_ids || m.participant_ids;
+            if (m.status === 'collecting' && (this.clock() >= Date.parse(m.deadline_at) || expected.every(member => m.reports.some(r => r.member_id === member && r.round === m.round)))) {
+              const updated = this.save(m, { status: 'review' }, null, 'meeting_collected');
+              this.notifySecretary(updated, `meeting-review:${m.id}:${m.round}`, '会议报告已收集或截止。请读取报告，标明缺席和历史信息；有分歧可进行定向澄清（最多两轮），否则保存纪要、关联行动任务并结束会议。\nmeeting_id=' + m.id);
+              this.changed();
+            }
+            if(m.status==='review')this.notifySecretary(m,`meeting-review:${m.id}:${m.round}`,'会议报告已收集或截止。请读取报告，标明缺席和历史信息；有分歧可进行定向澄清（最多两轮），否则保存纪要、关联行动任务并结束会议。\nmeeting_id='+m.id);
           }
-          if(m.status==='review')this.notifySecretary(m,`meeting-review:${m.id}:${m.round}`,'会议报告已收集或截止。请读取报告，标明缺席和历史信息；有分歧可进行定向澄清（最多两轮），否则保存纪要、关联行动任务并结束会议。\nmeeting_id='+m.id);
-        }
-        const schedule = this.keyed(room.id, 'schedule', 'current');
-        if (schedule?.enabled && this.clock() >= Date.parse(schedule.next_run_at)) {
-          const tasks = this.rows(room.id, 'task'), goals = this.rows(room.id, 'goal'), cards = this.rows(room.id, 'card');
-          const signature = hash([goals.map(g => [g.id, g.version]), tasks.map(t => [t.id, t.version]), cards.map(c => [c.id, c.information, c.sources])]);
-          let outcome = 'no_active_goal';
-          if (goals.some(g => g.status === 'active') && signature !== schedule.last_signature) {
-            if (this.rows(room.id, 'meeting').some(m => !['completed', 'cancelled'].includes(m.status))) outcome = 'meeting_active';
-            else if (this.secretary(room.id)) {
-              const participants = this.cards(room.id).filter(c => c.member_id !== this.secretary(room.id)).slice(0, 12).map(c => c.member_id);
-              if (participants.length) { this.meeting({ room_id: room.id, title: '团队进展例会', agenda: '同步任务进展、新信息、阻塞和下一步；仅报告实际掌握的信息并附来源。', participant_ids: participants, idempotency_key: 'scheduled:' + schedule.next_run_at }); outcome = 'started'; }
-              else outcome = 'no_participants';
-            } else outcome = 'secretary_unassigned';
-          } else if (goals.some(g => g.status === 'active')) outcome = 'no_changes';
-          this.save(schedule, { next_run_at: new Date(this.clock() + schedule.interval_hours * 3600000).toISOString(), last_result: outcome, last_signature: ['started', 'no_changes'].includes(outcome) ? signature : schedule.last_signature }, null, 'schedule_tick'); this.changed();
+          const schedule = this.keyed(room.id, 'schedule', 'current');
+          if (schedule?.enabled && this.clock() >= Date.parse(schedule.next_run_at)) {
+            const tasks = this.rows(room.id, 'task'), goals = this.rows(room.id, 'goal'), cards = this.rows(room.id, 'card');
+            const signature = hash([goals.map(g => [g.id, g.version]), tasks.map(t => [t.id, t.version]), cards.map(c => [c.id, c.information, c.sources])]);
+            let outcome = 'no_active_goal';
+            if (goals.some(g => g.status === 'active') && signature !== schedule.last_signature) {
+              if (this.rows(room.id, 'meeting').some(m => !['completed', 'cancelled'].includes(m.status))) outcome = 'meeting_active';
+              else if (this.secretary(room.id)) {
+                const participants = this.cards(room.id).filter(c => c.member_id !== this.secretary(room.id)).slice(0, 12).map(c => c.member_id);
+                if (participants.length) { this.meeting({ room_id: room.id, title: '团队进展例会', agenda: '同步任务进展、新信息、阻塞和下一步；仅报告实际掌握的信息并附来源。', participant_ids: participants, idempotency_key: 'scheduled:' + schedule.next_run_at }); outcome = 'started'; }
+                else outcome = 'no_participants';
+              } else outcome = 'secretary_unassigned';
+            } else if (goals.some(g => g.status === 'active')) outcome = 'no_changes';
+            this.save(schedule, { next_run_at: new Date(this.clock() + schedule.interval_hours * 3600000).toISOString(), last_result: outcome, last_signature: ['started', 'no_changes'].includes(outcome) ? signature : schedule.last_signature }, null, 'schedule_tick'); this.changed();
+          }
+          if(this.roomErrors.delete(room.id))this.changed();
+        } catch(error) {
+          const message=redact(String(error.message)).slice(0,1000);
+          if(this.roomErrors.get(room.id)!==message){this.roomErrors.set(room.id,message);this.changed();}
         }
       }
       this.flushOutbox();
     } finally { this.running = false; }
   }
-  start() { if (this.timer) return; this.tick(); this.timer = setInterval(() => { try { this.tick(); this.error = null; } catch (e) { this.error = e.message; } }, 750); this.timer.unref(); }
+  start() { if (this.timer) return; const tick=()=>{try{this.tick();this.error=null;}catch(e){this.error=e.message;}};tick();this.timer=setInterval(tick,750);this.timer.unref(); }
   close() { this.closed = true; clearInterval(this.timer); }
 }
-module.exports = { TeamManager, INSTRUCTIONS, sources };
+module.exports = { TeamManager, INSTRUCTIONS, sources, coordinationState };

@@ -266,10 +266,7 @@ function prepareManualClient(input = {}) {
     detail='个人连接器字段已准备；在豆包本地电脑模式手动填写，再从本人窗口实际调用接入工具。';
     material={manual_fields:{name:'Agent Office',transport:'HTTP',url,headers:{}},source,instructions:'在豆包原生技能/连接器管理中选择新建自定义连接器。名称、HTTP 传输和服务器 URL 按字段填写，自定义 Headers 留空；只在本地电脑模式使用。若本人表单没有 HTTP 或拒绝本机地址，报告这一具体阻碍。此材料不是豆包 JSON 导入合同。HTTP 需要 Agent Office 服务运行；服务停止后先启动软件，再重试。保存并启用后，在豆包本人对话中实际调用 agentroom_room_ensure 与 agentroom_heartbeat。',conditional_stdio:{condition:'仅在本人原生表单确实提供 STDIO 传输时使用，工具真实调用后才能验收；不会唤醒豆包模型。',command,args,env:{}}};
   }else{
-    let configuration={command,args,env:{}};
-    if(provider==='cline')configuration={...configuration,disabled:false,autoApprove:[]};
-    if(provider==='roo-code')configuration={...configuration,disabled:false,alwaysAllow:[]};
-    const config=provider==='opencode'?{$schema:'https://opencode.ai/config.json',mcp:{agentroom:{type:'local',command:[command,...args],enabled:true}}}:{mcpServers:{agentroom:configuration}};
+    const config=require('./mcp-template.cjs').createStdioConfig({provider,command,args,env:{}});
     const instructions={opencode:'在 OpenCode 的实际 opencode.json / opencode.jsonc 中合并本机 mcp.agentroom 条目，保留其他配置和同名现有入口；本轮不启动 OpenCode 模型服务。重新加载后在本人会话实际调用 agentroom_room_ensure 与 agentroom_heartbeat。',
       'cherry-studio':'在 Cherry Studio 设置 → MCP → 添加中导入此 JSON，启用并检查工具列表，再将这个服务器绑定给你选定的 Agent。在该 Agent 本人会话实际调用 agentroom_room_ensure 与 agentroom_heartbeat。',
       cline:'在 Cline 扩展面板 MCP Servers → Configure → Configure MCP Servers 打开的实际 JSON 中合并 mcpServers.agentroom，保留其他服务器和同名已有配置。autoApprove 初始为空；重新加载后在本人会话实际调用 agentroom_room_ensure 与 agentroom_heartbeat。',

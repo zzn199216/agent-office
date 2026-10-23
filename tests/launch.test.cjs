@@ -79,7 +79,7 @@ function setup(t, overrides = {}) {
   return { ...f, service, room, project, clients, installations, catalog: scan, providers: scan.candidates.filter(candidate => candidate.capabilities.automatic_launch).map(candidate => candidate.provider), get scans() { return scans; } };
 }
 async function prepared(v, input = {}) {
-  const start = v.service.launch.prepare({ room_id: v.room.id, providers: v.providers, ...input });
+  const start = (await v.service.launch.prepare({ room_id: v.room.id, providers: v.providers, ...input }));
   await Promise.all([...v.service.launch.jobs.values()]);
   await until(() => !v.service.chat.active.size, 'native fixture handshakes');
   return v.service.launch.state({ session_id: start.id });
@@ -126,10 +126,10 @@ test('a selected setup prepares managed backends without treating Grok role docu
   }
   assert.ok(fs.existsSync(state.handoff_file)); assert.ok(fs.existsSync(state.skill_file)); assert.equal(v.installations.length, 0);
 });
-test('manual scanning lists candidates but creates no backend, proxy, credential, installation or model task', t => {
+test('manual scanning lists candidates but creates no backend, proxy, credential, installation or model task', async t => {
   const v = setup(t), rooms = v.service.chat.store.rooms().length;
   assert.equal(v.scans, 0, 'construction must not discover');
-  const state = v.service.launch.scan({ room_id: v.room.id });
+  const state = (await v.service.launch.scan({ room_id: v.room.id }));
   assert.equal(state.status, 'scanned'); assert.equal(state.candidates.length, 3); assert.equal(v.scans, 1);
   assert.deepEqual(state.actions, []); assert.equal(state.policy.automatic_sync, false);
   assert.equal(v.service.chat.store.members().length, 0); assert.equal(v.clients.size, 0); assert.equal(v.installations.length, 0);
@@ -159,7 +159,7 @@ test('explicit runtime repair replaces the cached client and keeps the same memb
 });
 test('preparation requires an explicit selection and never treats a scan as permission to join all agents', async t => {
   const v = setup(t);
-  for (const providers of [undefined, [], 'codex']) assert.throws(() => v.service.launch.prepare({ room_id: v.room.id, providers }), error => error.code === 'choose_agents');
+  for (const providers of [undefined, [], 'codex']) (await assert.rejects(() => v.service.launch.prepare({ room_id: v.room.id, providers }), error => error.code === 'choose_agents'));
   assert.equal(v.scans, 0); assert.equal(v.clients.size, 0); assert.equal(v.service.chat.store.members().length, 0);
   const first = await prepared(v, { providers: ['codex'], install_clients: true });
   assert.deepEqual(first.selected_providers, ['codex']); assert.deepEqual(first.proxies.map(proxy => proxy.provider), ['codex']);
@@ -175,8 +175,8 @@ test('preparation requires an explicit selection and never treats a scan as perm
   assert.throws(() => v.service.launch.report({ session_id: second.id, proxy_id: original.id, name: original.name, joined: true, bot_ref: 'old-bot', group_ref: 'group' }), error => error.code === 'provider_not_selected');
 });
 test('a different selection cannot widen an in-flight native preparation', async t => {
-  const v = setup(t), start = v.service.launch.prepare({ room_id: v.room.id, providers: ['codex'], install_clients: false });
-  assert.throws(() => v.service.launch.prepare({ room_id: v.room.id, providers: ['claude-code'], install_clients: true }), error => error.code === 'launch_busy');
+  const v = setup(t), start = (await v.service.launch.prepare({ room_id: v.room.id, providers: ['codex'], install_clients: false }));
+  (await assert.rejects(() => v.service.launch.prepare({ room_id: v.room.id, providers: ['claude-code'], install_clients: true }), error => error.code === 'launch_busy'));
   await Promise.all([...v.service.launch.jobs.values()]); await until(() => !v.service.chat.active.size);
   assert.deepEqual(v.service.launch.state({ session_id: start.id }).proxies.map(proxy => proxy.provider), ['codex']); assert.equal(v.installations.length, 0);
 });
@@ -246,8 +246,8 @@ test('a proxy enters with its own issued card and delegates idempotently to only
   await assert.rejects(v.service.launch.delegate(proxy.proxy_member_id, crossRoom.id, { text: '错误房间', key: 'cross-room', seconds: 0 }), error => error.status === 403 || error.status === 409);
 });
 test('a pending preparation is reused without accepting a second request to widen installation permission', async t => {
-  const v = setup(t), first = v.service.launch.prepare({ room_id: v.room.id, providers: v.providers, install_clients: false });
-  const repeated = v.service.launch.prepare({ room_id: v.room.id, providers: v.providers, install_clients: true, goal: 'later install request' });
+  const v = setup(t), first = (await v.service.launch.prepare({ room_id: v.room.id, providers: v.providers, install_clients: false }));
+  const repeated = (await v.service.launch.prepare({ room_id: v.room.id, providers: v.providers, install_clients: true, goal: 'later install request' }));
   assert.equal(repeated.id, first.id); assert.equal(repeated.install_clients, 0);
   await Promise.all([...v.service.launch.jobs.values()]); await until(() => !v.service.chat.active.size);
   assert.equal(v.installations.length, 0); assert.equal(v.service.launch.state({ session_id: first.id }).proxies.length, 2);
@@ -444,7 +444,7 @@ test('a verified colleague is carried into a new room without a second member, c
   assert.ok(first.verified_at);
   const handshakes = () => [...v.clients.values()].flatMap(client => client.calls).filter(call => call.handshake).length, before = handshakes();
   const second = v.service.chat.addRoom({ title: '第二个房间', project_id: v.project.id });
-  const start = v.service.launch.prepare({ room_id: second.id, providers: ['codex'] });
+  const start = (await v.service.launch.prepare({ room_id: second.id, providers: ['codex'] }));
   await Promise.all([...v.service.launch.jobs.values()]);
   const seated = v.service.chat.store.participants(second.id).filter(member => member.adapter === 'codex');
   assert.deepEqual(seated.map(member => member.id), [first.id], 'the same identity sits in both rooms');

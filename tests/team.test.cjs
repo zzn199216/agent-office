@@ -16,6 +16,45 @@ async function harness(t){
 }
 const evidence=[{reference:'project/README.md',note:'Inspected current fixture',observed_at:'2026-10-13T07:00:00Z'}];
 
+test('a departed secretary cannot stop another room or startup, and rejoining delivers once',async t=>{
+  const h=await harness(t),goal=h.goal(),other=h.service.chat.addRoom({title:'Other',project_id:h.room.project_id});
+  h.service.chat.join(other.id,h.research.id);h.service.secretary.set({room_id:other.id,member_id:h.research.id});
+  const otherGoal=h.team.goal({room_id:other.id,title:'Independent goal',idempotency_key:'other'});
+  h.service.chat.leave(h.room.id,h.secretary.id);await h.reopen();
+  assert.doesNotThrow(()=>h.team.start());assert.ok(h.team.timer);
+  h.team.tick();
+  const events=id=>h.service.store.db.prepare('SELECT status,message_id FROM team_outbox WHERE record_id=?').all(id);
+  assert.equal(events(otherGoal.id)[0].status,'delivered');assert.equal(events(goal.id)[0].status,'pending');
+  assert.match(h.team.snapshot(h.room.id).coordination_issues.join(' '),/秘书暂时不可用/);
+  h.service.chat.join(h.room.id,h.secretary.id);h.team.tick();h.team.tick();
+  assert.equal(events(goal.id).length,1);assert.equal(events(goal.id)[0].status,'delivered');
+  assert.equal(h.team.snapshot(h.room.id).coordination_issues.length,0);
+});
+
+for(const staged of [false,true])test(`a queued task waits for its departed assignee then resumes once (outbox already staged: ${staged})`,async t=>{
+  const h=await harness(t),goal=h.goal(),waiting=h.task(goal,h.dev,'waiting'),working=h.task(goal,h.research,'working');
+  if(staged){const flush=h.team.flushOutbox;h.team.flushOutbox=()=>{};h.team.tick();h.team.flushOutbox=flush;}
+  h.service.chat.leave(h.room.id,h.dev.id);h.team.tick();h.team.tick();
+  assert.equal(h.team.record(waiting.id,'task',h.room.id).message_id,null);
+  assert.ok(h.team.record(working.id,'task',h.room.id).message_id);
+  assert.match(h.team.snapshot(h.room.id).coordination_issues.join(' '),/等待负责人加入/);
+  h.service.chat.join(h.room.id,h.dev.id);h.team.tick();h.team.tick();
+  assert.ok(h.team.record(waiting.id,'task',h.room.id).message_id);
+  assert.equal(h.service.store.db.prepare('SELECT count(*) AS n FROM team_outbox WHERE record_id=?').get(waiting.id).n,1);
+  assert.equal(h.team.snapshot(h.room.id).coordination_issues.length,0);
+});
+
+test('unexpected room failures are visible and isolated from other room dispatch',async t=>{
+  const h=await harness(t),other=h.service.chat.addRoom({title:'Other',project_id:h.room.project_id});
+  h.service.chat.join(other.id,h.research.id);h.service.secretary.set({room_id:other.id,member_id:h.research.id});
+  const goal=h.team.goal({room_id:other.id,title:'Independent goal',idempotency_key:'other'}),rows=h.team.rows;
+  h.team.rows=function(room,kind){if(room===h.room.id)throw Error('fixture room failure');return rows.call(this,room,kind);};
+  assert.doesNotThrow(()=>h.team.tick());h.team.rows=rows;
+  assert.equal(h.service.store.db.prepare('SELECT status FROM team_outbox WHERE record_id=?').get(goal.id).status,'delivered');
+  assert.match(h.team.snapshot(h.room.id).coordination_issues.join(' '),/fixture room failure/);
+  h.team.tick();assert.equal(h.team.snapshot(h.room.id).coordination_issues.length,0);
+});
+
 test('one secretary coordinates two windows through deliverables, a meeting, brief acknowledgement and goal acceptance',async t=>{
   const h=await harness(t),{secretary,dev,research}=h;
   for(const [member,role,information]of [[dev,'Development','Owns current code facts'],[research,'Research','Owns feedback notes']])h.team.card(h.input({caller_member_id:member.id,member_id:member.id,role,skills:[role],information,sources:evidence,session_ref:'specific-window-'+member.id}));

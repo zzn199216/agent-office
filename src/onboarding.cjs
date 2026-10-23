@@ -305,7 +305,7 @@ class OnboardingManager{
     if(this.closing||this.service.chat.roomDeleted?.(row.room_id))return;
     this.set(row.id,{stage:'preparing_connection'});
     let launch;
-    try{launch=this.service.launch.prepare({room_id:row.room_id,providers:[row.provider],install_clients:!!row.install_client,goal:row.goal||'',...row.target_member_id?{target_member_id:row.target_member_id}:{},...row.reauthorize?{reauthorize:true}:{},...row.new_member?{new_member:true}:{}});}
+    try{launch=await this.service.launch.prepare({room_id:row.room_id,providers:[row.provider],install_clients:!!row.install_client,goal:row.goal||'',...row.target_member_id?{target_member_id:row.target_member_id}:{},...row.reauthorize?{reauthorize:true}:{},...row.new_member?{new_member:true}:{}});}
     catch(error){
       if(error?.code==='launch_busy'){this.set(row.id,{status:'needs_action',stage:'waiting_other_setup',error:'另一个成员正在接入，请等待完成后点击重试。'});return;}
       if(error?.code==='provider_not_found'){this.set(row.id,{status:'needs_action',stage:MANAGED.has(row.provider)?'awaiting_runtime_install':'unsupported',error:'没有发现这个 agent 的可用入口。'});return;}

@@ -213,7 +213,9 @@ test('cold offline desktop retains complete team data with online projection par
   const inFlight=service.chat.store.post({room_id:room.id,to_member_id:worker.id,text:'Persisted execution awaiting outcome',idempotency_key:'offline-processing'});service.chat.store.updateMessage(inFlight.id,{status:'processing'});
   service.team.save(task,{message_id:inFlight.id,status:'running'},null,'fixture_crash_state');
   service.store.db.prepare("UPDATE team_outbox SET status='uncertain',error='Saved delivery outcome needs review' WHERE record_id=?").run(goal.id);
+  service.chat.leave(room.id,secretary.id);
   const expected=service.team.snapshot(room.id),otherExpected=service.team.snapshot(other.id),instance=service.runtime.instanceId;
+  assert.equal(expected.secretary_id,null);assert.match(expected.coordination_issues.join(' '),/秘书暂时不可用/);
   await service.close();service=null;
   const beforeDatabase=databaseState(files.data),beforeFiles=filesState(files.data);let apiCalls=0,starts=0;
   const main={readControl:()=>null,apiCall:()=>{apiCalls++;throw new Error('No service API on cold offline load');},ensureServer:()=>{starts++;throw new Error('No implicit service start');}};

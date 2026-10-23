@@ -8,8 +8,7 @@ const opening=new WeakMap();
 function refused(error){for(let value=error,i=0;value&&i<5;i++,value=value.cause)if(value.code==='ECONNREFUSED')return true;return false;}
 function installedClient(executable,client){try{return typeof executable==='string'&&path.isAbsolute(executable)&&client.file.test(path.basename(executable))&&fs.statSync(executable).isFile()&&!fs.lstatSync(executable).isSymbolicLink();}catch{return false;}}
 async function nativeDiscovery(service,provider,options,deadline){
-  // Unlike the general inventory's synchronous CIM fallback, this explicit
-  // action cannot block the daemon while Windows is slow to enumerate apps.
+  // This explicit action uses a bounded scan of only the requested desktop apps.
   const script="$ErrorActionPreference='Stop';[Console]::OutputEncoding=[Text.UTF8Encoding]::new();@(Get-Process -ErrorAction SilentlyContinue | Where-Object {$_.ProcessName -match '^(Doubao|豆包|Qwen)$'} | Select-Object @{n='Name';e={$_.ProcessName+'.exe'}},@{n='ProcessId';e={$_.Id}},@{n='ExecutablePath';e={$_.Path}}) | ConvertTo-Json -Compress";
   const processes=await new Promise(resolve=>{
     (options.inventoryExecFile||execFile)('powershell.exe',['-NoProfile','-NonInteractive','-EncodedCommand',Buffer.from(script,'utf16le').toString('base64')],{encoding:'utf8',windowsHide:true,timeout:Math.max(1,Math.min(5000,deadline-Date.now())),maxBuffer:1024*1024},(error,output)=>{
