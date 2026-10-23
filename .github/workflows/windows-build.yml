@@ -17,6 +17,9 @@ jobs:
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Legacy protocol compatibility tests load the released handler from Git.
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: '22.22.2'

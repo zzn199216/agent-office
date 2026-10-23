@@ -81,5 +81,6 @@ test('concurrent development builds cannot replace each other',async t=>{
 });
 test('CI delegates to the complete development gate and uploads only a successful fixed development directory',()=>{
   const workflow=fs.readFileSync(path.join(__dirname,'..','.github','workflows','windows-build.yml'),'utf8');
+  assert.match(workflow,/fetch-depth: 0/,'Legacy compatibility tests need the actual historical handler');
   assert.match(workflow,/run: npm run verify:dev/);assert.match(workflow,/if: success\(\)[\s\S]*path: dev\//);assert.doesNotMatch(workflow,/path: release\//);
 });

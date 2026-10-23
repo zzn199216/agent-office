@@ -1,7 +1,13 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),os=require('node:os'),path=require('node:path');
-const {unitEvidence,coreEvidence,browserEvidence,verify}=require('../scripts/verify-dev.cjs');
+const {unitEvidence,coreEvidence,browserEvidence,verify,temporaryParent}=require('../scripts/verify-dev.cjs');
 const flows=require('../scripts/core-flows.cjs');
+test('CI fixtures use runner scratch space while local runs avoid network TEMP',()=>{
+  const runner=path.resolve(os.tmpdir(),'fixture-runner'),profile=path.resolve(os.tmpdir(),'fixture-profile');
+  assert.equal(temporaryParent({CI:'true',RUNNER_TEMP:runner,LOCALAPPDATA:profile}),runner);
+  assert.equal(temporaryParent({CI:'false',RUNNER_TEMP:runner,LOCALAPPDATA:profile}),path.join(profile,'Temp'));
+  assert.equal(temporaryParent({LOCALAPPDATA:profile}),path.join(profile,'Temp'));
+});
 test('development acceptance rejects empty, skipped, cancelled and incomplete regression evidence',()=>{
   const tap='# tests 2\n# pass 2\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n';
   assert.equal(unitEvidence(tap).pass,2);
@@ -19,7 +25,7 @@ for(const fault of ['sdk','skipped-regression','missing-core-flow'])test('accept
   t.after(()=>{
     for(const directory of [root,result?.temporary_directory].filter(Boolean)){
       const target=path.resolve(directory);assert.match(path.basename(target),/^(ao-verify-runner-test-|agentoffice-verify-)/);
-      const expected=target===path.resolve(root)?path.resolve(os.tmpdir()):path.resolve(process.env.LOCALAPPDATA?path.join(process.env.LOCALAPPDATA,'Temp'):os.tmpdir());
+      const expected=target===path.resolve(root)?path.resolve(os.tmpdir()):temporaryParent();
       assert.equal(path.dirname(target),expected);fs.rmSync(target,{recursive:true,force:true});
     }
   });

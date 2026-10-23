@@ -4,6 +4,11 @@ const {sourceState,atomicJson,execute,acquireLock}=require('./release-common.cjs
 const {readManifest}=require('./release-artifacts.cjs');
 const coreFlows=require('./core-flows.cjs');
 
+function temporaryParent(env=process.env){
+  if(/^(true|1)$/i.test(env.CI||'')&&env.RUNNER_TEMP)return path.resolve(env.RUNNER_TEMP);
+  return env.LOCALAPPDATA?path.resolve(env.LOCALAPPDATA,'Temp'):path.resolve(os.tmpdir());
+}
+
 function unitEvidence(log){
   const count=name=>{const match=log.match(new RegExp('^# '+name+' (\\d+)\\r?$','m'));assert.ok(match,'Missing test total: '+name);return Number(match[1]);};
   const result=Object.fromEntries(['tests','pass','fail','cancelled','skipped','todo'].map(name=>[name,count(name)]));
@@ -51,8 +56,8 @@ async function verify(options={}){
   try{
     assert.equal(options.platform||process.platform,'win32','Full development verification requires Windows');
     unlock=acquireLock(path.join(root,'output','verify-dev.lock'));result.source=getSource(root);
-    // Avoid network-mounted TEMP for SQLite/browser fixtures on a developer PC.
-    const tempParent=process.env.LOCALAPPDATA?path.join(process.env.LOCALAPPDATA,'Temp'):os.tmpdir();fs.mkdirSync(tempParent,{recursive:true});temporary=fs.mkdtempSync(path.join(tempParent,'agentoffice-verify-'));
+    // Use the CI runner's scratch disk; avoid network TEMP on a developer PC.
+    const tempParent=temporaryParent();fs.mkdirSync(tempParent,{recursive:true});temporary=fs.mkdtempSync(path.join(tempParent,'agentoffice-verify-'));
     await stage('syntax',['scripts/check.cjs']);
     await stage('desktop-sdk',['scripts/build-desktop.cjs']);
     await stage('regression',['--test','--test-concurrency=4','--test-reporter=tap','tests/*.test.cjs'],row=>{result.tests=unitEvidence(fs.readFileSync(row.log,'utf8'));});
@@ -78,7 +83,7 @@ async function verify(options={}){
     result.temporary_directory=temporary||null;
     try{
       if(temporary&&result.status==='passed'){
-        const owned=path.resolve(temporary),parent=process.env.LOCALAPPDATA?path.resolve(process.env.LOCALAPPDATA,'Temp'):path.resolve(os.tmpdir());
+        const owned=path.resolve(temporary),parent=temporaryParent();
         assert.equal(path.dirname(owned),parent);assert.match(path.basename(owned),/^agentoffice-verify-/);fs.rmSync(owned,{recursive:true,force:true,maxRetries:10,retryDelay:200});result.temporary_directory=null;
       }
     }catch(error){result.status='failed';result.error='Fixture cleanup failed: '+error.message;}
@@ -92,4 +97,4 @@ if(require.main===module){
   if(process.argv.length>2){console.error('Usage: npm run verify:dev (all gates are required)');process.exitCode=1;}
   else verify().then(result=>{if(result.status!=='passed')process.exitCode=1;}).catch(error=>{console.error(error.stack);process.exitCode=1;});
 }
-module.exports={verify,unitEvidence,coreEvidence,browserEvidence};
+module.exports={verify,unitEvidence,coreEvidence,browserEvidence,temporaryParent};
