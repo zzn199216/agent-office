@@ -14,10 +14,12 @@ Work from this checkout. Resolve project paths from the repository root; never h
 ## Validate and publish coherent changes
 
 1. Inspect the relevant implementation and existing tests before changing behavior.
-2. Run `npm run check` and tests appropriate to the change. Before a complete Windows regression run, execute `node scripts/build-desktop.cjs` so desktop tests do not silently skip missing SDK dependencies.
+2. During implementation, run checks appropriate to the change. Before handing off or pushing a verified development build, run `npm run verify:dev`: syntax, desktop SDK, complete Node regression with zero skips, six browser journeys, connection/office UI regression, rolling development build, packaged MCP/startup checks and artifact hashes. The same command runs in Windows CI on development-branch pushes and PRs. Do not substitute a build or test count for this gate. A missing browser, skipped test, incomplete journey or failed step must fail verification.
 3. Use isolated test data and fixture provider configuration. Do not refresh personal account credentials, invoke real models, or operate personal client windows as part of routine tests.
 4. Check `git diff --check` and inspect the staged files. Commit a coherent, verified change; push the tested development branch when authorized. Never force-push or merge the main branch implicitly.
 5. Report what was actually checked. Registration, process discovery, room membership, and historical success do not prove a current external client can reply.
+
+The six required journeys are listed in `scripts/core-flows.cjs` and exercised by `scripts/validate-core-flows.cjs`: first connection; existing member in a new room; task progress and correlated reply; disconnect/restart recovery; leave/delete isolation; night and narrow-window use. Use visible controls and production HTTP/MCP paths. Fixture setup may establish preconditions, but must not directly set the success state being tested. Keep the lockfile-pinned Playwright browser; no personal browser/channel or agent-runtime fallback. Inspect screenshots when changing layout. Keep failures and their logs under ignored `output/`; fix the behavior or a demonstrably outdated fixture, never weaken acceptance merely to pass.
 
 ## Compatibility and scope
 

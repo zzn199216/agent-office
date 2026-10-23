@@ -5,14 +5,10 @@
 const fs=require('node:fs'),path=require('node:path'),os=require('node:os'),assert=require('node:assert/strict');
 const {RoomService}=require('../src/service.cjs'),{createServer}=require('../src/http.cjs'),{fixture,FakeCodex,FakeVault}=require('../tests/helpers.cjs'),{id,now,VERSION}=require('../src/util.cjs');
 
-function loadPlaywright(){
-  const candidates=['playwright',process.env.AGENTOFFICE_PLAYWRIGHT,path.join(os.homedir(),'.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright')].filter(Boolean);
-  for(const candidate of candidates){try{return require(candidate);}catch{}}
-  throw Error('Playwright is not installed. Install it or set AGENTOFFICE_PLAYWRIGHT to its module path.');
-}
+const {playwright,outputDirectory}=require('./browser-validation.cjs');
 
 (async()=>{
-  const playwright=loadPlaywright(),f=fixture(),out=path.resolve('output/playwright/connection-assist'),proof={isolated:true,real_clients_or_models:false,checks:{}},errors=[];
+  const f=fixture(),out=outputDirectory('connection-assist'),proof={isolated:true,real_clients_or_models:false,checks:{}},errors=[];
   fs.mkdirSync(out,{recursive:true});let service,server,browser,page;
   try{
     class Actor extends FakeCodex{constructor(member){super();this.member=member;}async run(input){const thread=input.discussion.thread_id||id();input.onBinding('bound',thread);input.onTurn(id());return {threadId:thread,turnId:id(),answer:'接入进度见接入卡片。'};}}
@@ -21,7 +17,7 @@ function loadPlaywright(){
     const project=service.addProject({name:'接入流程隔离验收',path:f.project}),room=service.chat.addRoom({project_id:project.id,title:'聊天接入'}),other=service.chat.addRoom({project_id:project.id,title:'其他房间'}),actor=service.chat.addMember({name:'Codex',adapter:'codex'});
     service.chat.join(room.id,actor.id);service.chat.store.updateMember(actor.id,{status:'ready',verified_at:now()});
     const token=id();server=createServer(service,{token,port:0});const base='http://127.0.0.1:'+await server.listen();service._localUrl=base;
-    browser=await playwright.chromium.launch({headless:true,...process.env.AGENTOFFICE_BROWSER_CHANNEL?{channel:process.env.AGENTOFFICE_BROWSER_CHANNEL}:{}});
+    browser=await playwright.chromium.launch({headless:true});
     const context=await browser.newContext({viewport:{width:1440,height:1000},timezoneId:'Asia/Taipei',reducedMotion:'reduce'});
     await context.route('**/*',route=>route.request().url().startsWith(base+'/')?route.continue():route.abort());
     await context.addInitScript(({project,room})=>{localStorage.setItem('agentroom-project',project);localStorage.setItem('agentroom-chat-room',room);localStorage.setItem('agentoffice-room-view','chat');Object.defineProperty(navigator,'clipboard',{value:{writeText:async text=>{window.fixtureClipboard=text;}}});},{project:project.id,room:room.id});
@@ -50,5 +46,5 @@ function loadPlaywright(){
     await page.locator(`[data-room="${other.id}"]`).click();await page.waitForFunction(()=>document.querySelectorAll('.ao-system-card').length===0);proof.checks.other_room_isolated=true;
     assert.deepEqual(errors,[]);proof.ok=true;
   }catch(error){proof.error=error.stack;process.exitCode=1;if(page)await page.screenshot({path:path.join(out,'failure.png')}).catch(()=>{});}
-  finally{await browser?.close();await server?.close();await service?.close();proof.page_errors=errors;fs.writeFileSync(path.join(out,'result.json'),JSON.stringify(proof,null,2));console.log(JSON.stringify(proof));}
+  finally{await browser?.close();await server?.close();await service?.close();proof.page_errors=errors;fs.writeFileSync(path.join(out,'result.json'),JSON.stringify(proof,null,2));const owned=path.resolve(f.root);assert.equal(path.dirname(owned),path.resolve(os.tmpdir()));assert.match(path.basename(owned),/^agentroom-test-/);fs.rmSync(owned,{recursive:true,force:true});console.log(JSON.stringify(proof));}
 })().catch(error=>{console.error(error.stack);process.exitCode=1;});

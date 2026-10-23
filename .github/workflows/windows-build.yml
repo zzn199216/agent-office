@@ -1,13 +1,20 @@
-name: Windows build
+name: Windows acceptance
 on:
   workflow_dispatch:
+  push:
+    branches: ['**']
+    paths: ['src/**', 'web/**', 'desktop/**', 'docs/**', 'tests/**', 'scripts/**', 'integrations/**', 'package*.json', '.github/workflows/**', 'AGENTS.md', 'README.md', '.gitignore', '.gitattributes']
   pull_request:
-    paths: ['src/**', 'web/**', 'desktop/**', 'docs/**', 'tests/**', 'scripts/**', 'integrations/**', 'package*.json', '.github/workflows/**']
+    paths: ['src/**', 'web/**', 'desktop/**', 'docs/**', 'tests/**', 'scripts/**', 'integrations/**', 'package*.json', '.github/workflows/**', 'AGENTS.md', 'README.md', '.gitignore', '.gitattributes']
 permissions:
   contents: read
+concurrency:
+  group: windows-acceptance-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 jobs:
   validate:
     runs-on: windows-latest
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -15,11 +22,24 @@ jobs:
           node-version: '22.22.2'
           cache: npm
       - run: npm ci --no-audit --no-fund
-      - run: npm run check
-      - run: npm run prepare:desktop
-      - run: npm test
-      - run: npm run build
+      - name: Verify development build and six core journeys
+        run: npm run verify:dev
+      - name: Show verification summary
+        if: always()
+        shell: pwsh
+        run: |
+          if (Test-Path -LiteralPath 'output/verify-dev/summary.md') {
+            Get-Content -LiteralPath 'output/verify-dev/summary.md' | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          }
       - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: AgentOffice-verification-${{ github.sha }}
+          path: output/verify-dev/
+          if-no-files-found: warn
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        if: success()
         with:
           name: AgentOffice-dev-windows-x64
           path: dev/

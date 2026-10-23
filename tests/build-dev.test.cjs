@@ -79,7 +79,7 @@ test('concurrent development builds cannot replace each other',async t=>{
   await ready;await assert.rejects(buildDevelopment({outputRoot:root,build:builder('1.0.1')}),/owns the lock/);proceed();await first;
   assert.equal(version(path.join(root,'dev')),'1.0.0');assert.deepEqual(fs.readdirSync(path.join(root,'output')),[]);
 });
-test('CI prepares the Windows desktop SDK before tests and uploads the fixed development directory',()=>{
+test('CI delegates to the complete development gate and uploads only a successful fixed development directory',()=>{
   const workflow=fs.readFileSync(path.join(__dirname,'..','.github','workflows','windows-build.yml'),'utf8');
-  assert.ok(workflow.indexOf('npm run prepare:desktop')<workflow.indexOf('npm test'));assert.match(workflow,/path: dev\//);assert.doesNotMatch(workflow,/path: release\//);
+  assert.match(workflow,/run: npm run verify:dev/);assert.match(workflow,/if: success\(\)[\s\S]*path: dev\//);assert.doesNotMatch(workflow,/path: release\//);
 });

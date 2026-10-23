@@ -3,9 +3,9 @@
 const fs=require('node:fs'),path=require('node:path'),os=require('node:os'),assert=require('node:assert/strict');
 const {RoomService}=require('../src/service.cjs'),{createServer}=require('../src/http.cjs');
 const {fixture,FakeCodex,FakeVault}=require('../tests/helpers.cjs'),{id,now}=require('../src/util.cjs');
-function playwright(){for(const value of [process.env.AGENTOFFICE_PLAYWRIGHT,'playwright',path.join(os.homedir(),'.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright')].filter(Boolean)){try{return require(value);}catch{}}throw Error('Set AGENTOFFICE_PLAYWRIGHT to the installed Playwright module.');}
+const {playwright,outputDirectory}=require('./browser-validation.cjs');
 (async()=>{
-  const files=fixture(),out=path.resolve(__dirname,'../output/playwright/office-activity'),proof={isolated:true,real_clients_or_models:false,checks:{},screenshots:[]},errors=[],codex=new FakeCodex();
+  const files=fixture(),out=outputDirectory('office-activity'),proof={isolated:true,real_clients_or_models:false,checks:{},screenshots:[]},errors=[],codex=new FakeCodex();
   fs.mkdirSync(out,{recursive:true});let service,server,browser,page;
   try{
     service=new RoomService(files.data,{codex,vault:new FakeVault(),fetch:async()=>{throw Error('No upstream calls');}});clearInterval(service.team.timer);
@@ -15,7 +15,7 @@ function playwright(){for(const value of [process.env.AGENTOFFICE_PLAYWRIGHT,'pl
     const question=service.chat.store.post({room_id:room.id,sender_id:'user',to_member_id:member.id,text:'隔离测试：检查成员连接',idempotency_key:'fixture-question'});
     service.chat.store.updateMessage(question.id,{status:'processing'});service.chat.progress.set(question.id,'正在检查成员的连接状态');service.office.set({room_id:room.id,time_mode:'night'});
     const token=id();server=createServer(service,{port:0,token});const base='http://127.0.0.1:'+await server.listen();service._localUrl=base;
-    browser=await playwright().chromium.launch({headless:true,channel:process.env.AGENTOFFICE_BROWSER_CHANNEL||'msedge'});const context=await browser.newContext({viewport:{width:1440,height:1000},timezoneId:'Asia/Taipei',reducedMotion:'reduce'});
+    browser=await playwright.chromium.launch({headless:true});const context=await browser.newContext({viewport:{width:1440,height:1000},timezoneId:'Asia/Taipei',reducedMotion:'reduce'});
     await context.route('**/*',route=>route.request().url().startsWith(base+'/')?route.continue():route.abort());
     await context.addInitScript(({project,room})=>{localStorage.setItem('agentroom-project',project);localStorage.setItem('agentroom-chat-room',room);localStorage.setItem('agentoffice-room-view','office');},{project:project.id,room:room.id});
     page=await context.newPage();page.setDefaultTimeout(12000);page.on('pageerror',error=>errors.push(error.message));
@@ -37,5 +37,5 @@ function playwright(){for(const value of [process.env.AGENTOFFICE_PLAYWRIGHT,'pl
     await server.close();server=null;await service.close();service=null;await page.waitForFunction(()=>document.querySelector('.ao-scene')?.classList.contains('ao-offline-room'));assert.equal(await bubble.isVisible(),false);assert.equal(await page.locator('.ao-light-switch').isDisabled(),true);proof.checks.disconnect_hides_activity=true;
     assert.equal(codex.calls.length,0);assert.deepEqual(errors,[]);proof.ok=true;
   }catch(error){proof.error=error.stack;process.exitCode=1;if(page)await page.screenshot({path:path.join(out,'failure.png')}).catch(()=>{});}
-  finally{await browser?.close();await server?.close();await service?.close();proof.page_errors=errors;fs.writeFileSync(path.join(out,'result.json'),JSON.stringify(proof,null,2));console.log(JSON.stringify(proof));}
+  finally{await browser?.close();await server?.close();await service?.close();proof.page_errors=errors;fs.writeFileSync(path.join(out,'result.json'),JSON.stringify(proof,null,2));const owned=path.resolve(files.root);assert.equal(path.dirname(owned),path.resolve(os.tmpdir()));assert.match(path.basename(owned),/^agentroom-test-/);fs.rmSync(owned,{recursive:true,force:true});console.log(JSON.stringify(proof));}
 })().catch(error=>{console.error(error.stack);process.exitCode=1;});

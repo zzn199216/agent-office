@@ -4,13 +4,8 @@
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),os=require('node:os');
 const {RoomService}=require('../src/service.cjs'),{createServer}=require('../src/http.cjs');
 const {fixture,FakeCodex,FakeVault}=require('../tests/helpers.cjs'),{id}=require('../src/util.cjs');
-const ROOT=path.resolve(__dirname,'..'),OUTPUT=path.join(ROOT,'output','playwright','office-fullscene');
-function playwright(){
-  for(const location of [process.env.AGENTOFFICE_PLAYWRIGHT,'playwright',path.join(os.homedir(),'.cache','codex-runtimes','codex-primary-runtime','dependencies','node','node_modules','playwright')].filter(Boolean)){
-    try{return require(location);}catch(error){if(error.code!=='MODULE_NOT_FOUND')throw error;}
-  }
-  throw new Error('Playwright runtime unavailable. Set AGENTOFFICE_PLAYWRIGHT to the installed module path.');
-}
+const {playwright,outputDirectory}=require('./browser-validation.cjs');
+const OUTPUT=outputDirectory('office-fullscene');
 async function main(){
   fs.mkdirSync(OUTPUT,{recursive:true});
   const files=fixture(),codex=new FakeCodex(),proof={ok:false,isolated:true,started_at:new Date().toISOString(),checks:{},metrics:{},screenshots:[],fixture:files.root};
@@ -32,10 +27,8 @@ async function main(){
     const reference=service.chat.store.messages(rooms[0].id).find(message=>message.sender_id===members[1].id);
     const token=id();server=createServer(service,{port:0,token});const port=await server.listen(),base='http://127.0.0.1:'+port;
     proof.port=port;proof.rooms=rooms.map(room=>room.id);
-    const chromium=playwright().chromium,browserPaths=[process.env.AGENTOFFICE_BROWSER,chromium.executablePath(),process.platform==='win32'&&path.join(process.env.ProgramFiles||'C:/Program Files','Google','Chrome','Application','chrome.exe'),process.platform==='win32'&&path.join(process.env['ProgramFiles(x86)']||'C:/Program Files (x86)','Microsoft','Edge','Application','msedge.exe')].filter(Boolean),executablePath=browserPaths.find(location=>fs.existsSync(location));
-    if(!executablePath)throw new Error('No local Chromium browser found. Set AGENTOFFICE_BROWSER to its executable.');
-    proof.browser_executable=executablePath;
-    browser=await chromium.launch({headless:true,executablePath});context=await browser.newContext({viewport:{width:1440,height:1000},timezoneId:'Asia/Taipei',reducedMotion:'no-preference'});
+    proof.browser_executable=playwright.chromium.executablePath();
+    browser=await playwright.chromium.launch({headless:true});context=await browser.newContext({viewport:{width:1440,height:1000},timezoneId:'Asia/Taipei',reducedMotion:'no-preference'});
     await context.route('**/*',async route=>{const url=route.request().url();if(url.startsWith(base+'/'))return route.continue();external.push(url);return route.abort('blockedbyclient');});
     await context.addInitScript(({projectId,roomId})=>{localStorage.setItem('agentroom-project',projectId);localStorage.setItem('agentroom-chat-room',roomId);localStorage.setItem('agentoffice-room-view','chat');},{projectId:project.id,roomId:rooms[0].id});
     page=await context.newPage();page.setDefaultTimeout(12000);page.on('pageerror',error=>errors.push(error.message));
