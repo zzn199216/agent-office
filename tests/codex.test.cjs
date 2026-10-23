@@ -21,3 +21,9 @@ test('Codex transports images as native blocks and emits only fixed network prog
   const f=fixture(),client=new CodexClient({dataDir:f.data,executable:process.execPath,args:[path.join(__dirname,'fake-app-server.cjs')]}),progress=[];t.after(()=>client.close());
   const result=await client.run({project:{id:id(),name:'图像',path:f.project,canonical:normalizePath(f.project),access:'read-only'},discussion:{id:id(),title:'图像',binding_state:'new',thread_id:null},request:{id:id(),sender:'user',prompt:'看图',images:[{mime:'image/png',data:'fixture-image'}]},onBinding:()=>{},onTurn:()=>{},onProgress:text=>progress.push(text),onApproval:()=>{},signal:new AbortController().signal});assert.equal(result.answer,'中文回答');assert.ok(progress.some(text=>text.includes('模型网络连接超时')));assert.doesNotMatch(progress.join('\n'),/private-fixture-key|Bearer/);assert.equal(client.listenerCount('transport-progress'),0);
 });
+
+test('public reasoning summaries stream as progress without raw reasoning or answer contamination',async t=>{
+  const f=fixture(),client=new CodexClient({dataDir:f.data,executable:process.execPath,args:[path.join(__dirname,'fake-app-server.cjs'),'--progress-summary']}),progress=[];t.after(()=>client.close());
+  const result=await client.run({project:{id:id(),name:'进展',path:f.project,canonical:normalizePath(f.project),access:'read-only'},discussion:{id:id(),title:'进展',binding_state:'new',thread_id:null},request:{id:id(),sender:'user',prompt:'测试公开摘要'},onBinding:()=>{},onTurn:()=>{},onProgress:text=>progress.push(text),onApproval:()=>{},signal:new AbortController().signal});
+  assert.ok(progress.includes('正在核对连接状态'));assert.ok(progress.includes('准备验证结果'));assert.doesNotMatch(progress.join('\n'),/raw-private|foreign summary/);assert.equal(result.answer,'中文回答');
+});

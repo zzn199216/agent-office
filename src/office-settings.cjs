@@ -2,11 +2,11 @@
 const {RoomError,cleanText}=require('./util.cjs');
 const {rasterData}=require('./appearance.cjs');
 
-const DEFAULT_OFFICE=Object.freeze({version:1,time_zone:'auto',time_mode:'auto',auto_layout:true,columns:3,spacing:1,wall_color:'#f8f7f3',floor_color:'#faf7ef',show_window:true,show_clock:true,show_plant:true,motion:true});
+const DEFAULT_OFFICE=Object.freeze({version:1,time_zone:'auto',time_mode:'auto',lights_on:true,auto_layout:true,columns:3,spacing:1,wall_color:'#f8f7f3',floor_color:'#faf7ef',show_window:true,show_clock:true,show_plant:true,motion:true});
 const IMAGE_FIELDS=Object.freeze(['background_data','desk_data','beanbag_data','plant_data','door_data']);
 const FIELDS=new Set([...Object.keys(DEFAULT_OFFICE),...IMAGE_FIELDS]);
 const TIME_MODES=new Set(['auto','day','night']);
-const BOOLEAN_FIELDS=new Set(['auto_layout','show_window','show_clock','show_plant','motion']);
+const BOOLEAN_FIELDS=new Set(['auto_layout','show_window','show_clock','show_plant','motion','lights_on']);
 
 function invalid(){return new RoomError('办公室设置包含无效或不支持的内容。',400,'office_input_invalid');}
 function validTimeZone(value){

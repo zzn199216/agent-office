@@ -254,7 +254,7 @@ class CodexClient extends EventEmitter {
     const threadId = await this.bind(project, discussion, onBinding);
     if(signal?.aborted||this.closed)throw new RoomError('请求已取消。',409,'cancelled');
     let turnId = null;
-    const messages = new Map(),manualPending=new Set(); let finished = false; let resolveEnd; let rejectEnd;
+    const messages = new Map(),summaries=new Map(),manualPending=new Set(); let finished = false; let resolveEnd; let rejectEnd;
     let timer=null,interruptTimer=null,timerStartedAt=0,remaining=timeout,startRpcId=null;
     const ended = new Promise((resolve, reject) => { resolveEnd = resolve; rejectEnd = reject; });
     // Attach a handler before the RPC response: turn events can arrive first.
@@ -273,6 +273,12 @@ class CodexClient extends EventEmitter {
       if (m.method === 'item/agentMessage/delta') {
         const old = messages.get(v.itemId) || { text: '', phase: null };
         old.text += v.delta || ''; messages.set(v.itemId, old); onProgress(redact(old.text).slice(-12000));
+      }
+      // Only the provider's public summary stream is progress. Never forward
+      // reasoning/textDelta (raw reasoning) or mix summaries into the answer.
+      if (m.method === 'item/reasoning/summaryTextDelta' && typeof v.delta === 'string') {
+        const key=`${v.itemId}:${v.summaryIndex ?? 0}`,text=(summaries.get(key)||'')+v.delta;
+        summaries.set(key,text.slice(-12000));onProgress(redact(text).slice(-12000));
       }
       if (m.method === 'item/completed' && v.item?.type === 'agentMessage') messages.set(v.item.id, { text: v.item.text || '', phase: v.item.phase });
       if (m.method === 'item/started' && v.item?.type === 'commandExecution') onProgress(`正在核查项目…\n${redact(v.item.command || '').slice(0,1500)}`);

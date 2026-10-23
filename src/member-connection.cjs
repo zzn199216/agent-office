@@ -62,6 +62,13 @@ function present(snapshot = {}, context = {}) {
   const ready = status === 'ready' && (snapshot.ready_for_office === true || snapshot.local_verified === true);
   const details = { stage, status, error_code: code, error: errorText || null, member_id: snapshot.member_id || snapshot.target_member_id || null };
   const result = (state, headline, primary = null, secondary = null, extra = {}) => ({ state, headline: tidy(headline), primary: primary && { ...primary, label: tidy(primary.label) }, secondary: secondary && { ...secondary, label: tidy(secondary.label) }, busy: false, provider, name, details, ...extra });
+  const manualDesktop = headline => provider === 'doubao'
+    ? result('waiting', '在豆包本地任务中启用 AO', button('copy_config', '复制连接地址'), button('copy_handshake_prompt', '复制验证语句'), {steps:[
+      '打开豆包「技能 · 连接器 · 伙伴」→ 新建自定义连接器，名称填 Agent Office，传输选 HTTP，将连接地址填入服务器 URL，保存。',
+      '在「我的技能 → 连接器」启用 Agent Office，查看「包含的操作」是否有 agentroom_chat_rooms。',
+      '点「在对话中试用」，或新建工作任务选择「本地电脑」，在输入框的「连接器」菜单勾选 Agent Office，再发送验证语句。'
+    ]})
+    : result('waiting', headline, button('copy_config', '复制配置'), button('copy_handshake_prompt', '复制那句话'));
 
   // Protection and repair states come first: they override any readiness.
   if (stage === 'connection_repair_required' || CODEX_REPAIR_CODES.has(code) || actionKind === 'connection_repair')
@@ -110,11 +117,11 @@ function present(snapshot = {}, context = {}) {
       ? result('waiting', `${name} 还没连上`, pick(snapshot, 'manual_mcp', '改用 MCP 连接'), button('native_connect', `重新连接 ${name}`))
       : result('waiting', `${name} 还没连上`, button('native_connect', `连接 ${name}`));
   if (['import_client_config', 'import_mcp', 'desktop_import', 'configure_connector', 'import_connector'].some(op => offered(snapshot, op)) || stage === 'awaiting_import')
-    return result('waiting', `在 ${name} 里加上 AO 配置`, button('copy_config', '复制配置'), button('copy_handshake_prompt', '复制那句话'));
+    return manualDesktop(`在 ${name} 里加上 AO 配置`);
   // A desktop client connected over MCP: AO cannot see whether the config was
   // pasted, only the handshake proves it. Config first, then the sentence.
   if ((offered(snapshot, 'copy_handshake_prompt') || ['awaiting_handshake', 'awaiting_reload'].includes(stage) || actionKind === 'manual_handoff') && DESKTOP.has(provider))
-    return result('waiting', `在 ${name} 里加上 AO 配置，再说一句话`, button('copy_config', '复制配置'), button('copy_handshake_prompt', '复制那句话'));
+    return manualDesktop(`在 ${name} 里加上 AO 配置，再说一句话`);
   if (offered(snapshot, 'copy_handshake_prompt') || ['awaiting_handshake', 'awaiting_bridge_handshake', 'awaiting_reload'].includes(stage) || actionKind === 'manual_handoff')
     return result('waiting', `把那句话发给 ${name} 完成连接`, button('copy_handshake_prompt', '复制那句话'));
   if (stage === 'verification_pending')

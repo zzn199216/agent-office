@@ -65,7 +65,7 @@ const textScroll = new Map(), appearanceDrafts = new Map();
 const roomRecipients = new Map();
 let recipientRoom = null, mentionIndex = 0;
 const sceneDrafts = new Map(), sceneAssets = [['background_data','背景'],['desk_data','办公桌'],['beanbag_data','懒人沙发'],['plant_data','绿植'],['door_data','入口']];
-const sceneDefaults = Object.freeze({time_zone:'auto',time_mode:'auto',auto_layout:true,columns:3,spacing:1,wall_color:'#f8f7f3',floor_color:'#faf7ef',show_window:true,show_clock:true,show_plant:true,motion:true});
+const sceneDefaults = Object.freeze({time_zone:'auto',time_mode:'auto',lights_on:true,auto_layout:true,columns:3,spacing:1,wall_color:'#f8f7f3',floor_color:'#faf7ef',show_window:true,show_clock:true,show_plant:true,motion:true});
 if (desktop) {
   professionalView = true;
   const selected=new URLSearchParams(location.search).get('room');
@@ -701,13 +701,14 @@ function connectionPanelMarkup(view,scope,{extraDetails='',pending:external=fals
   const key=`${scope.source}:${scope.id}`,pending=connectionOperationsPending.has(key)||external===true,busy=view.busy===true||pending;
   const actionButton=(action,kind)=>action?`<button type="button" class="${kind}" data-conn-op="${escape(action.operation)}" data-conn-source="${escape(scope.source)}" data-conn-id="${escape(scope.id)}"${action.target_member_id?` data-conn-target="${escape(action.target_member_id)}"`:''}${busy?' disabled':''}>${escape(pending&&kind==='primary'?'正在处理…':action.label)}</button>`:'';
   const buttons=actionButton(view.primary,'primary')+actionButton(view.secondary,'secondary');
+  const steps=Array.isArray(view.steps)?`<ol class="connection-panel-steps">${view.steps.map(step=>`<li>${escape(step)}</li>`).join('')}</ol>`:'';
   const error=view.details?.error?`<p class="small-note">${escape(view.details.error)}</p>`:'';
   const details=error||extraDetails?`<details class="connection-panel-details"><summary>详情</summary>${error}${extraDetails}</details>`:'';
-  return `<div class="connection-panel" data-conn-state="${escape(view.state)}"><div class="connection-panel-status"><span class="connection-dot ${escape(view.state)}${busy?' busy':''}" aria-hidden="true"></span><strong>${escape(view.headline)}</strong></div>${buttons?`<div class="actions">${buttons}</div>`:''}${details}</div>`;
+  return `<div class="connection-panel" data-conn-state="${escape(view.state)}"><div class="connection-panel-status"><span class="connection-dot ${escape(view.state)}${busy?' busy':''}" aria-hidden="true"></span><strong>${escape(view.headline)}</strong></div>${steps}${buttons?`<div class="actions">${buttons}</div>`:''}${details}</div>`;
 }
 // Keep spaces around Latin names only ("连接 Qwen", but "连接豆包").
 const tidyText=text=>String(text).replace(/([\u3000-\u303f\u4e00-\u9fff\uff00-\uffef]) (?=[\u3000-\u303f\u4e00-\u9fff\uff00-\uffef])/g,'$1');
-const CONNECTION_PASTE_HINTS={doubao:'已复制地址。在豆包电脑版：技能 / 连接器 → 新建自定义连接器，名称填 Agent Office，传输选 HTTP，粘贴地址后保存并启用。','qwen-desktop':'已复制配置。在 Qwen：MCP 设置 → 添加 MCP → 使用 JSON 添加，粘贴后保存并启用（类型 StreamableHTTP）。'};
+const CONNECTION_PASTE_HINTS={doubao:'已复制地址。填入豆包电脑版自定义连接器的服务器 URL，传输选 HTTP，保存后在本地任务中勾选 Agent Office。','qwen-desktop':'已复制配置。在 Qwen：MCP 设置 → 添加 MCP → 使用 JSON 添加，粘贴后保存并启用（类型 StreamableHTTP）。'};
 async function connectionContext(source,id) {
   if(source==='assist'){
     const item=(history.connection_assists||[]).find(value=>value.id===id&&value.room_id===roomId);
@@ -1524,7 +1525,7 @@ function openSecretaryConnect() {
 }
 function updateOfficeScene() {
   if(!officeView || !professionalView || !history?.room || legacyId) return;
-  if(!officeScene && window.AgentOfficeScene) officeScene=window.AgentOfficeScene.mount($('officeScene'),{onCompose:()=>toggleOfficeComposer(true),onChooseSecretary:openSecretaryTutorial,onSelectMember:member=>{if(nativeConnectionUnavailable(member)){action(()=>showMemberSetup(member.id));return;}if(!submitting && [...$('recipient').options].some(option=>option.value===member.id)){$('recipient').value=member.id;updateRecipientNote();}toggleOfficeComposer(true);},onCustomize:member=>openInspector('appearance',member.id),onSceneSettings:()=>openInspector('scene'),onSelectMessage:message=>{selectRoomView(false);requestAnimationFrame(()=>$('message-'+message.id)?.scrollIntoView({block:'center',behavior:'smooth'}));}});
+  if(!officeScene && window.AgentOfficeScene) officeScene=window.AgentOfficeScene.mount($('officeScene'),{onCompose:()=>toggleOfficeComposer(true),onChooseSecretary:openSecretaryTutorial,onSelectMember:member=>{if(nativeConnectionUnavailable(member)){action(()=>showMemberSetup(member.id));return;}if(!submitting && [...$('recipient').options].some(option=>option.value===member.id)){$('recipient').value=member.id;updateRecipientNote();}toggleOfficeComposer(true);},onCustomize:member=>openInspector('appearance',member.id),onSceneSettings:()=>openInspector('scene'),onToggleLights:on=>action(()=>setOfficeLighting(on)),onSelectMessage:message=>{selectRoomView(false);requestAnimationFrame(()=>$('message-'+message.id)?.scrollIntoView({block:'center',behavior:'smooth'}));}});
   officeScene?.update({roomId:history.room.id,participants:admittedMembers(history.participants),messages:(history.messages||[]).filter(message=>!message.connection_verification),runtime,online:webConnected,scene:state?.office?.[history.room.id]||{},secretary:currentSecretary(),tutorialVisible:secretaryTutorialVisible()});
 }
 function detailRows(values) {return values.map(([label,value])=>`<dt>${escape(label)}</dt><dd>${escape(value || '—')}</dd>`).join('');}
@@ -1731,6 +1732,17 @@ async function saveAppearance(reset=false) {
     if(history?.room?.id===selectedRoom&&roomId===selectedRoom)renderRoom(state.projects.find(item=>item.id===projectId));toast(reset?'已恢复默认外观。':'外观已保存在本机。');
   }finally{appearanceBusy=false;renderAppearance();}
 }
+const officeLightingPending=new Set();
+async function setOfficeLighting(on){
+  const selectedRoom=roomId;if(!selectedRoom||!webConnected||officeLightingPending.has(selectedRoom))return;
+  officeLightingPending.add(selectedRoom);
+  try{
+    const response=await api('/api/office',{room_id:selectedRoom,lights_on:on}),saved=sceneConfig(response?.scene||response?.config||response);
+    state.office={...state.office,[selectedRoom]:saved};
+    const draft=sceneDrafts.get(selectedRoom);if(draft){draft.config.lights_on=saved.lights_on;draft.signature=JSON.stringify(saved);draft.version++;}
+    if(roomId===selectedRoom){renderRoom(state.projects.find(item=>item.id===projectId));renderScene();}
+  }finally{officeLightingPending.delete(selectedRoom);}
+}
 function sceneConfig(value={}) {
   if(!value||typeof value!=='object')value={};
   const result={...sceneDefaults};
@@ -1739,7 +1751,7 @@ function sceneConfig(value={}) {
   if(Number.isInteger(value.columns)&&value.columns>=1&&value.columns<=3)result.columns=value.columns;
   if(Number.isFinite(value.spacing)&&value.spacing>=.8&&value.spacing<=1.3)result.spacing=value.spacing;
   for(const field of ['wall_color','floor_color'])if(/^#[0-9a-f]{6}$/i.test(value[field]||''))result[field]=value[field];
-  for(const field of ['auto_layout','show_window','show_clock','show_plant','motion'])if(typeof value[field]==='boolean')result[field]=value[field];
+  for(const field of ['auto_layout','show_window','show_clock','show_plant','motion','lights_on'])if(typeof value[field]==='boolean')result[field]=value[field];
   for(const [field]of sceneAssets)result[field]=safeRaster(value[field]);
   return result;
 }
@@ -1755,7 +1767,7 @@ function renderScene(){
   const draft=sceneDraftFor(),config=draft?.config||sceneConfig(),available=!!draft&&!!state?.chat?.rooms?.some(item=>item.id===roomId),disabled=!available||!webConnected||draft?.uploading||draft?.saving;
   const bindings={'scene-time-zone':'time_zone','scene-time-mode':'time_mode','scene-columns':'columns','scene-spacing':'spacing','scene-wall-color':'wall_color','scene-floor-color':'floor_color'};
   for(const [id,field]of Object.entries(bindings)){const control=$(id);if(document.activeElement!==control)control.value=config[field];}
-  for(const field of ['auto_layout','show_window','show_clock','show_plant','motion'])$('scene-'+field.replaceAll('_','-')).checked=config[field];
+  for(const field of ['auto_layout','show_window','show_clock','show_plant','motion','lights_on'])$('scene-'+field.replaceAll('_','-')).checked=config[field];
   $('scene-spacing-value').textContent=Math.round(config.spacing*100)+'%';
   let timezone=config.time_zone==='auto'?Intl.DateTimeFormat().resolvedOptions().timeZone:config.time_zone;
   try{new Intl.DateTimeFormat('zh-CN',{timeZone:timezone}).format();$('scene-time-zone-note').textContent=(config.time_zone==='auto'?'跟随电脑：':'当前时区：')+timezone;}catch{$('scene-time-zone-note').textContent='请输入有效 IANA 时区，例如 Asia/Taipei。';}
@@ -1839,7 +1851,7 @@ $('appearance-avatar-clear').onclick=()=>{appearanceDraft.avatar_data=null;$('ap
 $('appearance-character-clear').onclick=()=>{appearanceDraft.character_data=null;$('appearance-character').value='';markAppearanceChanged();renderAppearance();};
 $('appearance-form').onsubmit=event=>{event.preventDefault();action(()=>saveAppearance(false));};$('appearance-reset').onclick=()=>action(()=>saveAppearance(true));
 for(const [id,field]of Object.entries({'scene-time-zone':'time_zone','scene-time-mode':'time_mode','scene-columns':'columns','scene-spacing':'spacing','scene-wall-color':'wall_color','scene-floor-color':'floor_color'}))$(id).addEventListener(['scene-time-zone','scene-spacing','scene-wall-color','scene-floor-color'].includes(id)?'input':'change',()=>changeScene(field,['columns','spacing'].includes(field)?Number($(id).value):$(id).value));
-for(const field of ['auto_layout','show_window','show_clock','show_plant','motion'])$('scene-'+field.replaceAll('_','-')).onchange=()=>changeScene(field,$('scene-'+field.replaceAll('_','-')).checked);
+for(const field of ['auto_layout','show_window','show_clock','show_plant','motion','lights_on'])$('scene-'+field.replaceAll('_','-')).onchange=()=>changeScene(field,$('scene-'+field.replaceAll('_','-')).checked);
 $('scene-assets').onchange=event=>{const input=event.target.closest('[data-scene-asset]');if(input)action(()=>chooseSceneImage(input.dataset.sceneAsset,input));};
 $('scene-assets').onclick=event=>{const button=event.target.closest('[data-clear-scene-asset]');if(button&&!button.disabled)changeScene(button.dataset.clearSceneAsset,null);};
 $('scene-form').onsubmit=event=>{event.preventDefault();action(()=>saveScene(false));};$('scene-reset').onclick=()=>action(()=>saveScene(true));

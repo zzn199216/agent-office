@@ -23,6 +23,10 @@ async function main(){
     const providers=['Codex','Claude','Qwen','Grok','Cursor','豆包','Nova','Echo','Mimo'];
     const members=Array.from({length:100},(_,index)=>service.chat.store.addMember({name:index<9?providers[index]:providers[index%9]+' '+(index+1),adapter:'mailbox'}));
     for(const [index,room] of rooms.entries())for(const member of members.slice(0,counts[index]))service.chat.store.join(room.id,member.id);
+    // The office admits verified colleagues. Give fixture members the same
+    // admission and presence evidence instead of treating registration as online.
+    const admit=member=>{service.chat.store.updateMember(member.id,{status:'ready',verified_at:new Date().toISOString()});service.runtime.heartbeat(member.id,{ttl_ms:300000});};
+    for(const member of members)admit(member);
     service.appearance.set({member_id:members[1].id,preset:'auto',furniture:'beanbag',scale:1.1});
     for(let index=0;index<45;index++)service.chat.store.post({room_id:rooms[0].id,sender_id:index%3===0?members[1].id:'user',text:'隔离测试记录 '+(index+1)+'：切换办公室后，原有聊天、输入草稿和引用必须保留。\n这不是模型回复验证。',idempotency_key:'fullscene-history-'+index});
     const reference=service.chat.store.messages(rooms[0].id).find(message=>message.sender_id===members[1].id);
@@ -75,7 +79,7 @@ async function main(){
     await screenshot('desktop9.png');
     await page.locator('#chat-view-button').click();await page.waitForFunction(()=>!document.querySelector('#chat-stream').classList.contains('hidden'));
     await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
-    assert.equal(await page.locator('#prompt').inputValue(),'保留的办公室草稿，不应因视图切换消失。');assert.equal(await page.locator('#recipient').inputValue(),initialTarget);assert.equal(await page.locator('#reply-preview').isVisible(),true);assert.equal(await page.locator('#reply-to-text').textContent(),reference.text);
+    assert.equal(await page.locator('#prompt').inputValue(),'保留的办公室草稿，不应因视图切换消失。');assert.equal(await page.locator('#recipient').inputValue(),initialTarget);assert.equal(await page.locator('#reply-preview').isVisible(),true);assert.equal(await page.locator('#reply-to-text').textContent(),reference.text.replace(/\s+/g,' ').trim());
     const returnedScroll=await page.locator('#chat-stream').evaluate(element=>element.scrollTop);assert.ok(Math.abs(returnedScroll-scrollTop)<=2,'Text scroll moved across office switch.');proof.text_return={scroll_before:scrollTop,scroll_after:returnedScroll,reply_to:reference.id};proof.checks.text_draft_quote_scroll_preserved=true;await screenshot('text-return.png');
     await page.locator('#office-view-button').click();await waitFit(9);proof.metrics.textToOffice=await metrics();checkFullScene(proof.metrics.textToOffice,9,'textToOffice');proof.checks.text_return_to_office_stays_automatic=true;await page.locator('#office-compose-launch').click();await page.locator('#composer').waitFor({state:'visible'});
     assert.equal(await page.locator('#prompt').inputValue(),'保留的办公室草稿，不应因视图切换消失。');assert.equal(await page.locator('#reply-preview').isVisible(),true);
@@ -113,7 +117,7 @@ async function main(){
     // Freeze only the fixture's new member WAAPI walk for legible path evidence.
     // Membership is still added through the actual service HTTP API.
     await page.evaluate(()=>{window.__officeWalks=[];window.__officeAnimate=Element.prototype.animate;Element.prototype.animate=function(frames,timing){const animation=window.__officeAnimate.call(this,frames,timing);if(this.classList.contains('ao-person')&&this.closest('.ao-entering')){animation.pause();animation.currentTime=0;window.__officeWalks.push({animation,memberId:this.closest('.ao-seat').dataset.memberId,frames,timing});}return animation;};});
-    const newcomer=await api('/api/chat/members',{name:'来访的 Agent',adapter:'mailbox'});await api(`/api/chat/rooms/${rooms[0].id}/join`,{member_id:newcomer.id});await page.evaluate(()=>refresh());
+    const newcomer=await api('/api/chat/members',{name:'来访的 Agent',adapter:'mailbox'});await api(`/api/chat/rooms/${rooms[0].id}/join`,{member_id:newcomer.id});admit(newcomer);service.changed();await page.evaluate(()=>refresh());
     await page.waitForFunction(memberId=>window.__officeWalks.some(walk=>walk.memberId===memberId),newcomer.id);assert.equal(await page.locator('.ao-door').evaluate(element=>element.classList.contains('ao-door-opening')),true);
     await images();await page.waitForFunction(()=>Array.from(document.querySelectorAll('.ao-custom-character')).every(image=>image.classList.contains('ao-art-loaded')));
     await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));

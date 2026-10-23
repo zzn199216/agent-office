@@ -14,6 +14,13 @@ function businessState(service){
   return {rooms:service.chat.store.rooms(),members:service.chat.store.members(),participants:service.store.db.prepare('SELECT * FROM chat_participants ORDER BY room_id,member_id').all(),bindings:service.store.db.prepare('SELECT * FROM chat_bindings ORDER BY room_id,member_id').all(),messages:service.store.db.prepare('SELECT * FROM chat_messages ORDER BY seq').all(),cards:service.store.db.prepare('SELECT * FROM chat_resume_credentials ORDER BY room_id,member_id').all()};
 }
 
+test('night offices default to lit and lights persist independently of time and other rooms',async t=>{
+  const h=harness(t);assert.equal(h.service.office.get(h.room.id).lights_on,true);
+  h.service.office.set({room_id:h.room.id,time_mode:'night',lights_on:false});
+  assert.equal(h.service.office.get(h.room.id).time_mode,'night');assert.equal(h.service.office.get(h.other.id).lights_on,true);
+  await h.close();assert.equal(offlineState(h.data,h.room.id).snapshot.office[h.room.id].lights_on,false);
+});
+
 test('per-room office presentation survives restart and offline viewing without changing room communication',async t=>{
   const h=harness(t),card=h.service.entry.issue(h.member.id,h.room.id),cardBytes=fs.readFileSync(card.file),before=businessState(h.service);
   assert.deepEqual(h.service.office.get(h.room.id),DEFAULT_OFFICE);

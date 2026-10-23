@@ -62,6 +62,14 @@ test('connected states have no copy actions and busy states disable their button
   assert.match(f.render(f.message),/data-conn-op="retry"[^>]* disabled/);
 });
 
+test('Doubao connector steps stay visible and escaped in every shared connection card',()=>{
+  const f=fixture(),view=require('../src/member-connection.cjs').present({provider:'doubao',status:'needs_action',stage:'awaiting_handshake'});
+  f.context.history.connection_assists=[f.assist(view)];const html=f.render(f.message);
+  assert.match(html,/connection-panel-steps/);assert.match(html,/本地电脑/);assert.match(html,/包含的操作/);assert.match(html,/在对话中试用/);assert.match(html,/复制连接地址/);assert.match(html,/复制验证语句/);
+  assert.equal((html.match(/data-conn-op=/g)||[]).length,2);
+  view.steps=['<img src=x onerror=alert(1)>'];assert.doesNotMatch(f.context.connectionPanelMarkup(view,{source:'member',id:'m'}),/<img/);
+});
+
 test('only records for this room, this human request and its actual recipient render, and every field is escaped',()=>{
   const f=fixture(),bad='<img src=x onerror=alert(1)>';
   f.context.history.connection_assists=[f.assist(f.view('waiting',{headline:bad,primary:{operation:'copy_config',label:bad}})),f.assist(f.view('waiting'),{id:'foreign-room',room_id:'other'}),f.assist(f.view('waiting'),{id:'foreign-recipient',member_id:'target'})];

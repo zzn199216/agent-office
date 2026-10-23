@@ -246,5 +246,6 @@ body.pixel-theme .secretary-connection-note,body.pixel-theme .secretary-steps,bo
 .connection-panel{display:grid;gap:10px}.connection-panel+.connection-panel{border-top:1px solid var(--line);padding-top:12px;margin-top:4px}.connection-panel-status{display:flex;align-items:center;gap:9px}.connection-panel-status strong{font-size:13px;line-height:1.45}.connection-panel .actions{display:flex;flex-wrap:wrap;gap:8px}
 .connection-dot{flex:none;width:9px;height:9px;border-radius:50%;background:var(--muted)}.connection-dot.connected,.connection-dot.auto{background:var(--accent)}.connection-dot.waiting{background:#c9a227}.connection-dot.attention{background:var(--rose,#a14747)}.connection-dot.busy{animation:connection-pulse 1.2s ease-in-out infinite}@keyframes connection-pulse{50%{opacity:.35}}
 .connection-panel-details summary{font-size:11px;color:var(--muted);cursor:pointer}.connection-panel-details .small-note{margin:6px 0 0;word-break:break-word}
+.connection-panel-steps{margin:0;padding-left:22px;font-size:12px;line-height:1.65;color:var(--muted);overflow-wrap:anywhere}.connection-panel-steps li+li{margin-top:5px}
 .connection-guide-details>summary{font-size:11px;color:var(--muted);cursor:pointer;margin:4px 0 10px}
 #member-setup-status .connection-panel{width:100%}#member-setup-status .connection-panel-status strong{color:var(--ink,#20302b);font-weight:600}

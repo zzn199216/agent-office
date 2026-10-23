@@ -45,6 +45,17 @@ test('queued messages and an open client alone do not animate real work',()=>{
   const processing=scene.describe({...input,messages:[{...input.messages[0],status:'processing'}]},now).members[0];assert.equal(processing.processing,true);
   const noWorker=scene.describe({...input,runtime:{members:[{id:member.id,presence:'online',worker_online:false}]},messages:[{...input.messages[0],status:'processing'}]},now).members[0];assert.equal(noWorker.processing,false);
 });
+
+test('current work progress replaces historical speech and clears when answered or offline',()=>{
+  const past={id:'past',sender_id:member.id,text:'上一条回复'},request={id:'work',sender_id:'user',to_member_id:member.id,status:'processing',progress:'**正在检查连接**\nnode private-command.cjs'};
+  const input={roomId:'room-a',participants:[member],runtime:online,online:true,messages:[past,request]};
+  const active=scene.describe(input,now).members[0];assert.equal(active.activity.text,'正在检查连接');assert.equal(active.activity.label,'工作进展');assert.equal(active.activity.message.id,'work');assert.equal(active.message.id,'past');
+  assert.equal(scene.describe({...input,online:false},now).members[0].activity,null);
+  const answered=scene.describe({...input,messages:[past,request,{id:'answer',sender_id:member.id,kind:'reply',reply_to:'work',text:'完成'}]},now).members[0];assert.equal(answered.activity,null);assert.equal(answered.message.id,'answer');
+  assert.equal(scene.describe({...input,messages:[{...request,progress:undefined}]},now).members[0].activity.text,'正在处理你的消息');
+  assert.equal(scene.describe({...input,messages:[{...request,status:'waiting_input'}]},now).members[0].activity.text,'需要你确认后继续');
+  assert.equal(scene.describe({...input,messages:[{...request,status:'queued',progress:undefined}]},now).members[0].activity.text,'消息已排队，等待接手');
+});
 test('offline history never portrays workers as actively working',()=>{
   const model=scene.describe({roomId:'room-a',participants:[member],runtime:online,online:false,messages:[{id:'question',to_member_id:member.id,status:'processing',sender_id:'user',text:'旧问题'}]},now);
   assert.equal(model.members[0].processing,false);assert.equal(model.members[0].presence.status,'stale');

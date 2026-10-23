@@ -14,6 +14,14 @@ readline.createInterface({input:process.stdin}).on('line',async line=>{const m=J
     if(p.input.some(item=>item.type==='image')){const image=p.input.find(item=>item.type==='image');if(image.source?.url!=='data:image/png;base64,fixture-image'){send({id:m.id,error:{message:'Invalid image protocol'}});return;}process.stderr.write('request timed out Bearer private-fixture-key\n');await new Promise(resolve=>setTimeout(resolve,30));}
     const turnId=randomUUID(),itemId=randomUUID();
     send({method:'turn/started',params:{threadId:p.threadId,turn:{id:turnId}}});
+    if(process.argv.includes('--progress-summary')){
+      const params={threadId:p.threadId,turnId,itemId:'summary-item',summaryIndex:0};
+      send({method:'item/reasoning/summaryTextDelta',params:{...params,threadId:'other-thread',delta:'foreign summary'}});
+      send({method:'item/reasoning/textDelta',params:{...params,delta:'raw-private-reasoning'}});
+      send({method:'item/reasoning/summaryTextDelta',params:{...params,delta:'正在核对'}});
+      send({method:'item/reasoning/summaryTextDelta',params:{...params,delta:'连接状态'}});
+      send({method:'item/reasoning/summaryTextDelta',params:{...params,summaryIndex:1,delta:'准备验证结果'}});
+    }
     send({method:'item/agentMessage/delta',params:{threadId:p.threadId,turnId,itemId,delta:'中文回答'}});
     send({method:'item/completed',params:{threadId:p.threadId,turnId,item:{id:itemId,type:'agentMessage',text:'中文回答',phase:'final_answer'}}});
     send({method:'turn/completed',params:{threadId:p.threadId,turn:{id:turnId,status:'completed'}}});

@@ -28,14 +28,14 @@
   const PRESETS = new Set(['auto','person','robot','sprite']);
   const MAX_IMAGE_LENGTH = 450000;
   const CAMERA_LIMITS = Object.freeze({natural:1,max:1});
-  const SCENE_DEFAULTS = Object.freeze({version:1,time_zone:'auto',time_mode:'auto',columns:3,auto_layout:true,spacing:1,wall_color:'#f8f7f3',floor_color:'#faf7ef',show_window:true,show_clock:true,show_plant:true,motion:true});
+  const SCENE_DEFAULTS = Object.freeze({version:1,time_zone:'auto',time_mode:'auto',lights_on:true,columns:3,auto_layout:true,spacing:1,wall_color:'#f8f7f3',floor_color:'#faf7ef',show_window:true,show_clock:true,show_plant:true,motion:true});
   function normalizeScene(value={}) {
     const result={...SCENE_DEFAULTS};
     if(!value||typeof value!=='object')return result;
     const number=(key,min,max)=>{if(Number.isFinite(value[key]))result[key]=Math.max(min,Math.min(max,value[key]));};
     number('columns',1,3);result.columns=Math.round(result.columns);number('spacing',.8,1.3);
     for(const key of ['wall_color','floor_color'])if(/^#[a-f0-9]{6}$/i.test(value[key]||''))result[key]=value[key];
-    for(const key of ['show_window','show_clock','show_plant','motion','auto_layout'])if(typeof value[key]==='boolean')result[key]=value[key];
+    for(const key of ['show_window','show_clock','show_plant','motion','auto_layout','lights_on'])if(typeof value[key]==='boolean')result[key]=value[key];
     if(['auto','day','night'].includes(value.time_mode))result.time_mode=value.time_mode;
     if(value.time_zone==='auto')result.time_zone='auto';
     else if(typeof value.time_zone==='string'&&value.time_zone.length<100){try{new Intl.DateTimeFormat('en',{timeZone:value.time_zone});result.time_zone=value.time_zone;}catch{}}
@@ -95,7 +95,7 @@
     const finite=(value,fallback)=>Number.isFinite(value)&&value>0?value:fallback;
     const width=finite(viewportWidth,GEOMETRY.minimumWidth),height=finite(viewportHeight,GEOMETRY.minimumHeight);
     const config=normalizeScene(settings);
-    const marginX=Math.min(12,width*.015),marginTop=Math.min(64,height*.18),marginBottom=Math.min(16,height*.05);
+    const marginX=Math.min(12,width*.015),marginTop=Math.min(width<=620?100:64,height*.22),marginBottom=Math.min(16,height*.05);
     const availableWidth=Math.max(1,width-marginX*2),availableHeight=Math.max(1,height-marginTop-marginBottom);
     // The room is a rectangular surface that fills its pane. Furniture keeps
     // its natural proportions; additional rows continue below the viewport.
@@ -222,7 +222,10 @@
         const message = latest.get(member.id) || null;
         const created = message && Date.parse(message.created || message.created_at || '');
         const occupied=online&&['online','worker_online'].includes(presence.status);
-        return {member,presence,occupied,appearance:appearance(member,input.appearances || input.appearance,variants.get(member.id)||0),secretary:member.id===secretaryId,processing,waiting,needsInput,message,showMessage:occupied&&visible.has(member.id),recent:occupied && Number.isFinite(created) && created <= now && now-created <= 15000};
+        const active=requests.slice().reverse().find(request=>needsInput?['waiting_input','uncertain'].includes(request.status):processing?['processing','running'].includes(request.status):waiting?['queued','delivered','pending','consumed'].includes(request.status):false);
+        const progress=active&&typeof active.progress==='string'?plainText(active.progress.split(/\r?\n/).find(line=>plainText(line))||''):'';
+        const activity=occupied&&active?{message:active,label:needsInput?'等待确认':processing?'工作进展':'等待处理',text:needsInput?'需要你确认后继续':progress|| (processing?'正在处理你的消息':active.status==='consumed'?'已读取，等待回复':'消息已排队，等待接手')}:null;
+        return {member,presence,occupied,appearance:appearance(member,input.appearances || input.appearance,variants.get(member.id)||0),secretary:member.id===secretaryId,processing,waiting,needsInput,activity,message,showMessage:occupied&&visible.has(member.id),recent:occupied && Number.isFinite(created) && created <= now && now-created <= 15000};
       }),
       lastMessage: messages.slice().reverse().find(message => !['system','event'].includes(message.kind) && message.sender_id !== 'system' && typeof message.text === 'string' && message.text.trim()) || null
     };
@@ -265,10 +268,11 @@
     heading.append(count);
     const health = node(document,'span','ao-health'); health.setAttribute('role','status');
     const toolbarRight=node(document,'div','ao-toolbar-right');
+    const lighting=node(document,'button','ao-light-switch');lighting.type='button';lighting.hidden=typeof options.onToggleLights!=='function';lighting.addEventListener('click',()=>options.onToggleLights?.(!config.lights_on));
     const secretaryButton=node(document,'button','ao-secretary-button','秘书');secretaryButton.type='button';secretaryButton.hidden=typeof options.onChooseSecretary!=='function';secretaryButton.title='选择或管理 AI 秘书';secretaryButton.addEventListener('click',()=>options.onChooseSecretary?.());
     const settings=node(document,'button','ao-scene-settings','布置办公室');settings.type='button';settings.hidden=typeof options.onSceneSettings!=='function';settings.addEventListener('click',()=>options.onSceneSettings?.());
     const compose=node(document,'button','ao-compose-button','发消息');compose.type='button';compose.hidden=typeof options.onCompose!=='function';compose.addEventListener('click',()=>options.onCompose?.());
-    toolbarRight.append(health,secretaryButton,settings,compose);top.append(heading,toolbarRight);
+    toolbarRight.append(health,lighting,secretaryButton,settings,compose);top.append(heading,toolbarRight);
     const scroll = node(document,'div','ao-scroll');
     scroll.tabIndex=0;scroll.setAttribute('aria-label','自动适配的办公室画面，滚动查看更多工位');
     const worldBounds=node(document,'div','ao-world-bounds'),camera=node(document,'div','ao-camera');
@@ -279,6 +283,7 @@
     const sky=node(document,'div','ao-sky');sky.append(node(document,'span','ao-cloud ao-cloud-one'),node(document,'span','ao-cloud ao-cloud-two'),node(document,'span','ao-moon'),node(document,'span','ao-stars'));
     outdoor.append(sky,node(document,'span','ao-window-divider'),node(document,'span','ao-window-sill'));
     const light=node(document,'div','ao-light');light.setAttribute('aria-hidden','true');
+    const lamps=node(document,'div','ao-ceiling-lights');lamps.setAttribute('aria-hidden','true');lamps.append(node(document,'i'),node(document,'i'));
     const clock=node(document,'div','ao-clock');
     const dial=node(document,'span','ao-clock-dial');dial.setAttribute('aria-hidden','true');
     const hourHand=node(document,'i','ao-hour-hand'),minuteHand=node(document,'i','ao-minute-hand');dial.append(hourHand,minuteHand,node(document,'i','ao-clock-pin'));
@@ -295,7 +300,7 @@
     const plantRight = image(document,'ao-plant-art',`${ASSETS}prop-plant.png`);watchArt(plantRight);plantHolder.append(plantFallback,plantRight);
     const empty = node(document,'div','ao-empty');
     const emptyChoose=node(document,'button','ao-empty-choose','选择 AI 秘书');emptyChoose.type='button';emptyChoose.hidden=typeof options.onChooseSecretary!=='function';emptyChoose.addEventListener('click',()=>options.onChooseSecretary?.());empty.append(emptyChoose);
-    floor.append(backdrop,wall,outdoor,light,door,doorLabel,entry,clock,seats,plantHolder,empty);camera.append(floor);worldBounds.append(camera);scroll.append(worldBounds);
+    floor.append(backdrop,wall,outdoor,light,lamps,door,doorLabel,entry,clock,seats,plantHolder,empty);camera.append(floor);worldBounds.append(camera);scroll.append(worldBounds);
     scene.append(scroll,top);container.append(scene);
     const items = new Map();
     let current = {roomId:'',members:[],online:false,lastMessage:null}, destroyed=false, suspended=false, initialized=false, timer=null, clockTimer=null, intersecting=true, slots=new Map(), layout=null, config=normalizeScene(),cameraState=null;
@@ -323,6 +328,7 @@
       if(clockTimer===null&&!suspended&&!document.hidden&&intersecting)clockTimer=view.setTimeout(()=>{clockTimer=null;updateClock();},15000);
     }
     function updateWorld() {
+      scene.dataset.lights=config.lights_on?'on':'off';lighting.textContent=config.lights_on?'关灯':'开灯';lighting.setAttribute('aria-label',config.lights_on?'关闭办公室灯光':'打开办公室灯光');lighting.setAttribute('aria-pressed',String(config.lights_on));lighting.disabled=!current.online;
       scene.style.setProperty('--ao-wall-color',config.wall_color);scene.style.setProperty('--ao-floor-color',config.floor_color);
       outdoor.hidden=!config.show_window;clock.hidden=!config.show_clock;plantHolder.hidden=!config.show_plant;
       setArt(backdrop,config.background_data||'');setArt(doorArt,config.door_data||'');setArt(plantRight,config.plant_data||`${ASSETS}prop-plant.png`);
@@ -373,7 +379,7 @@
       });
       function choose() {selected.clear();selected.add(info.member.id);for(const entry of items.values())entry.root.classList.toggle('ao-selected',selected.has(entry.info.member.id));callback('onSelectMember',item.info.member);}
       character.addEventListener('click',choose);label.addEventListener('click',choose);
-      bubble.addEventListener('click',() => {if(item.info.message)callback('onSelectMessage',item.info.message);});
+      bubble.addEventListener('click',() => {const message=item.info.activity?.message||item.info.message;if(message)callback('onSelectMessage',message);});
       customize.addEventListener('click',() => callback('onCustomize',item.info.member));
       return item;
     }
@@ -393,7 +399,8 @@
       item.character.hidden=!info.occupied;
       item.root.classList.toggle('ao-working',info.occupied&&!item.entering&&info.processing&&!info.needsInput);item.root.classList.toggle('ao-waiting',info.occupied&&!item.entering&&!info.processing&&!info.needsInput&&info.waiting);
       item.root.classList.toggle('ao-offline',!current.online || ['offline','stale','unknown'].includes(presence.status));
-      item.root.classList.toggle('ao-message-visible',!item.entering&&info.showMessage && !!message);
+      item.root.classList.toggle('ao-message-visible',!item.entering&&(!!info.activity||info.showMessage && !!message));
+      item.root.classList.toggle('ao-has-progress',!item.entering&&!!info.activity);
       item.root.classList.toggle('ao-selected',selected.has(member.id));
       item.name.textContent=member.name || 'Agent';
       item.secretaryBadge.hidden=!info.secretary;item.root.dataset.secretary=String(info.secretary);
@@ -409,8 +416,10 @@
       item.furniture.classList.toggle('ao-custom-furniture',!!(appearance.furniture==='beanbag'?config.beanbag_data:config.desk_data));
       setArt(item.desk,furnitureSource);
       item.root.classList.toggle('ao-custom-body',!!appearance.character);
-      item.bubble.hidden=!info.occupied||item.entering||!message;
-      if(message) {
+      item.bubble.hidden=!info.occupied||item.entering||!message&&!info.activity;
+      if(info.activity){
+        const activity=info.activity;item.bubble.dataset.messageId=activity.message.id;item.bubbleLabel.textContent=activity.label;item.bubbleText.textContent=activity.text.slice(0,180);item.bubble.title=activity.text.slice(0,600);item.bubble.setAttribute('aria-label',`${member.name || 'Agent'} · ${activity.label}：${activity.text.slice(0,180)}，查看任务`);item.root.classList.remove('ao-speaking');item.recent=0;item.messageId=message?.id||null;
+      } else if(message) {
         item.bubble.dataset.messageId=message.id;
         item.bubbleLabel.textContent=!current.online?'历史发言':info.recent?'刚刚说':'最近发言';
         const brief=plainText(message.text);item.bubbleText.textContent=brief.slice(0,180);

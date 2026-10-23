@@ -85,6 +85,13 @@ test('a new desktop member defaults to MCP: config first, then the sentence; an 
     assert.equal(state.presentation.primary.operation,'copy_config');
     assert.equal(state.presentation.secondary.operation,'copy_handshake_prompt');
     assert.doesNotMatch(state.presentation.headline,/ 豆包|豆包 /);
+    if(provider==='doubao'){
+      service._localUrl='http://127.0.0.1:47831';const guide=service.chat.setup(state.member_id,room.id).client;
+      assert.equal(guide.kind,'http_fields');assert.match(guide.copy,/^http:\/\/127\.0\.0\.1:47831\/mcp\//);
+      assert.match(guide.bootstrap,/本地电脑/);assert.match(guide.bootstrap,/连接器菜单勾选 Agent Office/);assert.doesNotMatch(guide.bootstrap,/127\.0\.0\.1|\/mcp\//);
+      assert.match(guide.steps.join('\n'),/服务器 URL/);assert.match(guide.steps.join('\n'),/包含的操作/);assert.match(guide.steps.join('\n'),/在对话中试用/);
+      assert.equal(service.onboarding.state({run_id:job.id}).ready_for_office,false);
+    }
   }
   const member=service.chat.addMember({name:'existing doubao',adapter:'mailbox'});
   service.chat.store.updateMember(member.id,{config:{launch_provider:'doubao',desktop_delivery_mode:'native_desktop'}});service.chat.join(room.id,member.id);

@@ -24,6 +24,20 @@ async function cli(args){
   const executable=process.env.AGENTOFFICE_TEST_EXECUTABLE||process.execPath,prefix=process.env.AGENTOFFICE_TEST_EXECUTABLE?[]:[path.resolve(__dirname,'../src/main.cjs')];
   return new Promise((resolve,reject)=>{let out='',err='';const child=spawn(executable,[...prefix,...args],{windowsHide:true,stdio:['ignore','pipe','pipe']});child.stdout.on('data',chunk=>out+=chunk);child.stderr.on('data',chunk=>err+=chunk);child.once('error',reject);child.once('exit',code=>{let value;try{value=JSON.parse(code===0?out:err.trim().split('\n').filter(line=>line.startsWith('{')).at(-1));}catch{return reject(Error(`fixture CLI did not return JSON (${code}): ${out} ${err}`));}resolve({code,value});});});
 }
+
+test('reusing Grok in a new room snapshots safely before joining, then verifies this attempt',async t=>{
+  const v=await setup(t),member=v.rawMember();v.service.chat.prepareGrokHandoff(member.id,v.room.id);
+  const entry=v.service.entry.describePrimary(member.id,v.room.id),bytes=fs.readFileSync(entry.file);v.service.entry.accept(JSON.parse(bytes));
+  const other=v.service.chat.addRoom({title:'New office',project_id:v.project.id});
+  const start=v.service.onboarding.start({provider:'grok-bot',room_id:other.id});
+  assert.equal(start.member_id,member.id);assert.equal(start.ready_for_office,false);assert.equal(v.service.chat.store.joined(other.id,member.id),false);
+  assert.doesNotThrow(()=>v.service.onboarding.state({run_id:start.id}));
+  await Promise.all([...v.service.onboarding.jobs.values()]);
+  assert.equal(v.service.chat.store.joined(other.id,member.id),true);
+  const pending=v.service.onboarding.state({run_id:start.id});assert.equal(pending.stage,'awaiting_bridge_handshake');assert.equal(pending.ready_for_office,false);
+  v.service.entry.accept(JSON.parse(bytes));assert.equal(v.service.onboarding.state({run_id:start.id}).ready_for_office,true);
+  assert.equal(v.credentials().length,1);assert.deepEqual(fs.readFileSync(entry.file),bytes);assert.equal(v.calls.fetch+v.calls.desktop,0);
+});
 test('Grok native connection rejects with an actionable typed reason before network or state mutation',async t=>{
   const v=await setup(t),member=v.rawMember(),before=v.credentials(),revision=v.service.revision;
   const result=await v.request('/api/desktop/connect',{member_id:member.id,room_id:v.room.id,provider:'grok-bot'});

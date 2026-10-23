@@ -435,6 +435,9 @@ class OnboardingManager{
     if(method==='managed_native'&&row.stage==='awaiting_previous_result')return {...base,status:'needs_action',stage:'awaiting_previous_result',ready_for_office:false,local_verified:false,error:row.error,detail:'正在观察这位同事的原请求。结果核对结束后继续当前接入，不会重复提交原问题。',next_actions:[action('verify','核对原请求后检查连接',{operation:'retry'})]};
     if(base.stage==='fixed_proxy_scope'&&base.fixed_proxy?.room_id)base.next_actions=[action('open_fixed_room','查看原房间连接',{operation:'open_fixed_room',room_id:base.fixed_proxy.room_id,target_member_id:base.member_id})];
     if(!base.member_id||['fixed_proxy_scope','awaiting_credential','requires_explicit_backend_selection'].includes(base.stage)||row.mode==='managed'&&DESKTOP.has(row.provider))return base;
+    // A reused person joins in run(). Snapshotting the newly-created attempt
+    // must not inspect a room-scoped entry before that membership exists.
+    if(!this.service.chat.store.joined(row.room_id,base.member_id))return {...base,local_verified:false,can_wake:false,ready_for_office:false};
     if(base.can_wake&&!base.connection_evidence){const evidence=this.service.runtime.memberState(base.member_id).connection_evidence;Object.assign(base,{connection_evidence:evidence,protocol_verified:evidence?.protocol_verified===true,model_reply_verified:evidence?.model_reply_verified===true,automatic_reply_verified:evidence?.automatic_reply_verified===true,readiness:evidence?.verification_level||'unverified'});}
     if(method==='native_desktop'){
       const connected=this.service.desktop?.canWake(base.member_id)===true,native=this.service.desktop?.state(base.member_id);
