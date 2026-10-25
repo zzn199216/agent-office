@@ -116,6 +116,38 @@ class CodexWorkspace{
     return {...process.env,CODEX_HOME:this.legacyHome,CODEX_SQLITE_HOME:this.home};
   }
   sharedArguments(){return ['-c','sqlite_home='+toml(this.home),'-c','notify=[]','-c','features.hooks=false','-c','features.codex_hooks=false','-c','features.plugins=false','-c','features.apps=false'];}
+  refreshBoundRollout(threadId,project){
+    // The native app may archive/move a shared rollout while AO's private
+    // SQLite index still points at its old location. Reconcile this one bound
+    // record only; never copy credentials, history, permissions or other rows.
+    if(!uuid(threadId))return false;
+    this.assertSharedCache();
+    if(!fs.existsSync(this.home))return false;
+    const files=fs.readdirSync(this.home).filter(name=>/^state_\d+\.sqlite$/.test(name)).sort((a,b)=>Number(b.match(/\d+/)[0])-Number(a.match(/\d+/)[0]));
+    const name=files[0];if(!name||!fs.existsSync(path.join(this.legacyHome,name)))return false;
+    const ownFile=regular(path.join(this.home,name),this.home),sourceFile=regular(path.join(this.legacyHome,name),this.legacyHome);
+    const {DatabaseSync}=require('node:sqlite');let local,source;
+    try{
+      source=new DatabaseSync(sourceFile,{readOnly:true});local=new DatabaseSync(ownFile);local.exec('PRAGMA busy_timeout=1000');
+      const query='SELECT id,rollout_path,cwd,archived,archived_at FROM threads WHERE id=?';
+      const previous=local.prepare(query).get(threadId),current=source.prepare(query).get(threadId);
+      if(!previous||!current||typeof previous.rollout_path!=='string'||typeof current.rollout_path!=='string'||fs.existsSync(nativePath(previous.rollout_path)))return false;
+      if(normalizePath(previous.cwd)!==project.canonical||normalizePath(current.cwd)!==project.canonical||![0,1].includes(current.archived))return false;
+      const candidate=nativePath(current.rollout_path),folder=path.join(this.legacyHome,current.archived?'archived_sessions':'sessions');
+      // realpath permits the native app's canonical spelling of the same home,
+      // while regular rejects file links and paths outside the selected cache.
+      const root=nativePath(fs.realpathSync.native(folder));
+      const resolved=nativePath(fs.realpathSync.native(candidate));regular(candidate,path.isAbsolute(candidate)&&inside(folder,candidate)?folder:root);
+      if(!inside(root,resolved)||!path.basename(candidate).endsWith('-'+threadId+'.jsonl'))return false;
+      const fd=fs.openSync(candidate,'r'),chunks=[];let complete=false;
+      try{const buffer=Buffer.alloc(65536);for(let read,total=0;total<1048576&&(read=fs.readSync(fd,buffer,0,Math.min(buffer.length,1048576-total),null))>0;total+=read){const end=buffer.subarray(0,read).indexOf(10);chunks.push(Buffer.from(buffer.subarray(0,end>=0?end:read)));if(end>=0){complete=true;break;}}}finally{fs.closeSync(fd);}
+      if(!complete)return false;const meta=JSON.parse(Buffer.concat(chunks).toString('utf8'));
+      if(meta.type!=='session_meta'||meta.payload?.id!==threadId||normalizePath(meta.payload.cwd)!==project.canonical)return false;
+      // Do not replace a concurrent native move or a newer local observation.
+      if(JSON.stringify(source.prepare(query).get(threadId))!==JSON.stringify(current)||!fs.existsSync(candidate))return false;
+      return local.prepare('UPDATE threads SET rollout_path=?,archived=?,archived_at=? WHERE id=? AND rollout_path=? AND archived=? AND archived_at IS ?').run(current.rollout_path,current.archived,current.archived_at,threadId,previous.rollout_path,previous.archived,previous.archived_at).changes===1;
+    }catch{return false;}finally{local?.close();source?.close();}
+  }
   async prepare(readConfig){
     this.assertAuthenticationOwner();
     const preparationKey=process.platform==='win32'?this.home.toLowerCase():this.home;
@@ -175,5 +207,5 @@ class CodexWorkspace{
     return copied;
   }
 }
-function missingThread(error){return error?.code==='codex_rpc_error'&&/not found|not loaded|unknown thread|no rollout|does not exist|could not find|unable to find/i.test(error.message);}
+function missingThread(error){return error?.code==='codex_rpc_error'&&/not found|not loaded|unknown thread|no rollout|does not exist|could not find|unable to find|invalid paginated history lineage[^\n]*missing source rollout/i.test(error.message);}
 module.exports={CodexWorkspace,workspaceConfig,missingThread,nativePath};

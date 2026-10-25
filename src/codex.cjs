@@ -212,14 +212,17 @@ class CodexClient extends EventEmitter {
       let t;
       try{if(this.authenticationMode!=='shared-cache'&&this.workspace?.migrationState(discussion.thread_id)?.verified===false)throw new RoomError('thread not found',404,'codex_rpc_error');t=await this.read(discussion.thread_id);}catch(error){
         if(!this.workspace||!missingThread(error))throw error;
-        if(this.authenticationMode==='shared-cache')throw new RoomError('原 Codex 工作记录暂时不可读取，已保留原会话绑定；请检查连接诊断，不会自动新建聊天。',409,'codex_work_record_unavailable');
-        const legacy=this.legacyClient();try{t=await this.workspace.importThread(this,legacy,project,discussion);}finally{await legacy.close();}
+        if(this.authenticationMode==='shared-cache'){
+          if(!this.workspace.refreshBoundRollout(discussion.thread_id,project))throw new RoomError('原 Codex 工作记录暂时不可读取，已保留原会话绑定；请检查连接诊断，不会自动新建聊天。',409,'codex_work_record_unavailable');
+          t=await this.read(discussion.thread_id);
+        }else{const legacy=this.legacyClient();try{t=await this.workspace.importThread(this,legacy,project,discussion);}finally{await legacy.close();}}
       }
       let same = false; try { same = normalizePath(t.cwd) === project.canonical; } catch {}
       if (!same||t.id!==discussion.thread_id) throw new RoomError('这个 Codex 会话与原绑定或项目目录不匹配，原记录已保留。', 409, 'project_mismatch');
       this.checkSharedRecord(discussion.thread_id,t);
       this.transport?.registerThread(discussion.thread_id);
-      await this.call('thread/resume', { threadId: discussion.thread_id, cwd: project.path, sandbox: project.access, approvalPolicy: 'on-request', approvalsReviewer:'auto_review', excludeTurns: true, config });
+      try{await this.call('thread/resume', { threadId: discussion.thread_id, cwd: project.path, sandbox: project.access, approvalPolicy: 'on-request', approvalsReviewer:'auto_review', excludeTurns: true, config });}
+      catch(error){if(error.code==='codex_rpc_error'&&error.message.includes('session '+discussion.thread_id+' is archived'))throw new RoomError('Codex 的协作会话已归档。请在 Codex 恢复该会话后重试消息。',409,'codex_thread_archived');throw error;}
       return discussion.thread_id;
     }
     onBinding('creating');
