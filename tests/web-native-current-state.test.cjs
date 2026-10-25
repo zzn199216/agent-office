@@ -26,6 +26,19 @@ test('only native fetch failed is explained in the message with a scoped connect
   const html=f.context.renderMessage(message,[message]);assert.match(html,/本人对话尚未连接/);assert.match(html,/data-open-member="native"/);assert.doesNotMatch(html,/fetch failed/);assert.equal(message.error,'fetch failed');
   f.member.connection_method='manual';assert.match(f.context.renderMessage(message,[message]),/fetch failed/);f.member.connection_method='native_desktop';assert.match(f.context.renderMessage({...message,error:'actual protocol mismatch'},[message]),/actual protocol mismatch/);
 });
+
+test('recipient note follows verified notification capability instead of an expired heartbeat',()=>{
+  const f=fixture(),elements={recipient:{value:f.member.id},'recipient-note':{textContent:''}};
+  Object.assign(f.context,{$:id=>elements[id],recipientRoom:'room',roomId:'room',roomRecipients:new Map()});
+  vm.runInContext(section('function updateRecipientNote()', 'function setReply('),f.context);
+  Object.assign(f.member,{name:'Grok',connection_method:'configured_notification',presence:'stale',runtime_state:{presence:'stale',worker_online:false,can_wake:false},can_notify:true});
+  const note=()=>{f.context.updateRecipientNote();return elements['recipient-note'].textContent;};
+  assert.match(note(),/发送后会自动通知它处理/);assert.equal(f.context.memberPresence(f.member).status,'stale','delivery ability must not manufacture a live heartbeat');
+  f.context.webConnected=false;assert.match(note(),/服务未连接/);assert.doesNotMatch(note(),/自动通知/);f.context.webConnected=true;
+  for(const available of [false,null,undefined]){f.member.can_notify=available;assert.doesNotMatch(note(),/自动通知/);assert.match(note(),/心跳已过期/);}
+  f.member.can_notify=true;f.member.status='connection_failed';assert.doesNotMatch(note(),/自动通知/);assert.match(note(),/需重新接入/);
+  elements.recipient.value='';assert.match(note(),/公告/);
+});
 test('clicking a disconnected station opens that original member connection instead of sending another prompt',async()=>{
   const f=fixture(),opened=[],elements=new Map();let options,updates;
   Object.assign(f.context,{officeView:true,professionalView:true,legacyId:null,officeScene:null,history:{room:{id:'room'},participants:[f.member],messages:[]},state:{office:{}},submitting:false,

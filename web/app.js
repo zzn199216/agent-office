@@ -103,7 +103,7 @@ function saveEntry(entry, memberId, selectedRoom) {
   localStorage.setItem(entryCacheKey,JSON.stringify(resumeEntries));
 }
 function saveBridgeEntry(setup, memberId = bridgeMemberId, selectedRoom = bridgeRoomId) { const entry = setup?.resume_entry; if (entry?.prompt && entry?.file) saveEntry(entry,memberId,selectedRoom); }
-function setWebConnected(connected) { webConnected = connected; renderRuntime(); renderLaunch(); renderService(); renderInspector(); renderSecretary(); updateOfficeScene(); if ($('resume-dialog').open) renderResume(); }
+function setWebConnected(connected) { webConnected = connected; renderRuntime(); renderLaunch(); renderService(); renderInspector(); renderSecretary(); updateOfficeScene(); updateRecipientNote(); if ($('resume-dialog').open) renderResume(); }
 function setProfessionalView(value) {
   professionalView = !!value; localStorage.setItem('agentroom-professional-view',String(professionalView));
   $('professional-workspace').classList.toggle('hidden',!professionalView); $('launch-home').classList.toggle('hidden',professionalView);
@@ -1266,7 +1266,11 @@ function applySetupPresentation(data,{keepGuide=false}={}) {
   if(!keepGuide&&box&&box.innerHTML.trim()&&!box.querySelector(':scope > details.connection-guide-details'))box.innerHTML=`<details class="connection-guide-details"><summary>手动配置与诊断</summary>${box.innerHTML}</details>`;
   return true;
 }
-function updateRecipientNote() { if (recipientRoom === roomId) roomRecipients.set(roomId,$('recipient').value); const target = memberById($('recipient').value), observed = target && memberPresence(target); $('recipient-note').textContent = target ? observed.canWake ? `交给 ${target.name} · 可按需拉起工作会话` : ['online','worker_online'].includes(observed.status) ? `交给 ${target.name} · ${observed.label}` : `消息会保留 · ${target.name} ${observed.label}` : '公告会保存到房间，不自动唤醒成员'; }
+function updateRecipientNote() {
+  if (recipientRoom === roomId) roomRecipients.set(roomId,$('recipient').value);
+  const target = memberById($('recipient').value), observed = target && memberPresence(target);
+  $('recipient-note').textContent = !target ? '公告会保存到房间，不自动唤醒成员' : !webConnected ? '服务未连接，连接后可发送消息' : target.status==='ready'&&target.can_notify===true ? `交给 ${target.name} · 发送后会自动通知它处理` : observed.canWake ? `交给 ${target.name} · 可按需拉起工作会话` : ['online','worker_online'].includes(observed.status) ? `交给 ${target.name} · ${observed.label}` : `消息会保留 · ${target.name} ${observed.label}`;
+}
 function setReply(message) { replyTo = message?.id || null; $('reply-preview').classList.toggle('hidden', !message); if (message) { $('reply-to-name').textContent = `回复 ${senderName(message.sender_id)}`; $('reply-to-text').textContent = plainMarkdown(message.text); if (message.sender_id !== 'user' && history.participants?.some(member => member.id === message.sender_id)) $('recipient').value = message.sender_id; updateRecipientNote(); if(document.body.classList.contains('office-view'))toggleOfficeComposer(true);else $('prompt').focus(); } updateOfficeComposerPresentation(); }
 function mentionedMember(text) {
   const named = admittedMembers(history?.participants).filter(member => text.toLocaleLowerCase().startsWith('@' + member.name.toLocaleLowerCase()) && /^(?:\s|[，。,:：!?！？]|$)/u.test(text.slice(member.name.length + 1))).sort((a,b) => b.name.length - a.name.length);
