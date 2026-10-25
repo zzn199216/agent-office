@@ -23,6 +23,16 @@ test('office shows only participants in the selected room, including offline and
   assert.ok(model.members.every(item=>item.occupied===false),'stopped service keeps seats but no occupants');
 });
 
+test('a consumed bridge answer or acknowledgment no longer leaves its recipient waiting',()=>{
+  const describe=messages=>scene.describe({roomId:'room-a',participants:[member],runtime:online,online:true,messages},now).members[0];
+  for(const kind of ['reply','acknowledgment']){
+    const answer={id:'answer',room_id:'room-a',sender_id:'peer',to_member_id:member.id,kind,status:'consumed',text:'bridge answer'};
+    const done=describe([answer]);assert.equal(done.waiting,false);assert.equal(done.activity,null);
+    assert.equal(describe([{...answer,status:'delivered'}]).waiting,true);
+    assert.equal(describe([answer,{...answer,id:'next-question',kind:'message'}]).waiting,true);
+  }
+});
+
 test('offline and expired agents leave an empty station while preserving identity, messages and queued work',()=>{
   const offline={...member,presence:'offline'},message={id:'previous-answer',sender_id:member.id,text:'原来的实际回答'},request={id:'pending',to_member_id:member.id,status:'queued',text:'新问题'};
   const a=scene.describe({roomId:'a',participants:[offline],messages:[message,request],online:true},now).members[0];

@@ -789,6 +789,7 @@ function renderTyping(messages) {
   for (const message of messages) if (message.reply_to && ['reply','acknowledgment'].includes(message.kind)) { const senders = replies.get(message.reply_to) || new Set(); senders.add(message.sender_id); replies.set(message.reply_to,senders); }
   for (const message of messages) {
     if (!message.to_member_id || !states[message.status] || replies.get(message.id)?.has(message.to_member_id)) continue;
+    if(message.status==='consumed'&&['reply','acknowledgment'].includes(message.kind))continue;
     if(message.status==='waiting_input' && approvals.some(approval=>(!approval.member_id || approval.member_id===message.to_member_id) && (approval.request_id===message.id || message.request_id && approval.request_id===message.request_id)))continue;
     // A read message nobody answered for half an hour is not "typing"; its own footer still shows the status.
     if (message.status === 'consumed' && Date.now() - Date.parse(message.updated || message.created || 0) > 30 * 60e3) continue;

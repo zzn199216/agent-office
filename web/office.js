@@ -215,7 +215,7 @@
       roomId,online,messages,
       members: members.map(member => {
         const presence = participantPresence(member,input.runtime,online,now);
-        const requests = messages.filter(message => message.to_member_id === member.id && !answered.get(message.id)?.has(member.id));
+        const requests = messages.filter(message => message.to_member_id === member.id && !answered.get(message.id)?.has(member.id) && !(message.status==='consumed'&&['reply','acknowledgment'].includes(message.kind)));
         const processing = presence.worker && requests.some(message => ['processing','running'].includes(message.status));
         const waiting = requests.some(message => ['queued','delivered','pending','consumed'].includes(message.status));
         const needsInput = requests.some(message => ['waiting_input','uncertain'].includes(message.status));

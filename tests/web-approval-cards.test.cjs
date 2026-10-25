@@ -76,6 +76,16 @@ test('hiding a duplicate waiting bubble still shows other processing tasks and o
   f.context.state.chat.activeMessages=['another-agent-task','another-task'];const html=f.context.renderTyping(messages);
   assert.match(html,/data-typing-member="other"/);assert.match(html,/data-typing-member="agent"/);assert.equal((html.match(/正在思考/g)||[]).length,2);assert.doesNotMatch(html,/在等你确认/);
 });
+
+test('consumed bridge replies stop typing while unread replies and unanswered questions stay visible',()=>{
+  const f=fixture();
+  for(const kind of ['reply','acknowledgment']){
+    const answer={id:'bridge-answer',sender_id:'peer',to_member_id:'agent',kind,status:'consumed',updated:new Date().toISOString()};
+    assert.equal(f.context.renderTyping([answer]),'');
+    assert.match(f.context.renderTyping([{...answer,status:'delivered'}]),/data-typing-member="agent"/);
+    assert.match(f.context.renderTyping([answer,{...answer,id:'new-question',kind:'message'}]),/已读取，等待回复/);
+  }
+});
 test('normal room cards are appended after chat and typing, clear the legacy top panel and preserve old-history scroll',()=>{
   const f=fixture(),a=approval();f.context.state.approvals=[a];f.context.state.chat.activeMessages=[];f.context.history.room.title='Room';f.members[0].verified_at='yes';f.context.history.messages=f.messages;
   Object.assign(f.context,{renderImageDrafts(){},admittedMembers:members=>members,renderMemberChips(){},roomRecipients:new Map(),currentSecretary:()=>({member_id:null}),recipientRoom:null,renderTyping:()=>'<div>typing</div>',renderMessage:()=>'<article>original chat</article>',lastTimeline:'["room",old]',textScroll:new Map(),officeView:false,rememberTextScroll(){},renderService(){},renderInspector(){},renderSidebar(){},applyRoomView(){},updateOfficeScene(){}});
