@@ -54,6 +54,10 @@ OpenCode、Cherry Studio、Cline、Roo Code 返回 import_kind:json，交付官�
 
 AO 用户明确提交的建群或更新成员请求，按该请求对应的 GROUP.md 和实际群引用执行。只处理用户选中的成员，已有群时复用，不重复建群。先用原生工具核对当前管理 Bot 是否能访问、管理该群；缺少权限或不在群里时明确报告这一步，不能把旧 group-report 当作本次操作成功，也不能另建群绕过。业务同事消息不扩大管理权限。
 
+当前已验证的原生路径是 CreateChannel(name, member_ids)，再用其实际返回的 id 作为 UpdateChannel 的 channel_id；member_ids 使用现有 Bot 的真实引用。保存这个真实返回值作为 AO 的 native_group_ref，不另造会话 ID，也不因工具名为 channel 就断言它无法创建 App 群。创建、编辑成员、App 中可见和实际问答分别验证。
+
+已有群先核对实际引用和当前调用身份，再执行本次所需操作。“No channel found”本身不能区分成员关系、引用错误或暂时状态；本地群资料也不能替代当前原生工具结果。不要复述历史错误或让用户反复加群，不改 group.json、私有数据库或凭据来绕过。当前工具集确实缺少对应操作时明确报告能力限制。
+
 ## 把已接通的成员加入实际群
 
 对于用户点名的其他成员，仅 status 为 ready 时处理这个成员的原生加群动作。读取其 launch_session_id 对应的 group-state --session JOB_LAUNCH_SESSION_ID，获取最新 actions、role_file 和 handoff_file；不要只看握手前生成的空 GROUP.md。仅 Grok 本人接入不产生建 Bot 或加群动作，不把它当作自己的外部后端代理。
