@@ -33,7 +33,7 @@ const DOUBAO_NATIVE_PREPARATION = Object.freeze({
   externalModuleIds:Object.freeze([71197,71834,98027,135193,201183,201753,246058,253349,325457,367173,368415,376999,378437,386196,456462,460932,470476,540864,542525,544349,557526,600919,609347,632649,656207,687323,708078,718587,737937,744331,761336,788925,834523,860268,894119,879807,521109,196183,491575,37476,198837,17344]),
 });
 
-const DOUBAO_NATIVE_PROFILES = Object.freeze({legacy:DOUBAO_NATIVE_PREPARATION,current:require('./doubao-native-2.33.3.json')});
+const DOUBAO_NATIVE_PROFILES = Object.freeze({legacy:DOUBAO_NATIVE_PREPARATION,current:require('./doubao-native-2.33.3.json'),currentRefresh:require('./doubao-native-2.33.3-refresh.json')});
 
 // Empty Webpack chunks capture only the runtime; no business factory is called.
 // The cache keeps each runtime namespace separate and rejects replaced arrays.
@@ -232,11 +232,13 @@ function createDoubaoNativeBridge(req, options = {}, ownership = new Map()) {
   const normalizePins = value => {
     if (!value || typeof value !== 'object' || Array.isArray(value)) throw Error('DOUBAO_NATIVE_INVALID_SOURCE_IDENTITY');
     const entries = Object.entries(value).sort(([a],[b])=>a.localeCompare(b));
-    const infoVariants=['2da587c4e01a8b7b5bcbaea93f8172fab4d3b7f0e9a45e00d58f4160fecd984f','b6f5b2318a59a2f4615d09b95c4ca401ec6af6070b0668cce9c199313bb248f9'];
+    // Exact qualified cold/warm factories across the supported resource builds.
+    // This serialized guard must accept every profile's reviewed variants.
+    const infoVariants=['2da587c4e01a8b7b5bcbaea93f8172fab4d3b7f0e9a45e00d58f4160fecd984f','b6f5b2318a59a2f4615d09b95c4ca401ec6af6070b0668cce9c199313bb248f9','c4175cb332af94f157921617461b139eba187f661b4b6f52dc534614cda07af8','de75e1ece83088351392ba5a4eb4b318a5d109485c8a04b78522cf8f1f72b30f','ac1d1aacc61583f1b00a3947603fdbfd66392f1c260e318f8fd2731fbae2f064'];
     return Object.fromEntries(entries.map(([kind,expected])=>{
       if(!Object.hasOwn(modules,kind))throw Error('DOUBAO_NATIVE_INVALID_SOURCE_IDENTITY');
       if(Array.isArray(expected)){
-        if(kind!=='conversationInfo'||!expected.length||expected.length>2||expected.some(hash=>!infoVariants.includes(hash)))throw Error('DOUBAO_NATIVE_INVALID_SOURCE_IDENTITY');
+        if(kind!=='conversationInfo'||!expected.length||expected.length>3||expected.some(hash=>!infoVariants.includes(hash)))throw Error('DOUBAO_NATIVE_INVALID_SOURCE_IDENTITY');
         return [kind,[...new Set(expected)].sort()];
       }
       if(typeof expected!=='string'||!/^[a-f0-9]{64}$/.test(expected))throw Error('DOUBAO_NATIVE_INVALID_SOURCE_IDENTITY');

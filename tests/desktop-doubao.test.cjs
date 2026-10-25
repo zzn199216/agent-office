@@ -233,16 +233,19 @@ test('public preparation fixes all eight pins and rejects source substitution be
   assert.throws(()=>buildDoubaoNativeRegistration([{id:'unknown',source:'x'}]),{code:'desktop_adapter_unsupported'});
 });
 
-test('current Doubao profile preserves exact source pins and rejects an unknown or mixed profile',async()=>{
-  const q=require('../src/doubao-native-2.33.3.json');
+for(const [profileId,file] of [['current','doubao-native-2.33.3.json'],['currentRefresh','doubao-native-2.33.3-refresh.json']])test(`${profileId} Doubao profile pins reach the native bridge and reject an unknown or mixed profile`,async()=>{
+  const q=require('../src/'+file);
   const state={contractVersion:q.contractVersion,runtimeGlobal:q.runtimeGlobal,factorySha256:q.factorySha256};
   let calls=0;
-  const value=await prepareDoubaoNativeRuntime({evaluate:async()=>++calls===1?{...state,profileId:'current',sources:[]}:state});
+  const value=await prepareDoubaoNativeRuntime({evaluate:async()=>++calls===1?{...state,profileId,sources:[]}:state});
   assert.deepEqual(value,state);assert.equal(calls,2);
+  const f=fixture(),bridge=createDoubaoNativeBridge(f.req,{...f.options,...value});
+  bridge.assertSourceIdentity(q.factorySha256);
+  await assert.rejects(bridge.initialize(),/SOURCE_IDENTITY_MISMATCH/,'fixture factories must still fail the real source hash check');
   for(const bad of [{profileId:'unknown'},{profileId:'legacy'},{profileId:'current',factorySha256:{...q.factorySha256,messages:'unqualified'}}]){
     calls=0;await assert.rejects(prepareDoubaoNativeRuntime({evaluate:async()=>{calls++;return {...state,sources:[],...bad};}}),{code:'desktop_adapter_unsupported'});assert.equal(calls,1);
   }
-  assert.throws(()=>buildDoubaoNativeRegistration([{id:q.chunks[0].id,source:'window.runBusinessSideEffect()'}],'current'),{code:'desktop_adapter_unsupported'});
+  assert.throws(()=>buildDoubaoNativeRegistration([{id:q.chunks[0].id,source:'window.runBusinessSideEffect()'}],profileId),{code:'desktop_adapter_unsupported'});
 });
 
 test('prepared drivers select stable with a simultaneous extension and preserve the cached namespace',async()=>{
