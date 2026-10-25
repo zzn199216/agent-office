@@ -173,9 +173,9 @@ class OnboardingManager{
     if(input.new_member===true&&(input.target_member_id||input.reauthorize===true))throw new RoomError('新建成员不能同时指定原人物。',400,'onboarding_target_conflict');
     if(input.new_member===true&&this.db.prepare('SELECT 1 FROM launch_proxies WHERE room_id=? AND provider=?').get(room.id,selection.provider))throw new RoomError('这个房间已经有这位成员了。',409,'onboarding_member_exists');
     if(input.reauthorize===true&&(!input.target_member_id||input.target_member_id!==target.member_id))throw new RoomError('重新授权必须明确指定原人物。',403,'connection_target_required');
-    // MCP is the default connection for desktop clients. A member that already
-    // uses another delivery mode keeps it unless the person explicitly switches.
-    if(input.connection_method===undefined&&DESKTOP.has(selection.provider))selection.connection_method=target.member?.config.desktop_delivery_mode||(this.options?.defaultDesktopMethod==='native_desktop'&&this.service.desktop?.nativeCapability(selection.provider).available?'native_desktop':'manual_mcp');
+    // Doubao defaults to automatic delivery; other desktop clients use MCP.
+    // Existing members keep their delivery mode unless explicitly switched.
+    if(input.connection_method===undefined&&DESKTOP.has(selection.provider))selection.connection_method=target.member?.config.desktop_delivery_mode||((selection.provider==='doubao'||this.options?.defaultDesktopMethod==='native_desktop')&&this.service.desktop?.nativeCapability(selection.provider).available?'native_desktop':'manual_mcp');
     const switchingMethod=!!target.member?.config.desktop_delivery_mode&&target.member.config.desktop_delivery_mode!==selection.connection_method;
     if(!target.blocked&&!target.fixed_proxy)this.setDeliveryMethod(target.member_id,selection.connection_method);
     const previous=!switchingMethod&&this.db.prepare('SELECT * FROM onboarding_runs WHERE room_id=? AND provider=? AND mode=? ORDER BY created DESC,rowid DESC').all(room.id,selection.provider,selection.mode).find(candidate=>{

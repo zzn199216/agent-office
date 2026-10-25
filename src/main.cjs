@@ -173,7 +173,7 @@ async function main(args=process.argv.slice(2)){
     if(entry)throw new RoomError('接入成员是用户初始化操作，不能从成员业务入口执行。',403);
     const providers=typeof options.providers==='string'?options.providers.split(',').map(p=>p.trim()).filter(Boolean):[];
     if(!providers.length)throw new RoomError('请明确指定用户点名的成员，例如 --providers codex。扫描请用 scan-agents，不会自动接入。',400,'selection_required');
-    let state=await api('/api/launch/prepare',{room_id:options.room,project_id:options.project,project_path:options['project-path'],project_name:options['project-name'],goal:options.goal,providers,install_clients:!!options['install-clients']});
+    let state=await api('/api/launch/prepare',{room_id:options.room,project_id:options.project,project_path:options['project-path'],project_name:options['project-name'],goal:options.goal,group_name:options['group-name'],providers,install_clients:!!options['install-clients']});
     if(options.wait){const end=Date.now()+Math.min(300,Math.max(0,Number(options.wait)||0))*1000;while(state.status==='preparing'&&Date.now()<end){await sleep(800);state=await api(`/api/launch/state?session_id=${encodeURIComponent(state.id)}`);}}
     print(state);return;
   }

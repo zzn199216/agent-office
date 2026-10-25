@@ -225,12 +225,24 @@ test('runtime capture reuses only its namespace and preparation refuses an exten
 
 test('public preparation fixes all eight pins and rejects source substitution before its execution phase',async()=>{
   const state={contractVersion:DOUBAO_NATIVE_CONTRACT.version,runtimeGlobal:DOUBAO_NATIVE_PREPARATION.runtimeGlobal,factorySha256:{...DOUBAO_NATIVE_PREPARATION.factorySha256}};
-  const calls=[];const transport={evaluate:async code=>{calls.push(code);return calls.length===1?{...state,sources:[]}:state;}};
+  const calls=[];const transport={evaluate:async code=>{calls.push(code);return calls.length===1?{...state,profileId:'legacy',sources:[]}:state;}};
   const prepared=await prepareDoubaoNativeRuntime(transport);assert.deepEqual(prepared,state);assert.equal(calls.length,2);
   assert.equal(calls[1].includes('req.e('),false);assert.equal(prepared.runtimeKey,undefined);assert.equal(prepared.nativeChatId,undefined);
-  const badCalls=[];await assert.rejects(prepareDoubaoNativeRuntime({evaluate:async code=>{badCalls.push(code);return {...state,sources:[{id:'9365',source:'throw Error("untrusted resource")'}]};}}),{code:'desktop_adapter_unsupported'});
+  const badCalls=[];await assert.rejects(prepareDoubaoNativeRuntime({evaluate:async code=>{badCalls.push(code);return {...state,profileId:'legacy',sources:[{id:'9365',source:'throw Error("untrusted resource")'}]};}}),{code:'desktop_adapter_unsupported'});
   assert.equal(badCalls.length,1);
   assert.throws(()=>buildDoubaoNativeRegistration([{id:'unknown',source:'x'}]),{code:'desktop_adapter_unsupported'});
+});
+
+test('current Doubao profile preserves exact source pins and rejects an unknown or mixed profile',async()=>{
+  const q=require('../src/doubao-native-2.33.3.json');
+  const state={contractVersion:q.contractVersion,runtimeGlobal:q.runtimeGlobal,factorySha256:q.factorySha256};
+  let calls=0;
+  const value=await prepareDoubaoNativeRuntime({evaluate:async()=>++calls===1?{...state,profileId:'current',sources:[]}:state});
+  assert.deepEqual(value,state);assert.equal(calls,2);
+  for(const bad of [{profileId:'unknown'},{profileId:'legacy'},{profileId:'current',factorySha256:{...q.factorySha256,messages:'unqualified'}}]){
+    calls=0;await assert.rejects(prepareDoubaoNativeRuntime({evaluate:async()=>{calls++;return {...state,sources:[],...bad};}}),{code:'desktop_adapter_unsupported'});assert.equal(calls,1);
+  }
+  assert.throws(()=>buildDoubaoNativeRegistration([{id:q.chunks[0].id,source:'window.runBusinessSideEffect()'}],'current'),{code:'desktop_adapter_unsupported'});
 });
 
 test('prepared drivers select stable with a simultaneous extension and preserve the cached namespace',async()=>{

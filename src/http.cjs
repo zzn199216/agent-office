@@ -157,6 +157,7 @@ function createServer(service,{token,port=47831,onShutdown}={}) {
       if(pathname==='/api/launch/scan')return json(res,await service.launch.scan(input));
       if(pathname==='/api/launch/prepare')return json(res,await service.launch.prepare(input),202);
       if(pathname==='/api/launch/report')return json(res,service.launch.report(input));
+      if(pathname==='/api/launch/dispatch')return json(res,service.launch.dispatch(input));
       if(pathname==='/api/launch/sync')return json(res,await service.launch.sync(input));
       if(pathname==='/api/launch/sync-report')return json(res,service.launch.syncReport(input));
       if(pathname==='/api/launch/client-config')return json(res,service.launch.clientConfig(input));

@@ -272,6 +272,63 @@ async function prepareLaunch() {
   finally { launchBusy = false; renderLaunch(); action(refreshLaunch); }
 }
 function onboardingView(value) { return value?.job || value?.onboarding || value; }
+let mirrorRoom = null, mirrorSession = null, mirrorBusy = false, mirrorTimer = null, mirrorDispatched = null;
+function renderMirror(session) {
+  if (!$('mirror-dialog').open || mirrorRoom !== roomId) return;
+  mirrorSession = session;
+  const selected = (session.proxies || []).filter(p => (session.selected_providers || []).includes(p.provider));
+  const reported = selected.length && selected.every(p => p.native_group_ref);
+  $('mirror-status').textContent = session.status === 'preparing' ? '正在准备所选成员…' : reported ? selected.every(p => p.can_wake) ? 'Grok 已回报建群，成员可以自动处理；请在群内验证回答。' : 'Grok 已回报建群，部分 AI 的自动连接还需恢复。' : mirrorDispatched === session.id ? '建群请求已发送给 Grok，等待实际建群回报。' : session.handoff_file ? '建群请求已准备，等待 Grok 创建群。' : '选择成员后创建；也可以直接在 Grok 对 Bot 提出建群请求。';
+  $('mirror-members-status').innerHTML = selected.map(p => `<p>${escape(p.name)}：${p.can_wake ? '可自动处理' : '自动连接未就绪'} · ${p.native_group_ref ? 'Grok 已回报入群' : '等待入群'}</p>`).join('');
+  $('mirror-create').textContent = reported ? '更新所选成员' : '创建镜像群';
+  $('mirror-create').disabled = mirrorBusy || session.status === 'preparing';
+  $('mirror-prompt').textContent = session.grok_prompt || '';
+  $('mirror-handoff').classList.toggle('hidden', !session.handoff_file || session.status === 'preparing' || !!reported || mirrorDispatched === session.id);
+}
+async function refreshMirror() {
+  const selected = mirrorRoom, sessionId = mirrorSession?.id;
+  if (!selected || selected !== roomId) return;
+  const session = await api(`/api/launch/state?${sessionId ? `session_id=${encodeURIComponent(sessionId)}` : `room_id=${encodeURIComponent(selected)}`}`);
+  if (selected === roomId && mirrorRoom === selected) renderMirror(session);
+}
+async function showMirror() {
+  if (!roomId || legacyId || !history?.room) { toast('请先选择聊天室。'); return; }
+  mirrorRoom = roomId; mirrorSession = null; $('mirror-error').textContent = '';
+  $('mirror-name').value = `Agent Office · ${history.room.title} · 手机协作`;
+  const people = (history.participants || []).filter(p => !['grok-proxy','grok-bridge'].includes(p.adapter));
+  $('mirror-members').innerHTML = '<legend>选择入群的 AI</legend>' + people.map(p => `<label class="checkbox-row"><input type="checkbox" name="mirror-provider" value="${escape(p.provider || p.adapter)}">${escape(p.name)}</label>`).join('');
+  $('mirror-bridge').innerHTML = (history.participants || []).filter(p => p.adapter === 'grok-bridge').map(p => `<option value="${escape(p.id)}">${escape(p.name)}</option>`).join('');
+  $('mirror-handoff').classList.add('hidden'); $('mirror-dialog').showModal(); await refreshMirror();
+  clearUITimeout(mirrorTimer); mirrorTimer = setUITimeout(() => action(pollMirror),2000);
+}
+async function pollMirror() {
+  if (!$('mirror-dialog').open || mirrorRoom !== roomId) return;
+  try { await dispatchMirror(); } finally {
+    if ($('mirror-dialog').open && mirrorRoom === roomId) mirrorTimer = setUITimeout(() => action(pollMirror),3000);
+  }
+}
+async function createMirror(event) {
+  event.preventDefault(); if (mirrorBusy || mirrorRoom !== roomId) return;
+  const selected = mirrorRoom, providers = [...new Set([...$('mirror-members').querySelectorAll('input:checked')].map(el => el.value))];
+  if (!providers.length) { $('mirror-error').textContent = '请勾选要入群的 AI。'; return; }
+  mirrorBusy = true; $('mirror-create').disabled = true; $('mirror-error').textContent = '';
+  try {
+    const session = await api('/api/launch/prepare',{room_id:selected,providers,group_name:$('mirror-name').value.trim(),install_clients:false});
+    if (selected !== roomId || selected !== mirrorRoom) return;
+    renderMirror(session);
+  } catch (error) { if (selected === mirrorRoom) $('mirror-error').textContent = error.message; }
+  finally { mirrorBusy = false; if (mirrorSession) renderMirror(mirrorSession); }
+}
+async function dispatchMirror() {
+  await refreshMirror();
+  if (!mirrorSession?.handoff_file || mirrorSession.status === 'preparing' || mirrorRoom !== roomId) return;
+  if (mirrorDispatched === mirrorSession.id || (mirrorSession.proxies || []).filter(p => mirrorSession.selected_providers?.includes(p.provider)).every(p => p.native_group_ref)) return;
+  const selected = mirrorRoom, memberId = $('mirror-bridge').value;
+  if (!memberId) return;
+  const result = await api('/api/launch/dispatch',{session_id:mirrorSession.id,member_id:memberId});
+  if (selected !== roomId || selected !== mirrorRoom) return;
+  if (result.dispatch?.status === 'queued') { mirrorDispatched = mirrorSession.id; renderMirror(result); }
+}
 function captureOnboardingAttempt(job){
   return {flow:secretaryNavigation,roomId,projectId,jobId:job.id,provider:job.provider,memberId:job.member_id||null,pickerJobId:secretaryConnectJob,pickerRoomId:secretaryConnectRoom};
 }
@@ -1923,6 +1980,14 @@ $('launch-self-handshakes').onclick = event => { const button = event.target.clo
   } finally { button.disabled = false; }
 }); };
 $('launch-prepare').onclick = () => action(prepareLaunch);
+$('mirror-open').onclick = () => action(showMirror);
+$('mirror-form').onsubmit = event => action(() => createMirror(event));
+$('mirror-check').onclick = () => action(dispatchMirror);
+$('mirror-copy').onclick = () => action(async () => {
+  if (mirrorRoom !== roomId || !mirrorSession?.grok_prompt) return;
+  await navigator.clipboard.writeText(mirrorSession.grok_prompt); toast('已复制，发给 Grok 即可继续。');
+});
+$('mirror-dialog').addEventListener('close', () => { clearUITimeout(mirrorTimer); mirrorRoom = null; mirrorSession = null; mirrorDispatched = null; });
 $('launch-refresh').onclick = () => action(async () => { launchError = ''; await refreshLaunch(); });
 $('launch-copy').onclick = () => action(async () => { if (!launchSession?.grok_prompt || !launchSession.handoff_file || launchSession.status === 'preparing' || launchBusy) return; try { await navigator.clipboard.writeText(launchSession.grok_prompt); toast('本次接入说明已复制，只包含你指定的成员。'); } catch (error) { document.querySelector('.launch-instructions').open = true; toast('自动复制未完成，本次说明已展开，可手动复制。'); } });
 for (const id of ['add-room','welcome-room','mobile-add-room']) $(id).onclick = () => showRoom();

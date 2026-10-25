@@ -92,6 +92,39 @@ async function nativeMember(v, name) {
   await until(() => v.service.chat.store.member(member.id).status === 'ready' && !v.service.chat.active.has(member.id));
   return member;
 }
+
+test('explicit mirror group intent is shared by setup tools and durable handoff, existing group wins', async t => {
+  const v=setup(t), state=await prepared(v,{group_name:'我的手机办公室'});
+  assert.equal(state.group_name,'我的手机办公室');
+  assert.match(fs.readFileSync(state.handoff_file,'utf8'),/明确授权新建镜像群/);
+  const p=state.proxies[0];
+  v.service.launch.report({session_id:state.id,proxy_id:p.id,name:p.name,bot_ref:'real-bot',group_ref:'real-group',joined:true});
+  v.service.launch.handoff(state.id);
+  const text=fs.readFileSync(state.handoff_file,'utf8');assert.match(text,/已经绑定实际群 real-group/);assert.doesNotMatch(text,/明确授权新建镜像群/);
+  const added=await prepared(v,{providers:['doubao'],group_name:'不应重复创建'});
+  const addText=fs.readFileSync(added.handoff_file,'utf8');assert.match(addText,/已经绑定实际群 real-group/);assert.doesNotMatch(addText,/明确授权新建镜像群/);
+});
+
+test('AO dispatch requires a participating Grok bridge and never queues an unwakeable mailbox', async t => {
+  const v=setup(t), state=await prepared(v,{group_name:'手机办公室'});
+  const g=v.service.chat.addMember({name:'Grok',adapter:'grok-bridge'});
+  assert.throws(()=>v.service.launch.dispatch({session_id:state.id,member_id:g.id}),{code:'not_in_room'});
+  v.service.chat.join(v.room.id,g.id);
+  const before=v.service.chat.store.db.prepare('SELECT count(*) AS n FROM chat_messages').get().n;
+  assert.equal(v.service.launch.dispatch({session_id:state.id,member_id:g.id}).dispatch.status,'needs_grok_activation');
+  assert.equal(v.service.chat.store.db.prepare('SELECT count(*) AS n FROM chat_messages').get().n,before);
+  assert.throws(()=>v.service.launch.dispatch({session_id:state.id,member_id:state.proxies[0].backend_member_id}),{code:'grok_bridge_required'});
+});
+
+test('AO group dispatch is idempotent and a notification receipt is not group success', async t => {
+  const v=setup(t), state=await prepared(v,{group_name:'手机办公室'});
+  const g=v.service.chat.addMember({name:'Grok',adapter:'grok-bridge'});v.service.chat.join(v.room.id,g.id);
+  const capability=v.service.chat.deliveryCapability.bind(v.service.chat);
+  v.service.chat.deliveryCapability=m=>(typeof m==='string'?m:m.id)===g.id?{can_notify:true,notification_eligible:false}:capability(m);
+  const a=v.service.launch.dispatch({session_id:state.id,member_id:g.id}),b=v.service.launch.dispatch({session_id:state.id,member_id:g.id});
+  assert.equal(a.dispatch.message_id,b.dispatch.message_id);assert.equal(a.dispatch.status,'queued');assert.equal(a.status,'awaiting_grok');
+  assert.ok(a.proxies.every(p=>!p.native_group_ref));
+});
 function environment(t, values = {}) {
   const keys = ['AGENTROOM_SETUP_MODE', 'AGENTROOM_MEMBER_ID', 'AGENTROOM_ROOM_ID', 'AGENTROOM_CALLER', 'AGENTROOM_PROXY_ID'];
   const previous = Object.fromEntries(keys.map(key => [key, process.env[key]]));

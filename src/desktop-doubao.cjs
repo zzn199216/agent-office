@@ -6,7 +6,7 @@ const {createHash} = require('node:crypto');
 const DOUBAO_NATIVE_CONTRACT = Object.freeze({
   version:'doubao-desktop-native-v1',
   adapterRevision:'doubao-native-adapter-v4',
-  researchedProductVersion:'2.32.4',
+  researchedProductVersion:'2.33.3',
   runtimeGlobals:Object.freeze(['@flow-web/desktop:stable','webpackChunkflow_web_extension']),
 });
 
@@ -32,6 +32,8 @@ const DOUBAO_NATIVE_PREPARATION = Object.freeze({
   }),
   externalModuleIds:Object.freeze([71197,71834,98027,135193,201183,201753,246058,253349,325457,367173,368415,376999,378437,386196,456462,460932,470476,540864,542525,544349,557526,600919,609347,632649,656207,687323,708078,718587,737937,744331,761336,788925,834523,860268,894119,879807,521109,196183,491575,37476,198837,17344]),
 });
+
+const DOUBAO_NATIVE_PROFILES = Object.freeze({legacy:DOUBAO_NATIVE_PREPARATION,current:require('./doubao-native-2.33.3.json')});
 
 // Empty Webpack chunks capture only the runtime; no business factory is called.
 // The cache keeps each runtime namespace separate and rejects replaced arrays.
@@ -114,8 +116,8 @@ async function applyDoubaoNativeFactories(req, qualification, registrations, ass
   for (const chunk of qualification.chunks) if (missing.includes(chunk.kind)) {
     const register=registrations[chunk.id];
     if(typeof register!=='function')throw Error('DOUBAO_NATIVE_PREPARATION_SOURCE_UNAVAILABLE');
-    // These callbacks contain the exact host-verified pure-push bytes. Chunk
-    // registration marks them loaded; no second download or req.e is needed.
+    // These callbacks contain the exact host-verified bytes. Registration only
+    // supplies missing factories; no business factory or chunk runtime runs.
     register();checkMapping();
   }
   await verifyDoubaoNativeFactories(req,qualification,false);checkMapping();
@@ -129,23 +131,28 @@ function buildDoubaoNativePreparation() {
     const captureDoubaoRuntime=${captureDoubaoRuntime.toString()};
     const verifyDoubaoNativeFactories=${verifyDoubaoNativeFactories.toString()};
     const prepareDoubaoNativeFactories=${prepareDoubaoNativeFactories.toString()};
-    const qualification=${JSON.stringify(DOUBAO_NATIVE_PREPARATION)};
-    const captured=await captureDoubaoRuntime(qualification.runtimeGlobal);
+    const profiles=${JSON.stringify(DOUBAO_NATIVE_PROFILES)};
+    const captured=await captureDoubaoRuntime(profiles.current.runtimeGlobal);
+    const selected=Object.entries(profiles).filter(([,q])=>q.chunks.every(c=>captured.req.u(c.id)===c.path));
+    if(selected.length!==1)throw Error('DOUBAO_NATIVE_PREPARATION_UNSUPPORTED_SOURCE');
+    const [profileId,qualification]=selected[0];
     const assertRuntime=()=>{if(window[qualification.runtimeGlobal]!==captured.chunks)throw Error('DOUBAO_NATIVE_PREPARATION_RUNTIME_CHANGED');};
     const symbol=Symbol.for('agentoffice.doubao.preparation.v1');
     let state=window[symbol];
     if(state&&(state.req!==captured.req||state.chunks!==captured.chunks))throw Error('DOUBAO_NATIVE_PREPARATION_RUNTIME_CHANGED');
     if(!state){state={req:captured.req,chunks:captured.chunks,pending:null};Object.defineProperty(window,symbol,{value:state});}
     if(!state.pending)state.pending=prepareDoubaoNativeFactories(captured.req,qualification,assertRuntime).finally(()=>{state.pending=null;});
-    const result=await state.pending;assertRuntime();return result;
+    const result=await state.pending;assertRuntime();return {...result,profileId};
   })()`;
 }
 
-function buildDoubaoNativeRegistration(sources) {
+function buildDoubaoNativeRegistration(sources,profileId='legacy') {
+  const profile=DOUBAO_NATIVE_PROFILES[profileId];
+  if(!profile)throw new RoomError('原生豆包版本尚未通过源码校验。',409,'desktop_adapter_unsupported');
   if(!Array.isArray(sources)||sources.length>2)throw new RoomError('原生豆包资源未通过源码校验。',409,'desktop_adapter_unsupported');
   const ids=new Set();
   for(const entry of sources){
-    const chunk=DOUBAO_NATIVE_PREPARATION.chunks.find(chunk=>chunk.id===entry?.id);
+    const chunk=profile.chunks.find(chunk=>chunk.id===entry?.id);
     if(!chunk||ids.has(entry.id)||typeof entry.source!=='string'||createHash('sha256').update(entry.source,'utf8').digest('hex')!==chunk.sha256)throw new RoomError('原生豆包资源未通过源码校验。',409,'desktop_adapter_unsupported');
     ids.add(entry.id);
   }
@@ -155,13 +162,15 @@ function buildDoubaoNativeRegistration(sources) {
     const captureDoubaoRuntime=${captureDoubaoRuntime.toString()};
     const verifyDoubaoNativeFactories=${verifyDoubaoNativeFactories.toString()};
     const applyDoubaoNativeFactories=${applyDoubaoNativeFactories.toString()};
-    const qualification=${JSON.stringify(DOUBAO_NATIVE_PREPARATION)};
+    const qualification=${JSON.stringify(profile)};
     const captured=await captureDoubaoRuntime(qualification.runtimeGlobal);
     const assertRuntime=()=>{if(window[qualification.runtimeGlobal]!==captured.chunks)throw Error('DOUBAO_NATIVE_PREPARATION_RUNTIME_CHANGED');};
     const symbol=Symbol.for('agentoffice.doubao.preparation.apply.v1');let state=window[symbol];
     if(state&&(state.req!==captured.req||state.chunks!==captured.chunks))throw Error('DOUBAO_NATIVE_PREPARATION_RUNTIME_CHANGED');
     if(!state){state={req:captured.req,chunks:captured.chunks,pending:null};Object.defineProperty(window,symbol,{value:state});}
-    const registrations={${sources.map(entry=>`${JSON.stringify(entry.id)}:()=>{\n${entry.source}\n}`).join(',')}};
+    // Register missing, hash-qualified factories only. Never run a chunk's
+    // optional runtime callback or mark its normal application loading complete.
+    const registrations={${sources.map(entry=>`${JSON.stringify(entry.id)}:()=>{\nconst window={[qualification.runtimeGlobal]:{push:entry=>{for(const [id,factory] of Object.entries(entry[1]))if(!captured.req.m[id])captured.req.m[id]=factory;}}};\n${entry.source}\n}`).join(',')}};
     if(!state.pending)state.pending=applyDoubaoNativeFactories(captured.req,qualification,registrations,assertRuntime).finally(()=>{state.pending=null;});
     const result=await state.pending;assertRuntime();return result;
   })()`;
@@ -170,12 +179,13 @@ function buildDoubaoNativeRegistration(sources) {
 async function prepareDoubaoNativeRuntime(transport) {
   if(typeof transport?.evaluate!=='function')throw new RoomError('需要已连接的原生桌面通道。',400,'desktop_bridge_unavailable');
   const fetched=await transport.evaluate(buildDoubaoNativePreparation(),30000);
-  const valid=state=>state?.contractVersion===DOUBAO_NATIVE_CONTRACT.version&&state.runtimeGlobal===DOUBAO_NATIVE_PREPARATION.runtimeGlobal
-    &&JSON.stringify(state.factorySha256)===JSON.stringify(DOUBAO_NATIVE_PREPARATION.factorySha256);
+  const profile=DOUBAO_NATIVE_PROFILES[fetched?.profileId];
+  const valid=state=>!!profile&&state?.contractVersion===DOUBAO_NATIVE_CONTRACT.version&&state.runtimeGlobal===profile.runtimeGlobal
+    &&JSON.stringify(state.factorySha256)===JSON.stringify(profile.factorySha256);
   if(!valid(fetched))throw new RoomError('原生豆包资源尚未通过源码校验。',409,'desktop_adapter_unsupported');
-  const prepared=await transport.evaluate(buildDoubaoNativeRegistration(fetched.sources),30000);
+  const prepared=await transport.evaluate(buildDoubaoNativeRegistration(fetched.sources,fetched.profileId),30000);
   if(!valid(prepared))throw new RoomError('原生豆包资源尚未通过源码校验。',409,'desktop_adapter_unsupported');
-  return {contractVersion:prepared.contractVersion,runtimeGlobal:prepared.runtimeGlobal,factorySha256:{...DOUBAO_NATIVE_PREPARATION.factorySha256}};
+  return {contractVersion:prepared.contractVersion,runtimeGlobal:prepared.runtimeGlobal,factorySha256:{...profile.factorySha256}};
 }
 
 // Source discovery precedes require: a guessed missing module poisons Webpack's

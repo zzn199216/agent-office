@@ -71,14 +71,24 @@ test('presentation is projection only: input snapshots are not mutated',()=>{
   const before=JSON.stringify(input);present(input);assert.equal(JSON.stringify(input),before);
 });
 
-test('a new desktop member defaults to MCP: config first, then the sentence; an existing debug-port member keeps its route',async t=>{
+test('new Doubao setup requires automatic connection and does not report mailbox readiness',async t=>{
+  const {RoomService}=require('../src/service.cjs'),{fixture,FakeCodex,FakeVault}=require('./helpers.cjs');
+  const files=fixture(),service=new RoomService(files.data,{codex:new FakeCodex(),vault:new FakeVault(),fetch:async()=>{throw Error('No real client');},launch:{discover:()=>({candidates:[{id:'doubao',provider:'doubao',name:'豆包',adapter:'mailbox',installed:true,capabilities:{mcp_prepare:true}}]})}});
+  t.after(async()=>{await service.close();fs.rmSync(files.root,{recursive:true,force:true});});
+  const project=service.addProject({name:'automatic',path:files.project}),room=service.chat.addRoom({project_id:project.id,title:'room'});
+  const job=service.onboarding.start({provider:'doubao',room_id:room.id});await Promise.all([...service.onboarding.jobs.values()]);
+  const state=service.onboarding.state({run_id:job.id});assert.equal(state.connection_method,'native_desktop');assert.equal(state.can_wake,false);assert.equal(state.ready_for_office,false);
+  assert.ok(state.next_actions.some(a=>a.operation==='open_native_client'));
+});
+
+test('explicit MCP keeps config-first setup and an existing automatic member keeps its route',async t=>{
   const {RoomService}=require('../src/service.cjs'),{fixture,FakeCodex,FakeVault}=require('./helpers.cjs');
   const files=fixture(),service=new RoomService(files.data,{codex:new FakeCodex(),vault:new FakeVault(),fetch:async()=>{throw Error('external requests prohibited');},
     launch:{discover:()=>({candidates:['qwen-desktop','doubao'].map(provider=>({id:provider,provider,name:provider,adapter:'mailbox',installed:true,capabilities:{mcp_prepare:true}}))})}});
   t.after(async()=>{await service.close();fs.rmSync(files.root,{recursive:true,force:true});});
   const project=service.addProject({name:'defaults',path:files.project}),room=service.chat.addRoom({project_id:project.id,title:'room'});
   for(const provider of ['doubao','qwen-desktop']){
-    const job=service.onboarding.start({provider,room_id:room.id});await Promise.all([...service.onboarding.jobs.values()]);
+    const job=service.onboarding.start({provider,room_id:room.id,connection_method:'manual_mcp'});await Promise.all([...service.onboarding.jobs.values()]);
     const state=service.onboarding.state({run_id:job.id});
     assert.equal(state.connection_method,'manual_mcp',provider);
     assert.equal(state.presentation.state,'waiting');
@@ -107,7 +117,7 @@ test('an MCP member gets the MCP config guide, the dialog gets the same presenta
   t.after(async()=>{await service.close();fs.rmSync(files.root,{recursive:true,force:true});});
   service._localUrl='http://127.0.0.1:47831';
   const project=service.addProject({name:'guide',path:files.project}),room=service.chat.addRoom({project_id:project.id,title:'room'});
-  const job=service.onboarding.start({provider:'doubao',room_id:room.id});await Promise.all([...service.onboarding.jobs.values()]);
+  const job=service.onboarding.start({provider:'doubao',room_id:room.id,connection_method:'manual_mcp'});await Promise.all([...service.onboarding.jobs.values()]);
   const state=service.onboarding.state({run_id:job.id}),setup=service.chat.setup(state.member_id,room.id);
   assert.equal(setup.client.kind,'http_fields');assert.match(setup.client.copy,/^http:\/\/127\.0\.0\.1:47831\/mcp\//);assert.ok(setup.client.bootstrap.length>0);
   assert.deepEqual(setup.presentation,state.presentation);

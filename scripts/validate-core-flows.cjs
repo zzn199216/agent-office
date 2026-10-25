@@ -124,6 +124,9 @@ async function main() {
       await page.locator('#room-form button[type="submit"]').click();firstRoom=await(await created).json();
       await connect();
       const panel=page.locator('#secretary-connect-progress .connection-panel');
+      // Doubao now defaults to automatic delivery. This isolated journey also
+      // verifies the explicit MCP fallback; a real desktop is never invoked.
+      await panel.locator('[data-conn-op="manual_mcp"]').click();
       await panel.locator('[data-conn-op="copy_config"]').click();
       await page.waitForFunction(()=>typeof window.fixtureClipboard==='string');
       endpoint=await page.evaluate(()=>window.fixtureClipboard);
