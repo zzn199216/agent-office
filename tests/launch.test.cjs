@@ -125,6 +125,20 @@ test('AO group dispatch is idempotent and a notification receipt is not group su
   assert.equal(a.dispatch.message_id,b.dispatch.message_id);assert.equal(a.dispatch.status,'queued');assert.equal(a.status,'awaiting_grok');
   assert.ok(a.proxies.every(p=>!p.native_group_ref));
 });
+for(const denied of [false,true])test(`AO mirror dispatch checks cold saved notification credentials once, denied=${denied}`,async t=>{
+  const v=setup(t),state=await prepared(v,{providers:['codex'],group_name:'恢复后的群'});
+  let unlocks=0,posts=0;v.service.fetch=async()=>{posts++;return {ok:true,json:async()=>({success:true})};};
+  const g=v.service.chat.addMember({name:'Cold Grok',adapter:'grok-bridge'});v.service.chat.join(v.room.id,g.id);
+  v.service.chat.store.updateMember(g.id,{status:'ready',verified_at:new Date().toISOString(),config:{webhook_enabled:true}});
+  const vault=new (require('../src/vault.cjs').Vault)(path.join(v.data,'members',g.id),{platform:'win32',dpapi:()=>{unlocks++;if(denied)throw Error('fixture unlock denied');return JSON.stringify({url:'https://api2.cursor.sh/automations/webhook/cold-mirror-fixture',key:'fixture-only-secret'});}});
+  fs.mkdirSync(path.dirname(vault.file),{recursive:true});fs.writeFileSync(vault.file,JSON.stringify({mode:'dpapi',value:'fixture-ciphertext'}));
+  v.service.chat.memberVaults.set(g.id,{vault,stamp:v.service.chat.memberVaultStamp(vault.file)});
+  assert.equal(v.service.chat.deliveryCapability(g.id).can_notify,false);assert.equal(unlocks,0);
+  const input={session_id:state.id,member_id:g.id};
+  if(denied){assert.throws(()=>v.service.launch.dispatch(input),{code:'vault_unavailable'});assert.equal(v.service.chat.store.db.prepare('SELECT count(*) AS n FROM chat_messages WHERE to_member_id=?').get(g.id).n,0);assert.equal(posts,0);}
+  else {const first=v.service.launch.dispatch(input);assert.equal(first.dispatch.status,'queued');const second=v.service.launch.dispatch(input);assert.equal(first.dispatch.message_id,second.dispatch.message_id);await until(()=>v.service.chat.store.notification(first.dispatch.message_id)?.status==='accepted');assert.equal(posts,1);}
+  assert.equal(unlocks,1);
+});
 function environment(t, values = {}) {
   const keys = ['AGENTROOM_SETUP_MODE', 'AGENTROOM_MEMBER_ID', 'AGENTROOM_ROOM_ID', 'AGENTROOM_CALLER', 'AGENTROOM_PROXY_ID'];
   const previous = Object.fromEntries(keys.map(key => [key, process.env[key]]));

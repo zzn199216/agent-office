@@ -302,6 +302,10 @@ class LaunchManager{
     this.service.chat.store.requireParticipant(session.room_id,input.member_id);
     const member=this.service.chat.store.member(input.member_id);
     if(member.adapter!=='grok-bridge')throw new RoomError('请选择本房间接通的 Grok Bot。',400,'grok_bridge_required');
+    const delivery=this.service.chat.deliveryCapability(member);
+    // A cold DPAPI record is deliberately not unlocked by status reads. This
+    // explicit dispatch is the first delivery attempt after a service restart.
+    if(delivery.notification_eligible&&delivery.notification_usable===null)this.service.chat.notificationCredential(member);
     if(!this.service.chat.deliveryCapability(member).can_notify)return {...session,dispatch:{status:'needs_grok_activation',instruction:session.grok_prompt}};
     const message=this.service.chat.post({room_id:session.room_id,sender_id:'user',to_member_id:member.id,text:session.grok_prompt,idempotency_key:`mirror:${session.id}`});
     return {...session,dispatch:{status:'queued',message_id:message.id}};
