@@ -35,19 +35,31 @@ function fixture(){
     for(let i=0;i<5;i++)await new Promise(resolve=>setImmediate(resolve));
     return button;
   };
-  return {context,message,reply,calls,jobs,view,assist,click,render:value=>context.renderMessage(value,[message,reply])};
+  return {context,message,reply,calls,jobs,view,assist,click,render:value=>context.renderMessage(value,context.history.messages)};
 }
 
-test('the card sits under the person\'s own request as Agent Office, never inside the agent reply',()=>{
+test('the live card sits inside the addressed reply bubble, not above it',()=>{
   const f=fixture();f.context.history.connection_assists=[f.assist(f.view('waiting'))];
   const own=f.render(f.message),answer=f.render(f.reply);
-  assert.match(own,/<\/article><section class="ao-system-card"/);assert.match(own,/Agent Office/);assert.match(own,/豆包还没连上/);
-  assert.doesNotMatch(answer,/ao-system-card|data-conn-op/);
+  assert.doesNotMatch(own,/ao-system-card|data-conn-op/);
+  assert.match(answer,/<div class="fixture-content">[^]*<section class="ao-system-card"[^]*<div class="message-footer">/);
+  assert.match(answer,/Agent Office · 当前连接状态/);assert.match(answer,/豆包还没连上/);
+  f.context.history.connection_assists=[f.assist(f.view('connected',{headline:'豆包已连接',primary:null,secondary:null}))];
+  assert.match(f.render(f.reply),/豆包已连接/);assert.doesNotMatch(f.render(f.reply),/豆包还没连上|data-conn-op/);
+});
+
+test('pending requests retain the card, then only the first matching reply owns it',()=>{
+  const f=fixture();f.context.history.connection_assists=[f.assist(f.view('waiting'))];
+  const foreign={...f.reply,id:'foreign',sender_id:'target'},otherRoom={...f.reply,id:'other-room',room_id:'other'};
+  f.context.history.messages=[f.message,foreign,otherRoom];
+  assert.match(f.render(f.message),/ao-system-card/);assert.doesNotMatch(f.render(foreign),/ao-system-card/);assert.doesNotMatch(f.render(otherRoom),/ao-system-card/);
+  const later={...f.reply,id:'later'};f.context.history.messages.push(f.reply,later);
+  assert.doesNotMatch(f.render(f.message),/ao-system-card/);assert.match(f.render(f.reply),/ao-system-card/);assert.doesNotMatch(f.render(later),/ao-system-card/);
 });
 
 test('one status line, at most two buttons, and errors only inside closed details',()=>{
   const f=fixture();f.context.history.connection_assists=[f.assist(f.view('attention',{details:{error:'connect ECONNREFUSED 127.0.0.1:19246',member_id:'target'}}))];
-  const html=f.render(f.message);
+  const html=f.render(f.reply);
   assert.equal((html.match(/data-conn-op=/g)||[]).length,2);
   assert.match(html,/class="primary" data-conn-op="copy_config"/);assert.match(html,/class="secondary" data-conn-op="copy_handshake_prompt"/);
   assert.match(html,/<details class="connection-panel-details"><summary>详情<\/summary><p class="small-note">connect ECONNREFUSED/);
@@ -59,12 +71,12 @@ test('connected states have no copy actions and busy states disable their button
   f.context.history.connection_assists=[f.assist(f.view('auto',{headline:'豆包已连接，有消息会自动处理',primary:null,secondary:null}))];
   assert.doesNotMatch(f.render(f.message),/data-conn-op/);
   f.context.history.connection_assists=[f.assist(f.view('waiting',{busy:true,headline:'正在连接豆包…',primary:{operation:'retry',label:'重试'},secondary:null}))];
-  assert.match(f.render(f.message),/data-conn-op="retry"[^>]* disabled/);
+  assert.match(f.render(f.reply),/data-conn-op="retry"[^>]* disabled/);
 });
 
 test('Doubao connector steps stay visible and escaped in every shared connection card',()=>{
   const f=fixture(),view=require('../src/member-connection.cjs').present({provider:'doubao',status:'needs_action',stage:'awaiting_handshake'});
-  f.context.history.connection_assists=[f.assist(view)];const html=f.render(f.message);
+  f.context.history.connection_assists=[f.assist(view)];const html=f.render(f.reply);
   assert.match(html,/connection-panel-steps/);assert.match(html,/本地电脑/);assert.match(html,/包含的操作/);assert.match(html,/在对话中试用/);assert.match(html,/复制连接地址/);assert.match(html,/复制验证语句/);
   assert.equal((html.match(/data-conn-op=/g)||[]).length,2);
   view.steps=['<img src=x onerror=alert(1)>'];assert.doesNotMatch(f.context.connectionPanelMarkup(view,{source:'member',id:'m'}),/<img/);
@@ -73,7 +85,7 @@ test('Doubao connector steps stay visible and escaped in every shared connection
 test('only records for this room, this human request and its actual recipient render, and every field is escaped',()=>{
   const f=fixture(),bad='<img src=x onerror=alert(1)>';
   f.context.history.connection_assists=[f.assist(f.view('waiting',{headline:bad,primary:{operation:'copy_config',label:bad}})),f.assist(f.view('waiting'),{id:'foreign-room',room_id:'other'}),f.assist(f.view('waiting'),{id:'foreign-recipient',member_id:'target'})];
-  const html=f.render(f.message);
+  const html=f.render(f.reply);
   assert.doesNotMatch(html,/<img/);assert.match(html,/&lt;img src=x/);
   assert.equal((html.match(/class="connection-panel"/g)||[]).length,1);
   assert.doesNotMatch(f.render({...f.message,coordination:true}),/ao-system-card/);

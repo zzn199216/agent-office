@@ -24,7 +24,7 @@ test('a real controller chat message prepares the selected connection before the
   const v=await setup(t),key=id(),posted=await v.send({idempotency_key:key});assert.equal(posted.response.status,202);
   assert.equal((await answered(v.service,posted.data.id)).status,'answered');
   assert.equal(v.calls.length,1);assert.deepEqual(v.calls[0],{room_id:v.room.id,provider:'doubao',install_client:false,install_runtime:false});
-  assert.match(v.prompts[0],/下方显示接入卡片/);assert.match(v.prompts[0],/"provider":"doubao"/);assert.match(v.prompts[0],/"can_wake":true/);
+  assert.match(v.prompts[0],/回复气泡内显示接入卡片/);assert.match(v.prompts[0],/"provider":"doubao"/);assert.match(v.prompts[0],/"can_wake":true/);
   const history=v.service.chat.room(v.room.id);assert.equal(history.connection_assists.length,1);assert.equal(history.connection_assists[0].member_id,v.actor.id);assert.equal(history.connection_assists[0].message_id,posted.data.id);
   const repeated=await v.send({idempotency_key:key});assert.equal(repeated.data.id,posted.data.id);assert.equal(v.calls.length,1);
 });

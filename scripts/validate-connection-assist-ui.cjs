@@ -11,7 +11,8 @@ const {playwright,outputDirectory}=require('./browser-validation.cjs');
   const f=fixture(),out=outputDirectory('connection-assist'),proof={isolated:true,real_clients_or_models:false,checks:{}},errors=[];
   fs.mkdirSync(out,{recursive:true});let service,server,browser,page;
   try{
-    class Actor extends FakeCodex{constructor(member){super();this.member=member;}async run(input){const thread=input.discussion.thread_id||id();input.onBinding('bound',thread);input.onTurn(id());return {threadId:thread,turnId:id(),answer:'接入进度见接入卡片。'};}}
+    let releaseReply;const replyGate=new Promise(resolve=>{releaseReply=resolve;});
+    class Actor extends FakeCodex{constructor(member){super();this.member=member;}async run(input){const thread=input.discussion.thread_id||id();input.onBinding('bound',thread);input.onTurn(id());await replyGate;return {threadId:thread,turnId:id(),answer:'请在这条回复里的接入卡片继续操作，连接状态会实时更新。'};}}
     const candidates=['doubao','qwen-desktop'].map(provider=>({id:provider,provider,name:provider==='doubao'?'豆包':'Qwen',adapter:'mailbox',installed:true,capabilities:{mcp_prepare:true}}));
     service=new RoomService(f.data,{codex:new FakeCodex(),vault:new FakeVault(),fetch:async()=>{throw Error('No external requests');},chat:{clientFactory:member=>new Actor(member)},launch:{discover:()=>({candidates})}});clearInterval(service.team.timer);
     const project=service.addProject({name:'接入流程隔离验收',path:f.project}),room=service.chat.addRoom({project_id:project.id,title:'聊天接入'}),other=service.chat.addRoom({project_id:project.id,title:'其他房间'}),actor=service.chat.addMember({name:'Codex',adapter:'codex'});
@@ -27,10 +28,13 @@ const {playwright,outputDirectory}=require('./browser-validation.cjs');
     await page.locator('#recipient').selectOption(actor.id);await page.locator('#prompt').fill('把豆包和qwen接入');await page.locator('#send-button').click();
     const card=page.locator('.ao-system-card').first();await card.waitFor();
     await page.waitForFunction(()=>document.querySelectorAll('.ao-system-card .connection-panel').length===2);
-    // The card belongs to the person's request, labelled Agent Office, not inside the agent's reply.
-    const placement=await page.evaluate(()=>{const node=document.querySelector('.ao-system-card');return {previous:node.previousElementSibling?.id||'',insideArticle:!!node.closest('article')};});
     const request=service.chat.store.db.prepare("SELECT id FROM chat_messages WHERE room_id=? AND sender_id='user' ORDER BY seq DESC LIMIT 1").get(room.id);
-    assert.equal(placement.previous,'message-'+request.id);assert.equal(placement.insideArticle,false);assert.match(await card.textContent(),/Agent Office/);proof.checks.card_under_request=true;
+    assert.equal(await card.evaluate(node=>node.closest('article')?.id),'message-'+request.id);proof.checks.pending_card_in_request=true;
+    releaseReply();await page.waitForFunction(()=>!!document.querySelector('.chat-message:not(.own-message) .message-body .ao-system-card'));
+    const reply=service.chat.store.db.prepare("SELECT id FROM chat_messages WHERE reply_to=? AND kind='reply' AND sender_id=? ORDER BY seq LIMIT 1").get(request.id,actor.id);
+    assert.equal(await card.evaluate(node=>node.closest('article')?.id),'message-'+reply.id);assert.equal(await page.locator('.ao-system-card').count(),1);
+    assert.match(await card.textContent(),/Agent Office · 当前连接状态/);proof.checks.card_inside_reply=true;
+    await page.reload();await card.waitFor();assert.equal(await card.evaluate(node=>node.closest('article')?.id),'message-'+reply.id);assert.equal(await page.locator('.ao-system-card').count(),1);proof.checks.reload_preserves_card_owner=true;
     // One status line and at most two buttons per member.
     for(const panel of await card.locator('.connection-panel').all())assert.ok(await panel.locator('[data-conn-op]').count()<=2);
     assert.doesNotMatch(await card.textContent(),/保留|沿用|本人对话|握手|没有自动重试/);proof.checks.plain_copy=true;

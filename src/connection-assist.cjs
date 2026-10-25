@@ -221,11 +221,11 @@ class ConnectionAssist{
     const rows=this.db.prepare('SELECT id FROM connection_assists WHERE message_id=?').all(messageId);if(!rows.length)return '';
     const work=Promise.allSettled(rows.map(row=>this.jobs.get(row.id)).filter(Boolean)),timeout=Math.max(0,Math.min(10000,this.options.contextWaitMs??10000));
     let timer;try{await Promise.race([work,new Promise(resolve=>{timer=setTimeout(resolve,timeout);})]);}finally{clearTimeout(timer);}
-    // The card under the user's message carries the status and the buttons.
-    // The agent's reply only acknowledges it, so nothing is said twice.
+    // The live card moves into the reply bubble when the reply arrives.
+    // Avoid freezing a connection state into historical assistant prose.
     const snapshots=this.snapshotForMessage(messageId).map(item=>({name:item.name,provider:item.provider,state:item.presentation?.state||null,headline:item.presentation?.headline||null,connection_ready:item.ready_for_office===true,automatic_ready:item.ready_for_office===true&&item.can_wake===true,can_wake:item.can_wake===true,action_kind:item.action_kind}));
-    return '\n用户请求接入成员。Agent Office 已在这条消息下方显示接入卡片，卡片里有当前状态和要点的按钮。'+
-      '你只需用一句话回应，例如「接入进度见接入卡片」；可以按 headline 简单复述一次结论；connection_ready 为 false 时不能说已接通，can_wake 为 false 时不能说会自动处理。不要列步骤、配置、路径、诊断或状态码，也不要重试、扫描、重建人物或索取凭据。\n'+
+    return '\n用户请求接入成员。Agent Office 会在你的回复气泡内显示接入卡片，卡片实时更新当前状态和操作按钮。'+
+      '你只需用一句话回应，例如「请在这条回复里的接入卡片继续操作，连接状态会实时更新。」不要在正文复述待连接或已连接等瞬时状态，以免稍后与卡片矛盾；connection_ready 为 false 时不能说已接通，can_wake 为 false 时不能说会自动处理。不要列步骤、配置、路径、诊断或状态码，也不要重试、扫描、重建人物或索取凭据。其他请求（例如创建镜像群）的完成情况应按实际结果另行说明，接入卡片不代表群已创建。\n'+
       `当前状态（只读）：${JSON.stringify(snapshots)}\n`;
   }
   document(assistId,roomId){
