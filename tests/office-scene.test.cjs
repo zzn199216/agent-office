@@ -77,6 +77,7 @@ test('current native disconnect keeps the identity station and connection step d
   const actual=scene.describe(input,now).members[0];assert.equal(actual.member,native);assert.equal(actual.presence.status,'offline');assert.equal(actual.presence.label,'本人对话未连接 · 查看连接');assert.equal(actual.presence.needsConnection,true);assert.equal(actual.occupied,false);assert.equal(actual.processing,false);assert.equal(actual.waiting,true);
   assert.equal(scene.describe({...input,online:false},now).members[0].presence.label,'服务已关闭');
   const manual={...native,connection_method:'manual'};const manualState=scene.describe({...input,participants:[manual]},now).members[0];assert.equal(manualState.presence.status,'online');assert.equal(manualState.presence.needsConnection,undefined,'explicit manual mode never inherits unrelated native failure');
+  const notification={...native,provider:'grok-bot',connection_method:'configured_notification'};assert.equal(scene.describe({...input,participants:[notification]},now).members[0].presence.needsConnection,undefined,'notification routing must not force native reconnection');
 });
 test('system messages and messages from another room are not invented as member speech',()=>{
   const messages=[{id:'real',room_id:'room-a',sender_id:member.id,text:'实际回答',created:'2026-10-13T07:59:55Z'},{id:'event',sender_id:member.id,kind:'event',text:'启动事件'},{id:'foreign',room_id:'room-b',sender_id:member.id,text:'另一个房间'}];

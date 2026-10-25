@@ -78,7 +78,7 @@ const presenceLabels = {online:'在线',stale:'心跳已过期',offline:'离线'
 function runtimeMember(id) { return (runtime?.members || runtime?.presence || []).find?.(item => (item.id || item.member_id) === id); }
 function nativeConnectionUnavailable(member={}){
   const connection=member?.desktop_connection;
-  return !!connection&&member.connection_method!=='manual'&&member.connection_method!=='manual_mcp'&&member.response_mode!=='manual_mailbox'&&connection.configured===true&&connection.can_wake===false&&(['offline','error','failed','reconnecting'].includes(connection.state)||!!connection.error);
+  return !!connection&&!['manual','manual_mcp','configured_notification'].includes(member.connection_method)&&member.response_mode!=='manual_mailbox'&&connection.configured===true&&connection.can_wake===false&&(['offline','error','failed','reconnecting'].includes(connection.state)||!!connection.error);
 }
 function nativeConnectionMessage(value,member){return value==='fetch failed'&&nativeConnectionUnavailable(member)?'本人对话尚未连接。请查看这位成员的连接步骤，开启客户端连接后继续。':value;}
 function nativeMemberEvidence(member={},fallback={}){const evidence=member?.runtime_state?.connection_evidence||fallback;return nativeConnectionUnavailable(member)?{...evidence,native_conversation_loaded:false,model_reply_verified:false,automatic_reply_verified:false}:evidence;}

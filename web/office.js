@@ -181,7 +181,7 @@
   }
   function participantPresence(member, runtime, online, now) {
     const observed = {...(runtime?.members || runtime?.presence || []).find(item => (item.id || item.member_id) === member.id), ...member.runtime_state};
-    const desktop=member.desktop_connection,nativeUnavailable=desktop&&member.connection_method!=='manual'&&member.connection_method!=='manual_mcp'&&member.response_mode!=='manual_mailbox'&&desktop.configured===true&&desktop.can_wake===false&&(['offline','error','failed','reconnecting'].includes(desktop.state)||!!desktop.error);
+    const desktop=member.desktop_connection,nativeUnavailable=desktop&&!['manual','manual_mcp','configured_notification'].includes(member.connection_method)&&member.response_mode!=='manual_mailbox'&&desktop.configured===true&&desktop.can_wake===false&&(['offline','error','failed','reconnecting'].includes(desktop.state)||!!desktop.error);
     if(nativeUnavailable)return {status:'offline',label:online?'本人对话未连接 · 查看连接':'服务已关闭',worker:false,lastSeen:member.last_seen||observed.last_seen||null,needsConnection:online};
     const original = member.presence || observed.presence || 'unknown';
     let status = typeof original === 'string' ? original : original.state || original.status || 'unknown';

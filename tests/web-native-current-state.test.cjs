@@ -17,6 +17,10 @@ test('manual mailbox and an unspecified desktop state retain their ordinary pres
   const f=fixture();f.member.connection_method='manual';assert.equal(f.context.nativeConnectionUnavailable(f.member),false);assert.equal(f.context.memberPresence(f.member).status,'online');
   f.member.connection_method='native_desktop';delete f.member.desktop_connection;assert.equal(f.context.nativeConnectionUnavailable(f.member),false);assert.equal(f.context.nativeMemberEvidence(null).model_reply_verified,undefined);
 });
+test('Grok notification routing does not inherit an unavailable native desktop transport',()=>{
+  const f=fixture();f.member.provider='grok-bot';f.member.adapter='grok-bridge';f.member.connection_method='configured_notification';
+  for(const usable of [null,true,false]){f.member.delivery_capability={notification_usable:usable};assert.equal(f.context.nativeConnectionUnavailable(f.member),false);assert.notEqual(f.context.memberPresence(f.member).label,'本人对话未连接 · 查看连接');}
+});
 test('only native fetch failed is explained in the message with a scoped connection button',()=>{
   const f=fixture(),message={id:'request',sender_id:'user',to_member_id:f.member.id,status:'failed',kind:'message',error:'fetch failed',text:'hello'};
   const html=f.context.renderMessage(message,[message]);assert.match(html,/本人对话尚未连接/);assert.match(html,/data-open-member="native"/);assert.doesNotMatch(html,/fetch failed/);assert.equal(message.error,'fetch failed');
