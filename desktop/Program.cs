@@ -569,6 +569,7 @@ namespace AgentRoomDesktop
         private Dictionary<string, object> ownedService;
         private readonly string windowActivationId = Guid.NewGuid().ToString("D");
         private bool serviceStartupAttempted;
+        private bool folderPickerOpen;
         private readonly string windowPreferences;
         private const string OfflineUrl = "https://agentroom.local/index.html";
         public RoomWindow(Options options, EventWaitHandle activate)
@@ -795,11 +796,12 @@ namespace AgentRoomDesktop
                 request = Json.Parse(e.WebMessageAsJson);
                 id = Json.Text(request, "id");
                 string operation = Json.Text(request, "operation"), roomId = Json.Text(request, "room_id");
-                if (Json.Text(request, "source") != "agentroom-ui" || Json.Text(request, "type") != "desktop-command" || id == null || !Regex.IsMatch(id, "^[A-Za-z0-9_.:-]{1,100}$") || (operation != "state" && operation != "start_service" && operation != "stop_service" && operation != "select_room")) { rejectedMessages++; return; }
+                if (Json.Text(request, "source") != "agentroom-ui" || Json.Text(request, "type") != "desktop-command" || id == null || !Regex.IsMatch(id, "^[A-Za-z0-9_.:-]{1,100}$") || (operation != "state" && operation != "start_service" && operation != "stop_service" && operation != "select_room" && operation != "pick_folder")) { rejectedMessages++; return; }
                 foreach (string key in request.Keys) if (key != "source" && key != "type" && key != "id" && key != "operation" && key != "room_id") { rejectedMessages++; return; }
                 Guid room;
                 if (roomId != null && !Guid.TryParseExact(roomId, "D", out room)) { rejectedMessages++; return; }
                 if (operation == "select_room" && roomId == null) { rejectedMessages++; return; }
+                if (operation == "pick_folder" && roomId != null) { rejectedMessages++; return; }
                 if (!pending.Add(id)) { rejectedMessages++; return; }
                 bridgeCommands++;
                 Dictionary<string, object> result = await Perform(operation, roomId);
@@ -819,6 +821,29 @@ namespace AgentRoomDesktop
         }
         private async Task<Dictionary<string, object>> Perform(string operation, string roomId)
         {
+            // A user-facing picker belongs to this window, not the hidden
+            // Node service. Keep it outside the background service queue.
+            if (operation == "pick_folder")
+            {
+                if (folderPickerOpen) throw new InvalidOperationException("文件夹选择器已打开，请先完成或取消选择。");
+                folderPickerOpen = true;
+                try
+                {
+                    // WebView2 forbids nested modal loops inside its event
+                    // callback. Post back to the WinForms context first.
+                    // https://learn.microsoft.com/microsoft-edge/webview2/concepts/threading-model
+                    await Task.Yield();
+                    if (closingWindow || IsDisposed) throw new OperationCanceledException("窗口正在关闭。");
+                    using (FolderBrowserDialog picker = new FolderBrowserDialog())
+                    {
+                        picker.Description = "选择 Agent Office 项目文件夹";
+                        picker.ShowNewFolderButton = false;
+                        string chosen = picker.ShowDialog(this) == DialogResult.OK ? picker.SelectedPath : "";
+                        return new Dictionary<string, object> { { "path", chosen } };
+                    }
+                }
+                finally { folderPickerOpen = false; }
+            }
             try
             {
                 return await commandQueue.Run(async cancellationToken => {

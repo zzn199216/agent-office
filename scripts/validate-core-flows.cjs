@@ -97,8 +97,6 @@ async function main() {
   };
   try {
     service=new RoomService(files.data,options);
-    const project=service.addProject({name:'六条核心流程 · 隔离验收',path:files.project});
-    firstRoom=service.chat.addRoom({project_id:project.id,title:'首次接入的办公室'});
     server=createServer(service,{port:0,token});port=await server.listen();base='http://127.0.0.1:'+port;service._localUrl=base;
     browser=await playwright.chromium.launch({headless:true});
     const context=await browser.newContext({viewport:{width:1440,height:1000},timezoneId:'Asia/Taipei',reducedMotion:'reduce'});
@@ -106,15 +104,24 @@ async function main() {
       if(route.request().url().startsWith(base+'/'))return route.continue();
       external.push(route.request().url());return route.abort();
     });
-    await context.addInitScript(({project,room})=>{
-      if(!localStorage.getItem('agentroom-project'))localStorage.setItem('agentroom-project',project);
-      if(!localStorage.getItem('agentroom-chat-room'))localStorage.setItem('agentroom-chat-room',room);
+    await context.addInitScript(()=>{
       Object.defineProperty(navigator,'clipboard',{value:{writeText:async text=>{window.fixtureClipboard=text;}}});
-    },{project:project.id,room:firstRoom.id});
+    });
     page=await context.newPage();page.setDefaultTimeout(15000);page.on('pageerror',error=>errors.push(error.message));
     await page.goto(base+'/');
 
     await run('first-connection',async()=>{
+      // Start where a new person starts. A seeded project/room bypasses the
+      // first-run controls and cannot catch a broken project picker or form.
+      await page.locator('#welcome-room').click();
+      await page.locator('#project-dialog').waitFor();
+      await page.locator('#project-name').fill('六条核心流程 · 隔离验收');
+      await page.locator('#project-path').fill(files.project);
+      await page.locator('#project-form button[type="submit"]').click();
+      await page.locator('#room-dialog').waitFor();
+      await page.locator('#room-name').fill('首次接入的办公室');
+      const created=page.waitForResponse(response=>response.url()===base+'/api/chat/rooms'&&response.request().method()==='POST');
+      await page.locator('#room-form button[type="submit"]').click();firstRoom=await(await created).json();
       await connect();
       const panel=page.locator('#secretary-connect-progress .connection-panel');
       await panel.locator('[data-conn-op="copy_config"]').click();

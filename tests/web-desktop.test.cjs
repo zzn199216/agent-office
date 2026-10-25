@@ -34,3 +34,10 @@ test('desktop bridge accepts actual host top-level codes and uses the 45 second 
   await assert.rejects(work,error=>error.message==='原启动记录所有者已变化'&&error.code==='daemon_owner_changed');
   assert.equal(item.timers.size,0);assert.equal(item.sent.length,1);
 });
+
+test('folder picker allows selection time and returns a selected path or cancellation',async()=>{
+  const item=fixture(),work=item.window.AgentRoomDesktop.command('pick_folder'),message=item.sent[0];
+  assert.equal(message.operation,'pick_folder');assert.deepEqual(item.timerDelays,[180000]);
+  item.reply({source:'agentroom-desktop',type:'desktop-result',id:message.id,result:{path:'C:\\fixture'}});assert.equal((await work).path,'C:\\fixture');
+  const cancel=item.window.AgentRoomDesktop.command('pick_folder');item.reply({source:'agentroom-desktop',type:'desktop-result',id:item.sent[1].id,result:{path:''}});assert.equal((await cancel).path,'');assert.equal(item.timers.size,0);
+});

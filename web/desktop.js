@@ -14,9 +14,9 @@
     else request.resolve(message.result);
   });
   const command = (operation, values = {}) => new Promise((resolve,reject) => {
-    if (!['state','start_service','stop_service','select_room'].includes(operation)) return reject(new Error('不支持这个桌面操作。'));
+    if (!['state','start_service','stop_service','select_room','pick_folder'].includes(operation)) return reject(new Error('不支持这个桌面操作。'));
     const id = `desktop-${Date.now()}-${++sequence}`;
-    const timeout = setTimeout(() => {pending.delete(id);reject(Object.assign(new Error('桌面操作仍未确认。请重新检查服务状态，避免重复操作。'),{code:'desktop_bridge_timeout'}));},45000);
+    const timeout = setTimeout(() => {pending.delete(id);reject(Object.assign(new Error(operation==='pick_folder'?'文件夹选择尚未完成。请在选择窗口中确认或取消，也可以直接填写路径。':'桌面操作仍未确认。请重新检查服务状态，避免重复操作。'),{code:'desktop_bridge_timeout'}));},operation==='pick_folder'?180000:45000);
     pending.set(id,{resolve,reject,timeout});
     try{bridge.postMessage({source:'agentroom-ui',type:'desktop-command',id,operation,...typeof values.room_id === 'string' ? {room_id:values.room_id} : {}});}
     catch(error){pending.delete(id);clearTimeout(timeout);reject(Object.assign(new Error('桌面通信未就绪。请重新检查本机服务状态。'),{code:'desktop_bridge_unavailable'}));}

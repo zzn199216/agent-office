@@ -489,7 +489,7 @@ async function copyResume(memberId, selectedRoom = roomId) {
   else if (!entry) throw new Error('处理程序当前未连接。已接入的 agent 可用原入口执行 room-ensure；新入口需要处理程序恢复后生成。');
   await navigator.clipboard.writeText(entry.prompt); toast('恢复入口已复制。交给这个成员，以后它可自行检查和恢复同一个房间。'); return entry;
 }
-async function api(path, input, method = input === undefined ? 'GET' : 'POST') {
+async function api(path, input, method = input === undefined ? 'GET' : 'POST', signal) {
   if (desktop?.offline) {
     if (input !== undefined || method !== 'GET') throw new Error('服务已关闭。请先开启服务，再发送消息或更改房间。');
     if (path === '/api/state') { desktopState = await desktop.command('state',roomId ? {room_id:roomId} : {}); return desktopState.snapshot || {projects:[],chat:{rooms:[],members:[]},discussions:[],approvals:[]}; }
@@ -514,6 +514,7 @@ async function api(path, input, method = input === undefined ? 'GET' : 'POST') {
   // Bound observations so a lost local HTTP response cannot lock every future
   // refresh. Business writes keep their existing no-replay/uncertain contract.
   if(method==='GET'&&typeof AbortSignal!=='undefined'&&typeof AbortSignal.timeout==='function')options.signal=AbortSignal.timeout(15000);
+  if(signal)options.signal=signal;
   try {
   let response = await fetch(path,options);
   // Only an explicit 401 proves the request was rejected before processing.
@@ -937,7 +938,25 @@ async function respondToApproval(button) {
     await api(`/api/approvals/${encodeURIComponent(id)}`,payload);await refresh();
   }finally{approvalResponding.delete(id);button.disabled=false;}
 }
-function showProject() { $('project-dialog').showModal(); }
+let projectPicker = null;
+async function browseProjectFolder() {
+  if(projectPicker)return;
+  const controller=new AbortController();projectPicker=controller;
+  const button=$('browse-folder'),cancel=$('cancel-folder'),feedback=$('project-picker-status');
+  button.disabled=true;button.textContent='正在选择…';cancel.classList.toggle('hidden',!!desktop);
+  feedback.textContent='请在文件夹选择窗口中选择项目，也可以取消后直接填写路径。';
+  try {
+    const result=desktop?await desktop.command('pick_folder'):await api('/api/folder-picker',{},'POST',controller.signal);
+    if(controller.signal.aborted||!$('project-dialog').open)return;
+    if(result.path){
+      $('project-path').value=result.path;
+      if(!$('project-name').value.trim())$('project-name').value=result.path.replace(/[\\/]+$/,'').split(/[\\/]/).pop()||'我的项目';
+    }
+    feedback.textContent='';
+  } catch(error) { feedback.textContent=controller.signal.aborted?'已取消选择，可以直接填写文件夹路径。':error.message; }
+  finally { if(projectPicker===controller){projectPicker=null;button.disabled=false;button.textContent='浏览';cancel.classList.add('hidden');} }
+}
+function showProject() { $('project-picker-status').textContent=''; $('project-dialog').showModal(); }
 function showRoom(prefill = '') { if (!projectId) { toast('先添加一个项目，让成员有共同的工作范围。'); showProject(); return; } $('room-project-label').textContent = `项目：${state.projects.find(project => project.id === projectId)?.name || ''}`; $('room-name').value = prefill; $('room-dialog').showModal(); $('room-name').focus(); }
 function showSettings() { $('settings-dialog').showModal(); }
 async function showMembers() { $('member-room-label').textContent = roomId && !legacyId ? `加入「${history?.room?.title || state.chat.rooms.find(room => room.id === roomId)?.title || '聊天室'}」` : '创建房间后可以邀请成员加入。需要发现本机工具时，点击扫描。'; selectedCandidate = null; $('member-name').value = ''; $('member-adapter').value = 'mailbox'; $('member-dialog').showModal(); renderExistingMembers(); if (candidates.length) renderCandidates(); else $('discovered-agents').innerHTML = '<div class="scan-note">点击扫描本机 agents，或直接添加通用通信成员。</div>'; }
@@ -1974,7 +1993,9 @@ $('resume-member').onchange = renderResume;
 $('resume-copy').onclick = () => action(async () => { if (entryBusy) return; entryBusy = true; renderResume(); try { await copyResume($('resume-member').value); } finally { entryBusy = false; renderResume(); } });
 $('resume-wake').onclick = () => action(async () => { const memberId = $('resume-member').value; entryBusy = true; renderResume(); try { await api('/api/runtime/wake',{room_id:roomId,member_id:memberId}); await refresh(); toast('已请求拉起该成员的后台工作会话。'); } finally { entryBusy = false; renderResume(); } });
 $('resume-revoke').onclick = () => action(async () => { const memberId = $('resume-member').value; entryBusy = true; renderResume(); try { await api('/api/resume/revoke',{member_id:memberId,room_id:roomId}); for (const [key,entry] of Object.entries(resumeEntries)) if (entry.member_id === memberId && entry.room_id === roomId) delete resumeEntries[key]; localStorage.setItem(entryCacheKey,JSON.stringify(resumeEntries)); toast('该成员在这个房间的旧恢复入口已撤销，可以重新生成。'); await refresh(); } finally { entryBusy = false; renderResume(); } });
-$('browse-folder').onclick = () => action(async () => { const button = $('browse-folder'); button.disabled = true; try { const result = await api('/api/folder-picker',{}); if (result.path) $('project-path').value = result.path; } finally { button.disabled = false; } });
+$('browse-folder').onclick = () => action(browseProjectFolder);
+$('cancel-folder').onclick = () => projectPicker?.abort();
+$('project-dialog').addEventListener('close',()=>projectPicker?.abort());
 $('project-form').onsubmit = event => { event.preventDefault(); action(async () => { const project = await api('/api/projects',{name:$('project-name').value,path:$('project-path').value,access:$('project-write').checked ? 'workspace-write' : 'read-only'}); projectId = project.id; roomId = null; legacyId = null; $('project-dialog').close(); await refresh(); showRoom(); }); };
 $('room-form').onsubmit = event => { event.preventDefault(); action(async () => { const room = await api('/api/chat/rooms',{project_id:projectId,title:$('room-name').value}); roomId = room.id; legacyId = null; setReply(null); $('room-dialog').close(); await refresh(); $('prompt').focus(); }); };
 $('check-codex').onclick = () => action(async () => { const button = $('check-codex'); button.disabled = true; button.textContent = '检查中…'; try { const result = await api('/api/codex/check',{}); toast(result.connected ? '本机 Codex 入口已连接。' : result.error); await refresh(); } finally { button.disabled = false; button.textContent = '检查连接'; } });
