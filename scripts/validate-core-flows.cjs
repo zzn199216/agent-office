@@ -237,6 +237,33 @@ async function main() {
       await page.locator('#office-view-button').click();await page.locator('.ao-scene[data-phase="night"][data-lights="on"]').waitFor();
       const shade=()=>page.locator('.ao-floor').evaluate(node=>Number(getComputedStyle(node,'::after').opacity));
       assert.equal(await shade(),0);await shot('06-night-lit.png');
+      // Page scrollWidth alone misses controls clipped by a nested toolbar.
+      // Exercise wider glyphs too, independent of the host's Chinese fonts.
+      for (const width of [320,390,760]) {
+        await page.setViewportSize({width,height:844});
+        const largerType=await page.evaluate(()=>{
+          const sheet=[...document.styleSheets].find(sheet=>sheet.href?.endsWith('/style.css'));
+          return sheet.insertRule('.topbar-actions button{font-size:16px!important;letter-spacing:1px!important}',sheet.cssRules.length);
+        });
+        const layout=await page.locator('.topbar').evaluate(bar=>{
+          const actions=bar.querySelector('.topbar-actions'),bounds=bar.getBoundingClientRect();
+          const buttons=[...bar.querySelectorAll('button')].filter(button=>button.getClientRects().length);
+          return {noScroll:actions.scrollWidth<=actions.clientWidth+1,controls:buttons.map(button=>{
+            const rect=button.getBoundingClientRect(),hit=document.elementFromPoint(rect.x+rect.width/2,rect.y+rect.height/2);
+            return {id:button.id,visible:rect.left>=0&&rect.right<=innerWidth+1&&rect.top>=bounds.top&&rect.bottom<=bounds.bottom+1,reachable:hit===button||button.contains(hit)};
+          })};
+        });
+        assert.ok(layout.noScroll,'Toolbar needs horizontal scrolling at '+width);
+        for(const control of layout.controls)assert.ok(control.visible&&control.reachable,`${control.id} clipped or covered at ${width}px`);
+        await page.locator('#team-open').click();
+        await page.locator('#mirror-open').click();
+        await page.locator('#mirror-dialog').waitFor({state:'visible'});
+        await shot(`06-mirror-${width}-large-type.png`);
+        await closeDialog('#mirror-dialog');
+        await page.locator('#inspector-close').click();
+        await shot(`06-toolbar-${width}-large-type.png`);
+        await page.evaluate(index=>[...document.styleSheets].find(sheet=>sheet.href?.endsWith('/style.css')).deleteRule(index),largerType);
+      }
       await page.setViewportSize({width:390,height:844});
       await page.waitForFunction(()=>document.documentElement.scrollWidth<=innerWidth+1&&document.querySelector('.ao-floor').getBoundingClientRect().top>=document.querySelector('.ao-toolbar-right').getBoundingClientRect().bottom);
       await page.getByRole('button',{name:'关闭办公室灯光',exact:true}).click();

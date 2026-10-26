@@ -49,7 +49,7 @@ const {playwright,outputDirectory}=require('./browser-validation.cjs');
     // Narrow screens do not scroll sideways.
     await page.setViewportSize({width:390,height:844});await card.scrollIntoViewIfNeeded();assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));await page.screenshot({path:path.join(out,'connection-card-mobile.png')});proof.checks.mobile_no_overflow=true;
     await page.setViewportSize({width:1440,height:1000});
-    await page.locator('#mirror-open').click();
+    await page.locator('#team-open').click();await page.locator('#mirror-open').click();
     await page.locator('#mirror-name').fill('验收手机群');
     await page.locator('#mirror-members input[value="doubao"]').check();
     await page.locator('#mirror-create').click();
@@ -84,7 +84,7 @@ const {playwright,outputDirectory}=require('./browser-validation.cjs');
     assert.equal(service.store.db.prepare('SELECT COUNT(*) AS n FROM chat_messages WHERE to_member_id=?').get(bridge.id).n,2);
     const update=service.launch.state({room_id:room.id});assert.notEqual(update.id,mirror.id);assert.equal(update.group_operation.status,'pending');
     assert.equal(update.proxies.find(p=>p.id===proxy.id).native_group_ref,'fixture-existing-group');proof.checks.mirror_existing_group_updates_in_background=true;
-    await page.locator('#mirror-open').click();await page.waitForFunction(()=>document.querySelector('#mirror-status').textContent.includes('等待实际建群回报'));
+    await page.locator('#team-open').click();await page.locator('#mirror-open').click();await page.waitForFunction(()=>document.querySelector('#mirror-status').textContent.includes('等待实际建群回报'));
     await page.setViewportSize({width:390,height:844});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));
     await page.screenshot({path:path.join(out,'mirror-mobile.png')});proof.checks.mirror_mobile_no_overflow=true;
     await page.locator('#mirror-dialog .close-dialog').click();await page.setViewportSize({width:1440,height:1000});
