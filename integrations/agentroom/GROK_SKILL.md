@@ -56,7 +56,17 @@ AO 用户明确提交的建群或更新成员请求，按该请求对应的 GROU
 
 当前已验证的原生路径是 CreateChannel(name, member_ids)，再用其实际返回的 id 作为 UpdateChannel 的 channel_id；member_ids 使用现有 Bot 的真实引用。保存这个真实返回值作为 AO 的 native_group_ref，不另造会话 ID，也不因工具名为 channel 就断言它无法创建 App 群。创建、编辑成员、App 中可见和实际问答分别验证。
 
-已有群先核对实际引用和当前调用身份，再执行本次所需操作。“No channel found”本身不能区分成员关系、引用错误或暂时状态；本地群资料也不能替代当前原生工具结果。不要复述历史错误或让用户反复加群，不改 group.json、私有数据库或凭据来绕过。当前工具集确实缺少对应操作时明确报告能力限制。
+已有群先核对实际引用和当前调用身份，再执行本次所需操作。“No channel found”本身不能区分成员关系、引用错误或暂时状态；本地群资料也不能替代当前原生工具结果。不要复述历史错误或让用户反复加群，不改 group.json、私有数据库或凭据来绕过。
+
+Webhook 的 fresh subagent 与普通 Bot 对话具有不同的群管理上下文。后台群管理请求按照 GROUP.md 的“后台执行与本次回报”，向已安装管理工作流的现有 Bot 转交一次；接收方必须用 `group-state --session SESSION_ID` 独立核对 `group_operation.requested_by=user`、原 `message_id`、房间、所选成员和真实群引用，再从普通对话执行原生操作。业务代理仍只委托自己的真实后端，管理请求不调用 delegate。不得向自己转交、循环转交、让用户手动领取或把发送受理当完成。没有核对到用户提交记录时不执行管理操作。
+
+每次更新都需要针对本次 session_id 的 group-report；旧的 native_group_ref 只能定位原群，不能证明本次更新成功。发送后关闭 AO 弹窗不取消后台操作。共享一个 Grok Bot 的多个房间必须保留 role_file 中全部群引用到 entry_file 的映射，按本轮真实群引用选择入口，禁止覆盖为“最后一个房间”。
+
+## 从 Grok 创建 AO 房间
+
+用户在 Grok 明确要求新建聊天室时，用本机用户管理入口（不带成员业务 --entry）执行 `status` 读取已有项目；只有一个项目时直接使用，有多个且当前群没有明确项目关联时才确认项目名称。执行 `chat-room --project ACTUAL_PROJECT_ID --title 用户给定名称`，保存真实返回的 room.id；接着以该 room.id 执行 `auto-connect --room ACTUAL_ROOM_ID --providers 用户选定的provider列表 --group-name 用户给定群名 --wait 90`，按返回的 GROUP.md 完成原生建群和本次报告。不要让用户手填项目或房间 ID。原生创建结果不确定时先核对原执行，不重复创建。本机房间和原生群分别验收。
+
+用户在 Grok 要求给已有群加成员时，先从当前真实群引用确定对应 AO room_id，再用相同 auto-connect 流程只准备新增的 provider；复用原生群和已有实际成员。普通用户对话可以直接执行本次原生操作，不再转入 Webhook 例程。
 
 ## 把已接通的成员加入实际群
 

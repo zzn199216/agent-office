@@ -16,11 +16,16 @@ class LaunchManager{
     const columns=new Set(this.db.prepare('PRAGMA table_info(launch_sessions)').all().map(row=>row.name));
     if(!columns.has('selected_providers'))this.db.exec('ALTER TABLE launch_sessions ADD COLUMN selected_providers TEXT');
     if(!columns.has('group_name'))this.db.exec('ALTER TABLE launch_sessions ADD COLUMN group_name TEXT');
+    if(!columns.has('group_reports'))this.db.exec("ALTER TABLE launch_sessions ADD COLUMN group_reports TEXT NOT NULL DEFAULT '[]'");
+    if(!columns.has('dispatch_requested'))this.db.exec('ALTER TABLE launch_sessions ADD COLUMN dispatch_requested INTEGER NOT NULL DEFAULT 0');
+    if(!columns.has('dispatch_member_id'))this.db.exec('ALTER TABLE launch_sessions ADD COLUMN dispatch_member_id TEXT');
+    if(!columns.has('dispatch_error'))this.db.exec('ALTER TABLE launch_sessions ADD COLUMN dispatch_error TEXT');
     this.db.prepare("UPDATE launch_sessions SET status='interrupted',error='准备期间处理程序结束；请重新指定要接入的成员，不会自动重放业务任务。',updated=? WHERE status='preparing'").run(now());
     // This requests a native pause; it does not pretend that the remote Grok
     // routine has already stopped. Keep its actual refs/history for reporting.
     this.db.prepare("UPDATE launch_sync_routes SET status='pause_requested',updated=? WHERE status='host_reported'").run(now());
     const {LaunchWatch}=require('./launch-watch.cjs');this.watch=new LaunchWatch(this,options.watch||{});
+    this.dispatchTimer=setInterval(()=>this.dispatchPending(),2000);this.dispatchTimer.unref?.();
   }
   policy(){return {scan:'on_request',join:'explicit_selection',automatic_sync:false};}
   async discovery(){const raw=await(this.options.discover?this.options.discover():this.service.chat.discover());const {publicCandidates}=require('./launch-watch.cjs');return {...raw,candidates:publicCandidates(raw)};}
@@ -64,6 +69,14 @@ class LaunchManager{
     if(input.reauthorize===true&&!input.target_member_id)throw new RoomError('重新授权必须明确指定原人物。',403,'connection_target_required');
     if(input.new_member===true&&(input.target_member_id||input.reauthorize===true||providers.length!==1))throw new RoomError('新建成员每次只处理一位，且不能指定原人物。',400,'onboarding_target_conflict');
     const existing=()=>{
+      const sent=(input.dispatch===true||groupName)&&this.db.prepare("SELECT l.id,l.selected_providers FROM launch_sessions l JOIN chat_messages m ON m.room_id=l.room_id AND m.sender_id='user' AND m.idempotency_key='mirror:'||l.id WHERE l.room_id=? AND m.status IN ('queued','delivered','consumed','processing','waiting_input','uncertain','answered','completed') ORDER BY l.created DESC LIMIT 1").get(room.id);
+      if(sent){
+        const prior=this.state({session_id:sent.id}),previous=JSON.parse(sent.selected_providers||'[]');
+        if(prior.group_operation.status!=='reported'){
+          if(previous.length!==providers.length||providers.some(provider=>!previous.includes(provider)))throw new RoomError('这个房间的群操作仍在进行，完成后再添加其他成员。',409,'group_operation_pending');
+          return prior;
+        }
+      }
       const pending=this.db.prepare("SELECT id,selected_providers FROM launch_sessions WHERE room_id=? AND status='preparing' ORDER BY created DESC LIMIT 1").get(room.id);
       if(!pending)return null;
       const previous=JSON.parse(pending.selected_providers||'[]');
@@ -80,6 +93,7 @@ class LaunchManager{
     const session={id:id(),room_id:room.id,status:'preparing',goal:input.goal?redact(cleanText(input.goal,1200,'协作目标')):'',candidates:JSON.stringify(scan.candidates),install_clients:input.install_clients===true?1:0,error:null,created:now(),updated:now(),selected_providers:JSON.stringify(providers)};
     this.db.prepare('INSERT INTO launch_sessions(id,room_id,status,goal,candidates,install_clients,error,created,updated,selected_providers) VALUES(:id,:room_id,:status,:goal,:candidates,:install_clients,:error,:created,:updated,:selected_providers)').run(session);
     if(groupName)this.db.prepare('UPDATE launch_sessions SET group_name=? WHERE id=?').run(groupName,session.id);
+    if(input.dispatch===true)this.db.prepare('UPDATE launch_sessions SET dispatch_requested=1,dispatch_member_id=? WHERE id=?').run(input.dispatch_member_id||null,session.id);
     const selected=scan.candidates.filter(candidate=>providers.includes(candidate.provider)).map(candidate=>({...candidate,...input.target_member_id?{target_member_id:input.target_member_id}:{},reauthorize:input.reauthorize===true,new_member:input.new_member===true}));
     const work=this.run(session,selected).catch(e=>{this.db.prepare("UPDATE launch_sessions SET status='needs_setup',error=?,updated=? WHERE id=? AND status!='cancelled'").run(redact(e.message).slice(0,1200),now(),session.id);this.service.changed();}).finally(()=>this.jobs.delete(session.id));this.jobs.set(session.id,work);this.service.changed();return this.state({session_id:session.id});
   }
@@ -223,6 +237,11 @@ class LaunchManager{
     const instruction=`在你准备接入的已有 Grok Bot 本人窗口，使用已授权的 Windows 本机命令工具实际执行以下长期入口，并把流程保存为私有技能。不要使用 computer use，也不要改用云端 computer 的 localhost 或文件路径。\n\n${command}\n\n核对实际进入结果：restored=true，caller_member_id=${member.id}，members 中本人 registration=verified、registered_status=ready。只有真实执行并核对结果才完成本机握手，不能以应用开着、说明已保存或配置存在代替执行。然后查看本房间的真实成员与历史：\n${history}\n\n后续命令沿用同一 --entry 文件，后台关闭时会按需恢复同一聊天室；不要把入口卡内容或凭据贴到群聊。只处理用户点名的任务；先通过 chat-inbox 领取本人消息，再用 chat-reply 回复原消息，外部问题用 chat-post --to 实际成员ID，并保留原 message_id 等待回报，超时不能重发。${fixed?'\n此既有 Grok 成员已经绑定固定外部后端，保留这条原路由，不自行解绑、替换或委托其他目标。':''}\n\n复用当前 Bot，不新建同名 Bot，不创建群、不添加成员、不设置定期扫描；要桥接原群时使用用户明确指定的真实群引用。Grok 内 Windows 宿主若显示 connected=false，先在 Grok 恢复本机授权连接，再执行入口；本机软件没有远程重连它的公开接口。不要把本机握手当成原生群已加人、已续接或能后台唤醒。`;
     return {provider:'grok-bot',name:member.name,member_id:member.id,room_id:session.room_id,entry_file:entry.file,entry_status:entry.status,local_verified:ready,can_wake:false,response_mode:'manual_bridge',native_group_status:'not_requested',requires_local_execution:true,needs_import:false,import_kind:'command',status:ready?'ready_mailbox':'awaiting_bridge_handshake',detail,instruction};
   }
+  nativeBot(proxy){
+    if(proxy.native_bot_ref)return proxy.native_bot_ref;
+    const refs=[...new Set(this.db.prepare('SELECT native_bot_ref FROM launch_proxies WHERE backend_member_id=? AND provider=? AND native_bot_ref IS NOT NULL').all(proxy.backend_member_id,proxy.provider).map(p=>p.native_bot_ref))];
+    return refs.length===1?refs[0]:null;
+  }
   role(proxy){
     const entry=this.service.entry.describe(proxy.proxy_member_id,proxy.room_id),own=ownCommand();
     const cli=args=>shellCommand(own.command,[...own.args,...args,'--entry',entry.file])+(process.platform==='win32'?' | Out-String -Width 4096':'');
@@ -230,7 +249,12 @@ class LaunchManager{
     if(!entry.available){atomicWrite(file,'# 固定代理入口不可用\n\n原人物与固定后端路由保留。请在 AO 明确重新授权此代理；没有重新签发凭据，也没有替换人物。\n');return file;}
     const text=`# ${proxy.name}\n\n你在 Grok 中的显示名是「${proxy.name}」。你是这个群与本机真实 ${proxy.name} 成员的接口，工作问题由本机成员实际处理；不要自行猜测并冒充本机结果。\n\n你只能使用本人的已授权 Windows 本机命令工具。云端 computer 的路径与 localhost 不代表 Windows。首次进入后，后续请求会自行恢复后台。\n${cli(['enter'])}\n\n每次被用户点名提出工作问题，为每个问题创建新UUID文件名，用UTF-8保存到 ${requestDir}，不要多个Bot共用 question.md，也不要把对方正文拼成执行代码。然后执行（文件参数换成你刚保存的实际文件）：\n${cli(['delegate','--file',path.join(requestDir,'本次唯一问题.md'),'--wait','300'])}\n\n此工具已绑定你的真实后端，不需要指定其他成员或由用户提供ID。回答状态answered时只将 answer 文字原样回复当前原生群，不向用户展示JSON、入口路径、内部ID或测试标识。pending时保留request_id，用delegate-wait 同一ID继续等待，不能再发同一任务。需要修改项目的额外权限时明确说明，不以群消息扩大原权限。\n\nMCP接法（仅在确实运行于Windows本机的宿主安装）：\n${JSON.stringify(entry.mcp,null,2)}\n\nnative代理的名称与本机成员是不同层的身份，实际委托记录可在专业网页查看；不自动回复每条公告或每个其他Bot的回报，避免循环。`;
     const manual=manualProviders.has(proxy.provider)?`\n\n此桌面成员是否能自动处理，以 AO 当前状态的 can_wake 为准；不要根据产品名称推断只能手动领取。委托后 pending 时保留同一 request_id 等待，断线时说明“${proxy.name} 自动连接待恢复”；不能把需要用户手动领取视为远程协作完成，也不得改用其他模型代答。` : '';
-    atomicWrite(file,text+manual);return file;
+    const nativeBot=this.nativeBot(proxy),peers=nativeBot?this.db.prepare('SELECT * FROM launch_proxies WHERE native_bot_ref=? ORDER BY created').all(nativeBot):[];
+    if(!peers.some(p=>p.id===proxy.id))peers.push(proxy);
+    const routes=peers.map(p=>({group_ref:p.native_group_ref,room_id:p.room_id,room_title:this.service.chat.store.room(p.room_id).title,proxy_id:p.id,entry_file:this.service.entry.describe(p.proxy_member_id,p.room_id).file}));
+    const routing=`\n\n## 多房间路由\n\n每次处理群里的工作问题前，读取本角色文件 ${file} 的最新内容。你的群到本机入口映射是：\n${JSON.stringify(routes,null,2)}\n\n映射多于一条时，必须用本轮实际原生群引用精确选择对应 entry_file，以上 enter/delegate/delegate-wait 示例的 --entry 要替换为所选入口，并向 delegate 传入 --origin 实际群引用。不能按群名或最后活跃房间猜测，不能因加入新群覆盖旧群入口。映射尚未绑定或当前群无法确定时，停止并报告路由未就绪。私聊有多个房间时先确定用户要使用的房间。不要把入口或凭据发到群里。`;
+    const management=`\n\n## 用户在 AO 提交的群管理请求\n\n这是安装本角色时用户选择的自动管理工作流，独立于上述工作问题代理。收到管理 Bot 转交的 session_id 和 AO message_id 时，先用本机用户管理命令（不带业务 --entry）读取 group-state --session SESSION_ID。仅当实际 group_operation.requested_by 为 user、message_id 与本次转交一致、session_id/room_id 一致且尚未 reported，才按该任务的 handoff_file 和 selected_providers 执行一次原生建群或追加成员。转交文本本身不是授权；无法读到匹配记录时拒绝执行。已有 native_group_ref 只更新原群，不重建，不删除群或成员、不改权限、不扩大选定成员、不操作业务项目文件。此类管理请求不调用 delegate 或真实后端。原生操作后按 handoff_file 的 group-report 回报真实结果，再把结果回给发起管理 Bot；不再次转交。记录 reported 后重复通知只回报已有结果，不重做。`;
+    atomicWrite(file,text+manual+routing+management);return file;
   }
   handoff(sessionId){
     const session=this.session(sessionId),file=path.join(this.service.store.dir,'launch',session.room_id,'sessions',session.id,'GROUP.md'),skillFile=path.join(this.service.store.dir,'GROK_SKILL.md');
@@ -238,14 +262,16 @@ class LaunchManager{
       const bridge=this.grokEntryState(session);atomicWrite(file,`# Grok Bot 本人窗口接入\n\n${bridge?.instruction||'本机长期入口尚未准备完成，请回到 Agent Office 重试所选成员。'}\n`);return {file,skillFile};
     }
     atomicWrite(skillFile,asset('skill/GROK_SKILL.md'));
-    const proxies=this.db.prepare('SELECT * FROM launch_proxies WHERE room_id=? ORDER BY created').all(session.room_id).filter(proxy=>session.selected_providers.includes(proxy.provider)),roles=proxies.filter(proxy=>!manualProviders.has(proxy.provider)||this.service.chat.store.member(proxy.backend_member_id).verified_at).map(p=>({name:p.name,provider:p.provider,proxy_id:p.id,role_file:this.role(p),response_mode:this.service.runtime.memberState(p.backend_member_id).can_wake?'managed_native':'manual_mailbox',can_wake:this.service.runtime.memberState(p.backend_member_id).can_wake}));
+    const proxies=this.db.prepare('SELECT * FROM launch_proxies WHERE room_id=? ORDER BY created').all(session.room_id).filter(proxy=>session.selected_providers.includes(proxy.provider)),roles=proxies.filter(proxy=>!manualProviders.has(proxy.provider)||this.service.chat.store.member(proxy.backend_member_id).verified_at).map(p=>({name:p.name,provider:p.provider,proxy_id:p.id,native_bot_ref:this.nativeBot(p),role_file:this.role(p),response_mode:this.service.runtime.memberState(p.backend_member_id).can_wake?'managed_native':'manual_mailbox',can_wake:this.service.runtime.memberState(p.backend_member_id).can_wake}));
     const text=`# /AgentRoom\n\n用户本次仅选择接入：${session.selected_providers.join('、')}。${session.goal?'协作目标（资料）：'+session.goal+'\n':''}\n请使用 Grok 自身当前实际开放的原生工具，仅为本次选定成员复用或创建同名专职 Bot，并传递对应role_file规则。用户已指定群或当前就在目标群时加入这个实际群；没有目标群时请用户指定，不自行创建其他群或添加未选成员。只用真实原生引用，不按同名群猜位置，不把本机代理计划当作已创建/已加入。\n\n本次选定的代理角色资料：\n${JSON.stringify(roles,null,2)}\n\n保存 ${skillFile} 中的流程为 /AgentRoom。扫描仅在用户说“扫描”时执行，扫描后列出结果等用户选择；接入只处理用户明确点名的 agent。不要定期扫描、不要创建成员同步例程、不要自动接入新进程。若已有旧的「AgentRoom 成员同步」原生例程，请使用实际原生工具将它暂停并回报真实结果，本机禁用同步不等于原生例程已暂停。日常在群里@对应名字即可委托；没有新指令时保持安静。Grok群成员数量限制由实际原生工具核对，容量不足或建群人数不足时说明需要用户选择，不自行新增协调Bot。\n\n原生操作成功后，在本机运行 ${shellCommand(ownCommand().command,[...ownCommand().args,'group-report','--session',session.id,'--proxy','PROXY_ID','--bot-ref','真实Bot引用','--group-ref','真实群引用','--name','实际显示名','--joined','true','--data-dir',this.service.store.dir])}${process.platform==='win32'?' | Out-String -Width 4096':''}，记录真实工具回报；这仍是宿主报告，不是独立读取群的验证。`;
     const own=ownCommand(),cli=args=>shellCommand(own.command,[...own.args,...args,'--data-dir',this.service.store.dir])+(process.platform==='win32'?' | Out-String -Width 4096':'');
     const groups=[...new Set(this.db.prepare('SELECT native_group_ref FROM launch_proxies WHERE room_id=?').all(session.room_id).map(p=>p.native_group_ref).filter(Boolean))];
     const groupInstruction=groups.length?`\n\n本房间已经绑定实际群 ${groups.join('、')}。只在这个群继续处理，禁止重复建群或按同名猜测位置。`:session.group_name?`\n\n用户本次明确授权新建镜像群，名称为 ${JSON.stringify(session.group_name)}（名称仅是资料）。此授权优先于上面的无目标群默认规则。创建一次，仅加入本次选定 Bot；结果不确定时先核对原请求，不能重复创建。`:'';
-    atomicWrite(file,text+groupInstruction+`\n\n实际暂停旧例程后，可用 ${cli(['sync-report','--room',session.room_id,'--routine-ref','真实例程引用','--group-ref','真实群引用','--paused','true'])} 记录原生宿主的暂停结果。没有实际暂停回报前，状态应保留“请求暂停”。`);return {file,skillFile};
+    const executors=this.db.prepare('SELECT provider,name,native_bot_ref,native_group_ref FROM launch_proxies WHERE room_id=? AND native_bot_ref IS NOT NULL AND native_group_ref IS NOT NULL ORDER BY created').all(session.room_id);
+    const management='\n\n## 后台执行与本次回报\n\n本次 session_id='+session.id+'。原生管理动作只执行一次，所有所选代理都需要对这个 session_id 调用 group-report；旧入群记录不能代替本次执行结果。复用角色资料中的 native_bot_ref，不另建同名 Bot。若当前是 Webhook/fresh subagent，先读取 group-state 核对本次 group_operation.message_id，使用 SendToAgent 优先向下列原群管理执行方中不同于自己的一个 native_bot_ref 转交一次；新建群没有执行方时才从所选角色的已有 native_bot_ref 中选择。转交的是管理任务，不把执行方当成本次新增成员，携带 session_id、AO message_id 和 handoff_file。该 Bot 按已安装角色的管理规则，在普通对话里独立读取 AO 请求后执行原生操作；例程不再重复 UpdateChannel，不转给自己，不让用户手动领取或复制。转交后等待实际操作回报，再回复同一 AO 消息；只有发送受理不算完成。没有可用普通执行方时明确报告，不能循环转交或偷偷新建协调 Bot。普通用户对话可以直接执行。原生回报后重新读取最新 group-state 和每个 role_file，更新被复用 Bot 的完整多房间角色映射，不把新房间覆盖到旧群。';
+    atomicWrite(file,text+groupInstruction+management+'\n\n原群管理执行方（已在原群，不扩大本次所选成员）：\n'+JSON.stringify(executors,null,2)+`\n\n实际暂停旧例程后，可用 ${cli(['sync-report','--room',session.room_id,'--routine-ref','真实例程引用','--group-ref','真实群引用','--paused','true'])} 记录原生宿主的暂停结果。没有实际暂停回报前，状态应保留“请求暂停”。`);return {file,skillFile};
   }
-  session(sessionId){const row=this.db.prepare('SELECT * FROM launch_sessions WHERE id=?').get(sessionId);if(!row)throw new RoomError('接入任务不存在。',404);this.service.chat.store.room(row.room_id);return {...row,candidates:JSON.parse(row.candidates),selected_providers:JSON.parse(row.selected_providers||'[]')};}
+  session(sessionId){const row=this.db.prepare('SELECT * FROM launch_sessions WHERE id=?').get(sessionId);if(!row)throw new RoomError('接入任务不存在。',404);this.service.chat.store.room(row.room_id);return {...row,candidates:JSON.parse(row.candidates),selected_providers:JSON.parse(row.selected_providers||'[]'),group_reports:JSON.parse(row.group_reports||'[]')};}
   clientConfig(input){
     const session=this.session(input.session_id);
     if(!session.selected_providers.includes(input.provider))throw new RoomError('本次接入没有选择这个客户端。',403,'provider_not_selected');
@@ -271,14 +297,14 @@ class LaunchManager{
   state(input={}){
     let session;if(input.session_id)session=this.session(input.session_id);else{const room=input.room_id;if(room)this.service.chat.store.room(room);const active=this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='chat_room_tombstones'").get()?'NOT EXISTS (SELECT 1 FROM chat_room_tombstones t WHERE t.room_id=launch_sessions.room_id)':'1=1';const row=room?this.db.prepare(`SELECT id FROM launch_sessions WHERE room_id=? AND ${active} ORDER BY created DESC,rowid DESC LIMIT 1`).get(room):this.db.prepare(`SELECT id FROM launch_sessions WHERE ${active} ORDER BY created DESC,rowid DESC LIMIT 1`).get();if(!row)return {status:'not_prepared',proxies:[],members:[],candidates:[],selected_providers:[],actions:[],grok_verified:false,policy:this.policy(),native_sync:{status:'disabled',verified:false}};session=this.session(row.id);}
     const rows=this.db.prepare('SELECT * FROM launch_proxies WHERE room_id=? ORDER BY created').all(session.room_id),members=[];
-    const proxies=rows.map(p=>{const backend=this.service.chat.store.member(p.backend_member_id),manual=manualProviders.has(p.provider),entry=this.service.entry.describe(backend.id,p.room_id),connecting=backend.status==='connecting'||this.service.chat.active.get(backend.id)?.connecting===true;
-      const credentialValid=manual?entry.status==='active':entry.available,ready=!!backend.verified_at&&credentialValid&&!connecting&&!backend.error&&!['connection_failed','awaiting_handshake'].includes(backend.status),canWake=this.service.runtime.memberState(backend.id).can_wake;
-      members.push(this.service.chat.publicMember(backend));return {...p,installation:p.installation?JSON.parse(p.installation):null,credential_status:entry.status,status:ready?(canWake?'ready_local':'ready_mailbox'):connecting?'connecting':manual?'awaiting_desktop_handshake':'needs_setup',reason:backend.error||(!credentialValid?'通信入口不可用，需要明确重新接入。':manual&&!canWake?(ready?`已接入 ${p.name} 消息信箱；需要它在本人窗口领取和回复，不能后台唤醒模型。`:`MCP 配置不代表接入；请在 ${p.name} 本人窗口实际调用工具完成握手。`):null),local_verified:ready,grok_verified:false,can_wake:canWake,response_mode:canWake?'managed_native':'manual_mailbox'};});
+    const proxies=rows.map(p=>{const backend=this.service.chat.store.member(p.backend_member_id),manual=manualProviders.has(p.provider),delivery=this.service.chat.deliveryCapability(backend),nativeDesktop=delivery.connection_method==='native_desktop',entry=manual?this.service.entry.describePrimary(backend.id,p.room_id):this.service.entry.describe(backend.id,p.room_id),connecting=backend.status==='connecting'||this.service.chat.active.get(backend.id)?.connecting===true;
+      const credentialValid=nativeDesktop?delivery.native_usable===true:manual?entry.status==='active':entry.available,ready=!!backend.verified_at&&credentialValid&&!connecting&&!backend.error&&!['connection_failed','awaiting_handshake'].includes(backend.status),canWake=this.service.runtime.memberState(backend.id).can_wake;
+      members.push(this.service.chat.publicMember(backend));return {...p,installation:p.installation?JSON.parse(p.installation):null,credential_status:entry.status,status:ready?(canWake?'ready_local':'ready_mailbox'):connecting?'connecting':manual&&!nativeDesktop?'awaiting_desktop_handshake':'needs_setup',reason:backend.error||(!credentialValid?nativeDesktop?'自动连接尚未就绪，请查看成员连接。':'通信入口不可用，需要明确重新接入。':manual&&!canWake?(ready?`已接入 ${p.name} 消息信箱；需要它在本人窗口领取和回复，不能后台唤醒模型。`:`MCP 配置不代表接入；请在 ${p.name} 本人窗口实际调用工具完成握手。`):null),local_verified:ready,grok_verified:false,can_wake:canWake,response_mode:canWake||nativeDesktop?'managed_native':'manual_mailbox'};});
     const handoff=path.join(this.service.store.dir,'launch',session.room_id,'sessions',session.id,'GROUP.md'),skill=path.join(this.service.store.dir,'GROK_SKILL.md'),own=ownCommand();
     const selected=proxies.filter(proxy=>session.selected_providers.includes(proxy.provider)),grokEntry=this.grokEntryState(session);
     if(grokEntry)members.push(this.service.chat.publicMember(this.service.chat.store.member(grokEntry.member_id)));
-    const selectedHandshakes=selected.filter(proxy=>manualProviders.has(proxy.provider)&&!proxy.local_verified).map(proxy=>{
-      const entry=this.service.entry.describe(proxy.backend_member_id,session.room_id);
+    const selectedHandshakes=selected.filter(proxy=>manualProviders.has(proxy.provider)&&proxy.response_mode==='manual_mailbox'&&!proxy.local_verified).map(proxy=>{
+      const entry=this.service.entry.describePrimary(proxy.backend_member_id,session.room_id);
       const introduction=proxy.provider==='qwen-desktop'?'在 Qwen 本人窗口的 MCP 设置中选择添加并通过 JSON 导入专属本机配置。':proxy.provider==='claude-desktop'?'重新加载 Claude 桌面的 AgentRoom MCP。':proxy.provider==='doubao'?'在豆包本地电脑模式填写专属个人连接器字段，启用工具；这不是 JSON 自动导入。':`在 ${proxy.name} 本人窗口按官方格式导入专属 MCP 配置并启用工具。`;
       return {provider:proxy.provider,name:proxy.name,member_id:proxy.backend_member_id,room_id:session.room_id,entry_file:entry.file,entry_status:entry.status,...proxy.provider==='claude-desktop'?{mcp:entry.mcp}:{},configuration_file:proxy.installation?.configuration_file||null,needs_import:proxy.installation?.needs_import===true,import_kind:proxy.installation?.import_kind||'json',can_wake:false,status:'awaiting_desktop_handshake',instruction:`${introduction}不要把配置凭据贴到群聊。在 ${proxy.name} 本人窗口实际调用 agentroom_room_ensure，再调用 agentroom_heartbeat。随后使用 agentroom_chat_inbox 领取发给本人的问题并用 agentroom_chat_reply 回复。配置文件或进程存在都不能代替真实握手。`};
     });
@@ -288,16 +314,20 @@ class LaunchManager{
     let status=session.status==='awaiting_grok'&&selected.some(p=>p.status==='connecting')?'preparing':session.status;
     if(status==='awaiting_grok'&&!selected.length&&!grokEntry)status='needs_setup';
     if(status==='awaiting_grok'&&selectedHandshakes.length)status='awaiting_desktop_handshake';
+    if(status==='awaiting_grok'&&selected.some(p=>!p.local_verified))status='needs_setup';
     if(onlyGrok&&grokEntry&&status==='awaiting_grok')status=grokEntry.local_verified?'ready_mailbox':'awaiting_bridge_handshake';
     if(onlyGrok&&grokEntry&&status==='awaiting_desktop_handshake')status='awaiting_bridge_handshake';
-    if(status==='awaiting_grok'&&selected.length&&selected.every(p=>p.native_group_status==='host_reported'))status='host_reported';
+    if(status==='awaiting_grok'&&selected.length&&selected.every(p=>session.group_reports.includes(p.id)))status='host_reported';
     const syncRoute=this.db.prepare('SELECT * FROM launch_sync_routes WHERE room_id=?').get(session.room_id)||null;
     const cli=args=>shellCommand(own.command,[...own.args,...args,'--data-dir',this.service.store.dir])+(process.platform==='win32'?' | Out-String -Width 4096':'');
-    return {...session,status,candidates:session.candidates,members,proxies,bridge_members:grokEntry?[{provider:grokEntry.provider,member_id:grokEntry.member_id,name:grokEntry.name,local_verified:grokEntry.local_verified,can_wake:false,response_mode:grokEntry.response_mode,native_group_status:grokEntry.native_group_status,entry_status:grokEntry.entry_status}]:[],selected_handshakes:selectedHandshakes,grok_prompt:prompt+(session.group_name?` 本次明确请求镜像群 ${JSON.stringify(session.group_name)}；有已绑定群时只更新该群，没有时创建一次。`:""),handoff_file:fs.existsSync(handoff)?handoff:null,skill_file:onlyGrok?null:skill,skill_command:onlyGrok?null:'/AgentRoom',grok_verified:false,policy:this.policy(),watch:this.watch?.status(session.room_id)||null,native_sync:syncRoute?{...syncRoute,verified:false}:{status:'disabled',verified:false},sync_command:cli(['group-sync','--changes-only','--room',session.room_id]),sync_report_command:cli(['sync-report','--room',session.room_id,'--routine-ref','真实例程引用','--group-ref','真实群引用','--paused','true']),actions:selected.filter(p=>p.local_verified&&p.native_group_status==='pending').slice(0,5).map(p=>({operation:'create_or_reuse_native_bot',name:p.name,proxy_id:p.id,role_file:path.join(this.service.store.dir,'launch',p.room_id,`role-${p.id}.md`),group_operation:'join_user_requested_group',can_wake:p.can_wake,response_mode:p.response_mode})),mcp_setup:onlyGrok?null:{mcpServers:{agentroom:{command:own.command,args:[...own.args,'mcp','--setup']}}}};
+    const request=this.db.prepare("SELECT id,status,to_member_id,error FROM chat_messages WHERE room_id=? AND sender_id='user' AND idempotency_key=?").get(session.room_id,'mirror:'+session.id);
+    const groupOperation={requested_by:request?'user':null,session_id:session.id,room_id:session.room_id,selected_providers:session.selected_providers,status:status==='host_reported'?'reported':request?['answered','completed','failed','cancelled','uncertain'].includes(request.status)?'needs_review':'pending':'prepared',message_id:request?.id||null,bridge_member_id:request?.to_member_id||null,message_status:request?.status||null,error:request?.error||null,reported_proxy_ids:session.group_reports};
+    return {...session,status,group_operation:groupOperation,candidates:session.candidates,members,proxies,bridge_members:grokEntry?[{provider:grokEntry.provider,member_id:grokEntry.member_id,name:grokEntry.name,local_verified:grokEntry.local_verified,can_wake:false,response_mode:grokEntry.response_mode,native_group_status:grokEntry.native_group_status,entry_status:grokEntry.entry_status}]:[],selected_handshakes:selectedHandshakes,grok_prompt:prompt+(session.group_name?` 本次明确请求镜像群 ${JSON.stringify(session.group_name)}；有已绑定群时只更新该群，没有时创建一次。`:""),handoff_file:fs.existsSync(handoff)?handoff:null,skill_file:onlyGrok?null:skill,skill_command:onlyGrok?null:'/AgentRoom',grok_verified:false,policy:this.policy(),watch:this.watch?.status(session.room_id)||null,native_sync:syncRoute?{...syncRoute,verified:false}:{status:'disabled',verified:false},sync_command:cli(['group-sync','--changes-only','--room',session.room_id]),sync_report_command:cli(['sync-report','--room',session.room_id,'--routine-ref','真实例程引用','--group-ref','真实群引用','--paused','true']),actions:selected.filter(p=>p.local_verified&&p.native_group_status==='pending').slice(0,5).map(p=>({operation:'create_or_reuse_native_bot',name:p.name,proxy_id:p.id,role_file:path.join(this.service.store.dir,'launch',p.room_id,`role-${p.id}.md`),group_operation:'join_user_requested_group',can_wake:p.can_wake,response_mode:p.response_mode})),mcp_setup:onlyGrok?null:{mcpServers:{agentroom:{command:own.command,args:[...own.args,'mcp','--setup']}}}};
   }
   dispatch(input){
     const session=this.state({session_id:input.session_id});
     if(!session.handoff_file||session.status==='preparing')throw new RoomError('成员还在准备，请稍后检查进度。',409,'group_preparing');
+    if(session.selected_handshakes.length||session.proxies.some(p=>session.selected_providers.includes(p.provider)&&!p.local_verified))throw new RoomError('请先完成所选成员的连接，再继续创建或更新群。',409,'group_members_not_ready');
     if(!session.group_name&&!session.proxies.some(p=>p.native_group_ref))throw new RoomError('请先填写镜像群名称。',400,'group_name_required');
     this.service.chat.store.requireParticipant(session.room_id,input.member_id);
     const member=this.service.chat.store.member(input.member_id);
@@ -307,8 +337,33 @@ class LaunchManager{
     // explicit dispatch is the first delivery attempt after a service restart.
     if(delivery.notification_eligible&&delivery.notification_usable===null)this.service.chat.notificationCredential(member);
     if(!this.service.chat.deliveryCapability(member).can_notify)return {...session,dispatch:{status:'needs_grok_activation',instruction:session.grok_prompt}};
+    // A queued operation may survive an application update or a native reconnect.
+    // Generate its instructions from current routes immediately before delivery.
+    this.handoff(session.id);
     const message=this.service.chat.post({room_id:session.room_id,sender_id:'user',to_member_id:member.id,text:session.grok_prompt,idempotency_key:`mirror:${session.id}`});
-    return {...session,dispatch:{status:'queued',message_id:message.id}};
+    this.db.prepare('UPDATE launch_sessions SET dispatch_error=NULL WHERE id=?').run(session.id);
+    return {...this.state({session_id:session.id}),dispatch:{status:'queued',message_id:message.id}};
+  }
+  dispatchPending(){
+    if(this.closing)return;
+    const rows=this.db.prepare("SELECT id FROM launch_sessions WHERE dispatch_requested=1 AND dispatch_error IS NULL AND status='awaiting_grok'").all();
+    for(const row of rows){
+      try{
+        const session=this.state({session_id:row.id});
+        if(session.group_operation.message_id||session.group_operation.status==='reported'||session.status==='preparing'||session.selected_handshakes.length||session.proxies.some(p=>session.selected_providers.includes(p.provider)&&!p.local_verified))continue;
+        let memberId=session.dispatch_member_id;
+        if(!memberId){
+          const candidates=this.service.chat.store.members().filter(m=>m.adapter==='grok-bridge'&&m.status==='ready'&&m.verified_at&&this.service.chat.deliveryCapability(m).notification_configured&&!this.db.prepare('SELECT 1 FROM launch_proxies WHERE proxy_member_id=?').get(m.id));
+          const local=candidates.filter(m=>this.service.chat.store.joined(session.room_id,m.id)),available=local.length?local:candidates;
+          if(available.length!==1)throw new RoomError(available.length?'请选择负责这个群的 Grok Bot。':'请先接通 Grok Bot 的自动通知。',409,'grok_bridge_selection_required');
+          memberId=available[0].id;
+          if(!this.service.chat.store.joined(session.room_id,memberId))this.service.chat.join(session.room_id,memberId);
+          this.db.prepare('UPDATE launch_sessions SET dispatch_member_id=? WHERE id=?').run(memberId,session.id);
+        }
+        const result=this.dispatch({session_id:session.id,member_id:memberId});
+        if(result.dispatch.status!=='queued')throw new RoomError('Grok 的自动通知尚未接通，请检查该成员的连接。',409,'grok_notification_unavailable');
+      }catch(error){this.db.prepare('UPDATE launch_sessions SET dispatch_error=? WHERE id=?').run(redact(error.message).slice(0,1200),row.id);this.service.changed();}
+    }
   }
   report(input){
     const session=this.session(input.session_id),proxy=this.db.prepare('SELECT * FROM launch_proxies WHERE id=? AND room_id=?').get(input.proxy_id,session.room_id);if(!proxy)throw new RoomError('原生报告与该接入任务不匹配。',403);
@@ -320,7 +375,13 @@ class LaunchManager{
     if(proxy.native_bot_ref&&(proxy.native_bot_ref!==bot||proxy.native_group_ref!==group))throw new RoomError('这个代理已属于不同原生Bot或群，不能静默改路由。',409);
     const route=this.db.prepare('SELECT group_ref FROM launch_sync_routes WHERE room_id=?').get(session.room_id),other=this.db.prepare('SELECT native_group_ref FROM launch_proxies WHERE room_id=? AND native_group_ref IS NOT NULL AND native_group_ref<>? LIMIT 1').get(session.room_id,group);
     if(route&&route.group_ref!==group||other)throw new RoomError('这个房间已绑定不同原生群，不能静默改路由。',409);
-    this.db.prepare("UPDATE launch_proxies SET native_bot_ref=?,native_group_ref=?,native_group_status='host_reported',updated=? WHERE id=?").run(bot,group,now(),proxy.id);this.service.changed();return this.state({session_id:session.id});
+    this.service.chat.store.transaction(()=>{
+      this.db.prepare("UPDATE launch_proxies SET native_bot_ref=?,native_group_ref=?,native_group_status='host_reported',updated=? WHERE id=?").run(bot,group,now(),proxy.id);
+      const reports=[...new Set([...this.session(session.id).group_reports,proxy.id])];
+      this.db.prepare('UPDATE launch_sessions SET group_reports=?,updated=? WHERE id=?').run(JSON.stringify(reports),now(),session.id);
+    });
+    for(const peer of this.db.prepare('SELECT * FROM launch_proxies WHERE native_bot_ref=?').all(bot))this.role(peer);
+    this.service.changed();return this.state({session_id:session.id});
   }
   syncReport(input){
     if(input.paused!==true)throw new RoomError('用户已禁用定期扫描和自动接入；只能回报实际暂停旧例程的结果。',403,'automatic_sync_disabled');
@@ -345,6 +406,6 @@ class LaunchManager{
   async delegate(memberId,roomId,input){const proxy=this.ownProxy(memberId,roomId),key=input.key||id();const e=this.service.bridge.request({member_id:memberId,room_id:roomId,target_member_id:proxy.backend_member_id,text:input.text,idempotency_key:key,conversation_ref:input.origin,external_message_id:input.source_message});return this.result(await this.service.bridge.wait(e.id,Math.min(25,input.seconds??25),memberId,roomId));}
   async wait(memberId,roomId,requestId,seconds=25){const p=this.ownProxy(memberId,roomId),e=this.service.bridge.requireOwner(requestId,memberId,roomId);if(e.target_member_id!==p.backend_member_id)throw new RoomError('请求不属于此代理后端。',403);return this.result(await this.service.bridge.wait(requestId,seconds,memberId,roomId));}
   result(e){return {status:e.status,request_id:e.id,answer:e.response_text||'',error:e.error||null,from:e.target_member_name,return_to_origin:true};}
-  async close(){this.closing=true;await this.watch.close();await Promise.allSettled([...this.jobs.values()]);}
+  async close(){this.closing=true;clearInterval(this.dispatchTimer);await this.watch.close();await Promise.allSettled([...this.jobs.values()]);}
 }
 module.exports={LaunchManager};

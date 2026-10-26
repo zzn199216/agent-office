@@ -277,13 +277,16 @@ function renderMirror(session) {
   if (!$('mirror-dialog').open || mirrorRoom !== roomId) return;
   mirrorSession = session;
   const selected = (session.proxies || []).filter(p => (session.selected_providers || []).includes(p.provider));
-  const reported = selected.length && selected.every(p => p.native_group_ref);
-  $('mirror-status').textContent = session.status === 'preparing' ? '正在准备所选成员…' : reported ? selected.every(p => p.can_wake) ? 'Grok 已回报建群，成员可以自动处理；请在群内验证回答。' : 'Grok 已回报建群，部分 AI 的自动连接还需恢复。' : mirrorDispatched === session.id ? '建群请求已发送给 Grok，等待实际建群回报。' : session.handoff_file ? '建群请求已准备，等待 Grok 创建群。' : '选择成员后创建；也可以直接在 Grok 对 Bot 提出建群请求。';
+  const bound = selected.some(p => p.native_group_ref), reported = session.group_operation?.status === 'reported', membersReady = selected.every(p => p.local_verified) && !session.selected_handshakes?.length;
+  $('mirror-status').textContent = session.status === 'preparing' ? '正在准备所选成员…' : session.dispatch_error ? session.dispatch_error : !membersReady ? '请先在成员连接中接通所选 AI，接通后会继续处理。' : session.group_operation?.status === 'needs_review' ? 'Grok 已回复，但本次群操作尚未确认完成。请查看对话中的结果。' : reported ? selected.every(p => p.can_wake) ? 'Grok 已回报建群，成员可以自动处理；请在群内验证回答。' : 'Grok 已回报建群，部分 AI 的自动连接还需恢复。' : session.group_operation?.message_id || mirrorDispatched === session.id ? '建群请求已发送给 Grok，等待实际建群回报。' : session.handoff_file ? '建群请求已准备，等待 Grok 创建群。' : '选择成员后创建；也可以直接在 Grok 对 Bot 提出建群请求。';
   $('mirror-members-status').innerHTML = selected.map(p => `<p>${escape(p.name)}：${p.can_wake ? '可自动处理' : '自动连接未就绪'} · ${p.native_group_ref ? 'Grok 已回报入群' : '等待入群'}</p>`).join('');
-  $('mirror-create').textContent = reported ? '更新所选成员' : '创建镜像群';
-  $('mirror-create').disabled = mirrorBusy || session.status === 'preparing';
+  $('mirror-create').textContent = bound ? '更新所选成员' : '创建镜像群';
+  $('mirror-create').disabled = mirrorBusy || session.status === 'preparing' || ['pending','needs_review'].includes(session.group_operation?.status);
   $('mirror-prompt').textContent = session.grok_prompt || '';
-  $('mirror-handoff').classList.toggle('hidden', !session.handoff_file || session.status === 'preparing' || !!reported || mirrorDispatched === session.id);
+  $('mirror-handoff').classList.toggle('hidden', !session.handoff_file || !membersReady || session.status === 'preparing' || !!reported || !!session.group_operation?.message_id || mirrorDispatched === session.id);
+  const bridgeId=session.group_operation?.bridge_member_id||session.dispatch_member_id,bridge=bridgeId&&memberById(bridgeId);
+  if(bridge&&!Array.from($('mirror-bridge').options).some(option=>option.value===bridge.id))$('mirror-bridge').add(new Option(bridge.name,bridge.id));
+  if(bridgeId&&!$('mirror-bridge').value)$('mirror-bridge').value=bridgeId;
 }
 async function refreshMirror() {
   const selected = mirrorRoom, sessionId = mirrorSession?.id;
@@ -297,7 +300,7 @@ async function showMirror() {
   $('mirror-name').value = `Agent Office · ${history.room.title} · 手机协作`;
   const people = (history.participants || []).filter(p => !['grok-proxy','grok-bridge'].includes(p.adapter));
   $('mirror-members').innerHTML = '<legend>选择入群的 AI</legend>' + people.map(p => `<label class="checkbox-row"><input type="checkbox" name="mirror-provider" value="${escape(p.provider || p.adapter)}">${escape(p.name)}</label>`).join('');
-  $('mirror-bridge').innerHTML = (history.participants || []).filter(p => p.adapter === 'grok-bridge').map(p => `<option value="${escape(p.id)}">${escape(p.name)}</option>`).join('');
+  $('mirror-bridge').innerHTML = (history.participants || []).filter(p => p.adapter === 'grok-bridge').map(p => `<option value="${escape(p.id)}">${escape(p.name)}</option>`).join('') || '<option value="">自动使用已接通的 Grok Bot</option>';
   $('mirror-handoff').classList.add('hidden'); $('mirror-dialog').showModal(); await refreshMirror();
   clearUITimeout(mirrorTimer); mirrorTimer = setUITimeout(() => action(pollMirror),2000);
 }
@@ -313,7 +316,7 @@ async function createMirror(event) {
   if (!providers.length) { $('mirror-error').textContent = '请勾选要入群的 AI。'; return; }
   mirrorBusy = true; $('mirror-create').disabled = true; $('mirror-error').textContent = '';
   try {
-    const session = await api('/api/launch/prepare',{room_id:selected,providers,group_name:$('mirror-name').value.trim(),install_clients:false});
+    const session = await api('/api/launch/prepare',{room_id:selected,providers,group_name:$('mirror-name').value.trim(),install_clients:false,dispatch:true,dispatch_member_id:$('mirror-bridge').value||undefined});
     if (selected !== roomId || selected !== mirrorRoom) return;
     renderMirror(session);
   } catch (error) { if (selected === mirrorRoom) $('mirror-error').textContent = error.message; }
@@ -322,7 +325,8 @@ async function createMirror(event) {
 async function dispatchMirror() {
   await refreshMirror();
   if (!mirrorSession?.handoff_file || mirrorSession.status === 'preparing' || mirrorRoom !== roomId) return;
-  if (mirrorDispatched === mirrorSession.id || (mirrorSession.proxies || []).filter(p => mirrorSession.selected_providers?.includes(p.provider)).every(p => p.native_group_ref)) return;
+  if (mirrorSession.selected_handshakes?.length || (mirrorSession.proxies || []).some(p => mirrorSession.selected_providers?.includes(p.provider) && !p.local_verified)) return;
+  if (mirrorDispatched === mirrorSession.id || mirrorSession.group_operation?.message_id || mirrorSession.group_operation?.status === 'reported' || !mirrorSession.dispatch_requested) return;
   const selected = mirrorRoom, memberId = $('mirror-bridge').value;
   if (!memberId) return;
   const result = await api('/api/launch/dispatch',{session_id:mirrorSession.id,member_id:memberId});

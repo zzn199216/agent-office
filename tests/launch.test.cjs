@@ -63,6 +63,7 @@ function setup(t, overrides = {}) {
   }
   const options = {
     codex: new FakeCodex(), vault: new FakeVault(),
+    ...(overrides.desktop ? { desktop: overrides.desktop } : {}),
     chat: { clientFactory(member) { const client = new NativeFixture(member, service); clients.set(member.id, client); return client; } },
     launch: { discover: () => { scans++; return scan; }, installer: async input => { installations.push(input); return { status: 'installed', installed: true, connected: false, needs_reload: true, fixture: true }; } }
   };
@@ -116,6 +117,26 @@ test('AO dispatch requires a participating Grok bridge and never queues an unwak
   assert.throws(()=>v.service.launch.dispatch({session_id:state.id,member_id:state.proxies[0].backend_member_id}),{code:'grok_bridge_required'});
 });
 
+test('an existing group requires fresh reports for each update and dispatch survives closing the page',async t=>{
+  const v=setup(t),first=await prepared(v,{providers:['codex'],group_name:'手机办公室'}),proxy=first.proxies[0];
+  v.service.launch.report({session_id:first.id,proxy_id:proxy.id,name:proxy.name,bot_ref:'native-codex',group_ref:'native-room',joined:true});
+  const bridge=v.service.chat.addMember({name:'Grok',adapter:'grok-bridge'});v.service.chat.join(v.room.id,bridge.id);
+  const capability=v.service.chat.deliveryCapability.bind(v.service.chat);
+  v.service.chat.deliveryCapability=m=>(typeof m==='string'?m:m.id)===bridge.id?{can_notify:true,notification_eligible:false}:capability(m);
+  const update=await prepared(v,{providers:['codex'],group_name:'手机办公室',dispatch:true,dispatch_member_id:bridge.id});
+  assert.equal(update.group_operation.status,'prepared');assert.equal(update.proxies[0].native_group_ref,'native-room');assert.notEqual(update.status,'host_reported');
+  v.service.launch.dispatchPending();v.service.launch.dispatchPending();
+  const sent=v.service.launch.state({session_id:update.id});assert.equal(sent.group_operation.status,'pending');assert.ok(sent.group_operation.message_id);
+  assert.equal(v.service.store.db.prepare("SELECT count(*) n FROM chat_messages WHERE idempotency_key=?").get('mirror:'+update.id).n,1);
+  v.service.chat.store.updateMessage(sent.group_operation.message_id,{status:'answered'});
+  assert.equal(v.service.launch.state({session_id:update.id}).group_operation.status,'needs_review','a Bot answer without the native operation report is not success');
+  assert.equal((await v.service.launch.prepare({room_id:v.room.id,providers:['codex'],group_name:'我的手机办公室',dispatch:true})).id,update.id,'an interim Bot reply must not allow a duplicate native operation');
+  v.service.launch.report({session_id:first.id,proxy_id:proxy.id,name:proxy.name,bot_ref:'native-codex',group_ref:'native-room',joined:true});
+  assert.equal(v.service.launch.state({session_id:update.id}).group_operation.status,'needs_review','late reports for an earlier request must not complete this update');
+  const done=v.service.launch.report({session_id:update.id,proxy_id:proxy.id,name:proxy.name,bot_ref:'native-codex',group_ref:'native-room',joined:true});
+  assert.equal(done.group_operation.status,'reported');assert.deepEqual(done.group_operation.reported_proxy_ids,[proxy.id]);
+});
+
 test('AO group dispatch is idempotent and a notification receipt is not group success', async t => {
   const v=setup(t), state=await prepared(v,{group_name:'手机办公室'});
   const g=v.service.chat.addMember({name:'Grok',adapter:'grok-bridge'});v.service.chat.join(v.room.id,g.id);
@@ -124,6 +145,46 @@ test('AO group dispatch is idempotent and a notification receipt is not group su
   const a=v.service.launch.dispatch({session_id:state.id,member_id:g.id}),b=v.service.launch.dispatch({session_id:state.id,member_id:g.id});
   assert.equal(a.dispatch.message_id,b.dispatch.message_id);assert.equal(a.dispatch.status,'queued');assert.equal(a.status,'awaiting_grok');
   assert.ok(a.proxies.every(p=>!p.native_group_ref));
+  const repeated=await v.service.launch.prepare({room_id:v.room.id,providers:state.selected_providers,group_name:'手机办公室',dispatch:true});
+  assert.equal(repeated.id,state.id,'pending native creation must not be submitted twice');
+  await assert.rejects(v.service.launch.prepare({room_id:v.room.id,providers:['codex'],group_name:'手机办公室',dispatch:true}),{code:'group_operation_pending'});
+});
+
+test('native Doubao in another room uses its automatic session rather than a room MCP handshake',async t=>{
+  const candidate={id:'doubao',provider:'doubao',name:'豆包',adapter:'mailbox',installed:true,running:true,capabilities:{mcp_prepare:true}};
+  const v=setup(t,{candidates:[candidate],desktop:{serverName:null,driverFactory:row=>({closed:false,async initialize(){return {nativeChatId:row.native_session_id||'fixture-owned-doubao',detached:true};},close(){this.closed=true;}})}});
+  const member=v.service.chat.addMember({name:'豆包',adapter:'mailbox'});
+  v.service.chat.store.updateMember(member.id,{config:{launch_provider:'doubao'}});
+  v.service.chat.join(v.room.id,member.id);
+  await v.service.desktop.connect({member_id:member.id,room_id:v.room.id,provider:'doubao'});
+  // Existing verified colleague is the precondition; the real adapter above
+  // supplies automatic delivery, independently of any room MCP credential.
+  v.service.chat.store.updateMember(member.id,{status:'ready',verified_at:new Date().toISOString()});
+  const second=v.service.chat.addRoom({title:'Native second room',project_id:v.project.id});
+  const ready=await prepared(v,{room_id:second.id,providers:['doubao'],group_name:'Native second group'});
+  const proxy=ready.proxies[0];
+  assert.equal(proxy.backend_member_id,member.id);assert.equal(proxy.local_verified,true);assert.equal(proxy.can_wake,true);
+  assert.equal(proxy.response_mode,'managed_native');assert.deepEqual(ready.selected_handshakes,[]);assert.equal(ready.status,'awaiting_grok');
+  assert.notEqual(v.service.entry.describe(member.id,second.id).status,'active','room-scoped MCP credentials are not the native transport');
+  v.service.desktop.clients.get(member.id).closed=true;
+  const offline=v.service.launch.state({session_id:ready.id});
+  assert.equal(offline.proxies[0].local_verified,false);assert.equal(offline.status,'needs_setup');assert.deepEqual(offline.selected_handshakes,[]);
+  assert.doesNotMatch(offline.proxies[0].reason,/MCP|领取|本人窗口/);
+  assert.throws(()=>v.service.launch.dispatch({session_id:ready.id,member_id:'unused-bridge'}),{code:'group_members_not_ready'});
+});
+
+test('reusing a Grok Bot in a second room retains both exact group-to-entry routes',async t=>{
+  const v=setup(t),first=await prepared(v,{providers:['codex'],group_name:'First'}),a=first.proxies[0];
+  v.service.launch.report({session_id:first.id,proxy_id:a.id,name:a.name,bot_ref:'shared-native-codex',group_ref:'group-one',joined:true});
+  const other=v.service.chat.addRoom({project_id:v.project.id,title:'Second'}),second=await prepared(v,{room_id:other.id,providers:['codex'],group_name:'Second'}),b=second.proxies[0];
+  assert.equal(a.backend_member_id,b.backend_member_id);assert.notEqual(a.proxy_member_id,b.proxy_member_id);
+  assert.match(fs.readFileSync(second.handoff_file,'utf8'),/shared-native-codex/);
+  v.service.launch.report({session_id:second.id,proxy_id:b.id,name:b.name,bot_ref:'shared-native-codex',group_ref:'group-two',joined:true});
+  for(const proxy of [a,b]){
+    const role=fs.readFileSync(v.service.launch.role(v.service.store.db.prepare('SELECT * FROM launch_proxies WHERE id=?').get(proxy.id)),'utf8');
+    assert.match(role,/group-one/);assert.match(role,/group-two/);assert.match(role,new RegExp(a.proxy_member_id));assert.match(role,new RegExp(b.proxy_member_id));assert.match(role,/不能按群名或最后活跃房间猜测/);
+  }
+  assert.equal(v.service.launch.state({session_id:first.id}).proxies[0].native_group_ref,'group-one');
 });
 for(const denied of [false,true])test(`AO mirror dispatch checks cold saved notification credentials once, denied=${denied}`,async t=>{
   const v=setup(t),state=await prepared(v,{providers:['codex'],group_name:'恢复后的群'});
