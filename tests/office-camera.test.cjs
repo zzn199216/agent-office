@@ -90,3 +90,10 @@ test('automatically reflowed rooms preserve the actual doorway and clear walking
     assert.equal(route.keyframes.at(-1).transform,'translate(0px, 0px)');
   }
 });
+test('the floor starts below the rendered toolbar when it wraps or uses taller glyphs',()=>{
+  const plain=scene.cameraLayout(390,844,1),wrapped=scene.cameraLayout(390,844,1,{},180);
+  assert.equal(plain.y,scene.cameraLayout(390,844,1,{},0).y,'no measurement keeps the default allowance');
+  assert.ok(wrapped.y>=188,'floor clears a 180px toolbar with spacing');
+  assert.equal(scene.cameraLayout(1200,800,1,{},20).y,scene.cameraLayout(1200,800,1).y,'a short toolbar never pulls the floor upward');
+  for(const value of [NaN,-5,Infinity])assert.equal(scene.cameraLayout(390,844,1,{},value).y,plain.y);
+});

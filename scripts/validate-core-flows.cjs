@@ -266,6 +266,11 @@ async function main() {
       }
       await page.setViewportSize({width:390,height:844});
       await page.waitForFunction(()=>document.documentElement.scrollWidth<=innerWidth+1&&document.querySelector('.ao-floor').getBoundingClientRect().top>=document.querySelector('.ao-toolbar-right').getBoundingClientRect().bottom);
+      // Taller glyphs (another host's fonts) wrap or grow the office toolbar; the floor must still start below it.
+      const officeType=await page.evaluate(()=>{const sheet=[...document.styleSheets].find(sheet=>sheet.href?.endsWith('/office.css'));return sheet.insertRule('.ao-toolbar button{font-size:16px!important;letter-spacing:1px!important}',sheet.cssRules.length);});
+      await page.waitForFunction(()=>document.documentElement.scrollWidth<=innerWidth+1&&document.querySelector('.ao-floor').getBoundingClientRect().top>=document.querySelector('.ao-toolbar').getBoundingClientRect().bottom);
+      await shot('06-office-390-large-type.png');
+      await page.evaluate(index=>[...document.styleSheets].find(sheet=>sheet.href?.endsWith('/office.css')).deleteRule(index),officeType);
       await page.getByRole('button',{name:'关闭办公室灯光',exact:true}).click();
       await page.locator('.ao-scene[data-lights="off"]').waitFor();assert.ok(await shade()>.5);
       await page.reload();await page.locator('.ao-scene[data-lights="off"]').waitFor();

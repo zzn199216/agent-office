@@ -91,11 +91,14 @@
   // The office has its own coordinates. A narrow window changes the camera,
   // not the desks or the entrance route. Bounds represent the transformed
   // room, avoiding the scroll overflow of a large, CSS-scaled layout box.
-  function cameraLayout(viewportWidth, viewportHeight, slotCount=0, settings={}) {
+  function cameraLayout(viewportWidth, viewportHeight, slotCount=0, settings={}, toolbarBottom=0) {
     const finite=(value,fallback)=>Number.isFinite(value)&&value>0?value:fallback;
     const width=finite(viewportWidth,GEOMETRY.minimumWidth),height=finite(viewportHeight,GEOMETRY.minimumHeight);
     const config=normalizeScene(settings);
-    const marginX=Math.min(12,width*.015),marginTop=Math.min(width<=620?100:64,height*.22),marginBottom=Math.min(16,height*.05);
+    // The floor starts below the toolbar as actually rendered: it may wrap or
+    // use taller glyphs than the fixed allowance, and must never cover a control.
+    const measured=Number.isFinite(toolbarBottom)&&toolbarBottom>0?toolbarBottom+8:0;
+    const marginX=Math.min(12,width*.015),marginTop=Math.max(Math.min(width<=620?100:64,height*.22),measured),marginBottom=Math.min(16,height*.05);
     const availableWidth=Math.max(1,width-marginX*2),availableHeight=Math.max(1,height-marginTop-marginBottom);
     // The room is a rectangular surface that fills its pane. Furniture keeps
     // its natural proportions; additional rows continue below the viewport.
@@ -445,7 +448,9 @@
       const width=scroll.clientWidth||container.clientWidth||GEOMETRY.minimumWidth;
       const height=scroll.clientHeight||container.clientHeight||GEOMETRY.minimumHeight;
       const slotCount=slots.size?Math.max(...slots.values())+1:0;
-      const nextCamera=cameraLayout(width,height,slotCount,config),next=nextCamera.world;
+      // Measure the lowest rendered control: a wrapped row can overflow the toolbar box.
+      const toolbarBottom=Math.max(top.getBoundingClientRect().bottom,...[...top.children].map(child=>child.getBoundingClientRect().bottom))-scroll.getBoundingClientRect().top;
+      const nextCamera=cameraLayout(width,height,slotCount,config,toolbarBottom),next=nextCamera.world;
       // Resizing changes the coordinate system, so complete active walks rather
       // than sending the same member through the door a second time.
       if(layout&&(layout.width!==next.width||layout.columns!==next.columns||layout.rowPitch!==next.rowPitch))cancelEntrances();
@@ -517,7 +522,7 @@
     let mutation=null;
     if(typeof view.MutationObserver==='function'){mutation=new view.MutationObserver(onVisibility);for(let element=container;element&&element!==document.body;element=element.parentElement)mutation.observe(element,{attributes:true,attributeFilter:['class','hidden','aria-hidden']});}
     let resize=null;
-    if(typeof view.ResizeObserver==='function'){resize=new view.ResizeObserver(()=>{if(!destroyed){applyLayout();onVisibility();}});resize.observe(scroll);}
+    if(typeof view.ResizeObserver==='function'){resize=new view.ResizeObserver(()=>{if(!destroyed){applyLayout();onVisibility();}});resize.observe(scroll);resize.observe(top);for(const child of top.children)resize.observe(child);}
     return Object.freeze({update,setSuspended(value){if(destroyed)return;suspended=!!value;onVisibility();},destroy(){if(destroyed)return;destroyed=true;cancelEntrances();if(timer!==null)view.clearTimeout(timer);if(clockTimer!==null)view.clearTimeout(clockTimer);document.removeEventListener('visibilitychange',onVisibility);if(reducedMotion?.removeEventListener)reducedMotion.removeEventListener('change',onVisibility);else reducedMotion?.removeListener?.(onVisibility);observer?.disconnect();mutation?.disconnect();resize?.disconnect();scene.remove();items.clear();slots.clear();}});
   }
   // `members` (optional) is the room roster, used to give same-model colleagues distinct accessories.
