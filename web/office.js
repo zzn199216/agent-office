@@ -185,7 +185,7 @@
   function participantPresence(member, runtime, online, now) {
     const observed = {...(runtime?.members || runtime?.presence || []).find(item => (item.id || item.member_id) === member.id), ...member.runtime_state};
     const desktop=member.desktop_connection,nativeUnavailable=desktop&&!['manual','manual_mcp','configured_notification'].includes(member.connection_method)&&member.response_mode!=='manual_mailbox'&&desktop.configured===true&&desktop.can_wake===false&&(['offline','error','failed','reconnecting'].includes(desktop.state)||!!desktop.error);
-    if(nativeUnavailable)return {status:'offline',label:online?'本人对话未连接 · 查看连接':'服务已关闭',worker:false,lastSeen:member.last_seen||observed.last_seen||null,needsConnection:online};
+    if(nativeUnavailable)return {status:'offline',label:online?'还没连上 · 点开查看':'服务已关闭',worker:false,lastSeen:member.last_seen||observed.last_seen||null,needsConnection:online};
     const original = member.presence || observed.presence || 'unknown';
     let status = typeof original === 'string' ? original : original.state || original.status || 'unknown';
     const expires = original?.lease_expires || observed.lease_expires;

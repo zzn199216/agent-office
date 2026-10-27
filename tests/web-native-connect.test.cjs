@@ -34,9 +34,9 @@ test('revoked manual setup never displays historical success or asks to copy an 
 test('protocol verification never claims a loaded native conversation or actual reply',()=>{
   const f=fixture({evidence:{protocol_verified:true}});f.context.renderSetup();
   assert.match(f.$('member-connect-guide').innerHTML,/待连接验证/);assert.match(f.$('member-connect-guide').innerHTML,/待实际任务验证/);
-  assert.match(f.$('member-setup-status').innerHTML,/本人对话待验证/);assert.doesNotMatch(f.$('member-setup-status').innerHTML,/旧协议已验证|old-protocol-proof|验证于/);
+  assert.match(f.$('member-setup-status').innerHTML,/已连上，等待验证/);assert.doesNotMatch(f.$('member-setup-status').innerHTML,/旧协议已验证|old-protocol-proof|验证于/);
   f.member.runtime_state.connection_evidence={native_conversation_loaded:true,model_reply_verified:false};f.context.renderSetup();
-  assert.match(f.$('member-setup-status').innerHTML,/本人对话已加载/);assert.match(f.$('member-connect-guide').innerHTML,/接入时自动验证回复/);
+  assert.match(f.$('member-setup-status').innerHTML,/已连上/);assert.match(f.$('member-connect-guide').innerHTML,/接入时会自动验证回复/);
   assert.doesNotMatch(f.$('member-connect-guide').innerHTML,/已核对原问题的真实回答/);
   f.member.runtime_state.connection_evidence={native_conversation_loaded:true,model_reply_verified:true};f.context.renderSetup();
   assert.match(f.$('member-setup-status').innerHTML,/本人实际回复已核对/);assert.match(f.$('member-connect-guide').innerHTML,/已核对原问题的真实回答/);
@@ -46,9 +46,9 @@ test('protocol verification never claims a loaded native conversation or actual 
 test('current disconnected desktop overrides historical native proof in setup and inspector',()=>{
   const proof={native_conversation_loaded:true,model_reply_verified:true,automatic_reply_verified:true};
   const f=fixture({provider:'doubao',evidence:proof});f.member.desktop_connection={configured:true,state:'offline',can_wake:false,error:'fetch failed'};f.member.connection_method='native_desktop';f.client.native_state.error='fetch failed';f.context.renderSetup();
-  const html=f.$('member-setup-status').innerHTML+f.$('member-connect-guide').innerHTML;assert.match(html,/本人对话未连接/);assert.match(html,/开启客户端连接后继续/);assert.match(html,/待连接验证/);assert.match(html,/待实际任务验证/);assert.doesNotMatch(html,/已核对原问题的真实回答|本人的实际回复已核对|fetch failed/);
+  const html=f.$('member-setup-status').innerHTML+f.$('member-connect-guide').innerHTML;assert.match(html,/还没连上/);assert.match(html,/需要做哪一步/);assert.match(html,/待连接验证/);assert.match(html,/待实际任务验证/);assert.doesNotMatch(html,/已核对原问题的真实回答|本人的实际回复已核对|fetch failed/);
   const inspector=inspectorFixture({provider:'doubao',evidence:proof});inspector.member.desktop_connection=f.member.desktop_connection;inspector.member.connection_method='native_desktop';inspector.context.renderInspector();
-  assert.match(inspector.$('inspector-members').innerHTML,/点开查看连接步骤/);assert.doesNotMatch(inspector.$('inspector-selected-member').innerHTML,/已核对原问题的真实回答/);
+  assert.match(inspector.$('inspector-members').innerHTML,/点开查看需要做哪一步/);assert.doesNotMatch(inspector.$('inspector-selected-member').innerHTML,/已核对原问题的真实回答/);
 });
 
 test('native primary UI hides private values and preserves explicit compatibility copying without reconnecting',async()=>{
@@ -70,7 +70,7 @@ test('primary click sends exactly the selected native identity and refreshes act
   await f.$('member-connect-guide').onclick(click('data-native-connect'));
   assert.deepEqual(plain(f.calls[0]),{route:'/api/desktop/connect',body:{member_id:'member/native',room_id:'room:one',provider:'qwen-desktop'}});
   assert.equal(f.calls[1].route,'/api/chat/members/member%2Fnative/setup?room_id=room%3Aone');assert.equal(f.calls.length,2);
-  assert.match(f.notices[0],/正在核对实际回复/);assert.match(f.$('member-connect-guide').innerHTML,/待实际任务验证/);assert.doesNotMatch(f.$('member-connect-guide').innerHTML,/ACTUAL-NATIVE-ID/);
+  assert.match(f.notices[0],/正在验证它能回复/);assert.match(f.$('member-connect-guide').innerHTML,/待实际任务验证/);assert.doesNotMatch(f.$('member-connect-guide').innerHTML,/ACTUAL-NATIVE-ID/);
   assert.equal(f.context.nativeSetupPending,null);
 });
 
@@ -85,8 +85,8 @@ test('failed native endpoint retains the exact API reason and actionable step wi
   await f.context.connectNativeDesktop();const html=f.$('member-connect-guide').innerHTML;
   assert.equal(f.calls.length,1);assert.match(html,/role="alert"/);assert.match(html,/桌面对话连接尚未开启/);assert.match(html,/请先打开 豆包/);assert.match(html,/待连接验证/);assert.match(html,/待实际任务验证/);
   assert.doesNotMatch(html,/本人的实际回复已核对/);assert.equal(f.context.nativeSetupPending,null);
-  for(const [code,next] of[['desktop_request_uncertain','沿用原记录'],['desktop_target_ambiguous','多个'],['GROK_NATIVE_SOURCE_VERSION_MISMATCH','版本'],['native_login_required','登录']])assert.ok(f.context.nativeConnectNextStep('grok-bot',{code}).includes(next));
-  f.context.nativeSetupFailure=null;f.client.native_state.error='本人接口版本尚未核对。';f.member.runtime_state.connection_evidence.last_error={code:'desktop_adapter_unverified'};f.context.renderSetup();assert.match(f.$('member-connect-guide').innerHTML,/版本或本人接口尚未通过核对/,'persisted evidence retains the actionable failure category when the setup dialog reopens');
+  for(const [code,next] of[['desktop_request_uncertain','重新检查'],['desktop_target_ambiguous','多个'],['GROK_NATIVE_SOURCE_VERSION_MISMATCH','版本'],['native_login_required','登录']])assert.ok(f.context.nativeConnectNextStep('grok-bot',{code}).includes(next));
+  f.context.nativeSetupFailure=null;f.client.native_state.error='本人接口版本尚未核对。';f.member.runtime_state.connection_evidence.last_error={code:'desktop_adapter_unverified'};f.context.renderSetup();assert.match(f.$('member-connect-guide').innerHTML,/这个版本的应用暂不支持自动连接/,'persisted evidence retains the actionable failure category when the setup dialog reopens');
 });
 
 test('late native results cannot overwrite a newly selected room or member',async()=>{
@@ -104,7 +104,7 @@ test('unsupported native source offers visible MCP settings and a separate curre
     const f=fixture({provider,verifiedAt:null});f.client.native_state={error:'原生接口不兼容',error_code:provider==='doubao'?'DOUBAO_NATIVE_PREPARATION_UNSUPPORTED_SOURCE':'desktop_version_unsupported'};
     f.client.fallback={kind:'http_json',installation_prompt:'PRIVATE-INSTALL',copy:'PRIVATE-HTTP-CONFIG',copy_label:'复制 MCP 配置',bootstrap:'PRIVATE-HANDSHAKE',steps:['保存并启用此客户端的 MCP。']};
     f.context.renderSetup();const html=f.$('member-connect-guide').innerHTML;
-    assert.match(html,/使用兼容版本，或按下方步骤改用 MCP/);assert.match(html,/复制安装 \/ 更新 MCP 提示词/);assert.match(html,/复制 MCP 配置/);assert.match(html,/复制本人窗口握手提示词/);assert.match(html,/后台自动接手能力另行验证/);assert.doesNotMatch(html,/PRIVATE-/);
+    assert.match(html,/可以按下方步骤改用 MCP 连接/);assert.match(html,/复制安装 \/ 更新 MCP 提示词/);assert.match(html,/复制 MCP 配置/);assert.match(html,/复制本人窗口握手提示词/);assert.match(html,/消息在它自己的窗口里查看/);assert.doesNotMatch(html,/PRIVATE-/);
     assert.ok(html.indexOf('用 MCP 连接')<html.indexOf('<details'));assert.equal(f.calls.length,0);
   }
 });
@@ -186,8 +186,8 @@ test('onboarding native action uses its scoped job and stops after a room switch
   await f.context.connectOnboardingNative(job);assert.equal(f.calls.filter(call=>call.route==='/api/desktop/connect').length,1);assert.equal(f.onboardingRefreshes,1);
   const stale=fixture(),gate=deferred();stale.context.api=async(route,body)=>{stale.calls.push({route,body});return gate.promise;};
   const pending=stale.context.connectOnboardingNative(job);stale.context.roomId='different-room';gate.resolve({member:stale.member,client:stale.client});
-  await assert.rejects(pending,/当前房间已切换/);assert.equal(stale.calls.filter(call=>call.route==='/api/desktop/connect').length,0);
-  await assert.rejects(stale.context.connectOnboardingNative(job),/不属于当前房间/);assert.equal(stale.calls.length,1);
+  await assert.rejects(pending,/房间已切换/);assert.equal(stale.calls.filter(call=>call.route==='/api/desktop/connect').length,0);
+  await assert.rejects(stale.context.connectOnboardingNative(job),/属于另一个房间/);assert.equal(stale.calls.length,1);
 });
 test('native setup replaces the picker and preserves only its current member completion flow',async()=>{
   const f=fixture(),job={id:'native-run',member_id:f.member.id,room_id:f.context.roomId,provider:'qwen-desktop',status:'needs_action'};
@@ -232,17 +232,17 @@ function inspectorFixture(options={}){
 test('inspector recognizes unattached native people from public provider and opens their existing setup',async()=>{
   for(const provider of['qwen-desktop','doubao']){
     const f=inspectorFixture({provider,adapter:provider==='grok-bot'?'grok-bridge':'mailbox',verifiedAt:null});f.context.renderInspector();
-    assert.match(f.$('inspector-selected-member').innerHTML,/独立原生对话/);assert.match(f.$('inspector-selected-member').innerHTML,/待连接验证/);assert.match(f.$('inspector-selected-member').innerHTML,/待实际任务验证/);
-    assert.doesNotMatch(f.$('inspector-selected-member').innerHTML,/本人窗口领取|旧协议已验证/);assert.match(f.$('inspector-members').innerHTML,/本人对话连接待核对/);
-    assert.equal(f.$('inspector-member-connect').textContent,'连接本人对话');assert.equal(f.$('inspector-member-connect').classList.contains('primary'),true);assert.equal(f.$('inspector-member-connect').disabled,false);
-    assert.match(f.$('inspector-connection-note').textContent,/会话加载与实际问题的回答分别验证/);assert.doesNotMatch(f.$('inspector-connection-note').textContent,/本人窗口领取/);
+    assert.match(f.$('inspector-selected-member').innerHTML,/应用里的单独对话/);assert.match(f.$('inspector-selected-member').innerHTML,/待连接验证/);assert.match(f.$('inspector-selected-member').innerHTML,/待实际任务验证/);
+    assert.doesNotMatch(f.$('inspector-selected-member').innerHTML,/在它自己的窗口看消息|在自己窗口看消息|旧协议已验证/);assert.match(f.$('inspector-members').innerHTML,/连接待确认/);
+    assert.equal(f.$('inspector-member-connect').textContent,'连接');assert.equal(f.$('inspector-member-connect').classList.contains('primary'),true);assert.equal(f.$('inspector-member-connect').disabled,false);
+    assert.match(f.$('inspector-connection-note').textContent,/再自动验证它能回复/);assert.doesNotMatch(f.$('inspector-connection-note').textContent,/在自己的窗口里看消息/);
     await f.$('inspector-member-connect').onclick();assert.equal(f.$('member-setup-dialog').open,true);assert.equal(f.bridges.length,0);assert.equal(f.calls.length,1,'viewing setup does not create a native conversation or call a model');assert.ok(f.calls[0].route.includes('/setup?room_id='));
   }
 });
 
 test('Grok inspector offers a guided connection without claiming unsupported native control',async()=>{
   const f=inspectorFixture({provider:'grok-bot',adapter:'grok-bridge',verifiedAt:null});f.client.kind='grok_guided';f.client.copy='OWNED-HANDOFF';f.context.renderInspector();
-  assert.match(f.$('inspector-selected-member').innerHTML,/Grok 本机入口 · 自动接手另行验证/);assert.doesNotMatch(f.$('inspector-selected-member').innerHTML,/独立原生对话/);
+  assert.match(f.$('inspector-selected-member').innerHTML,/Grok 本机入口 · 自动接手另行验证/);assert.doesNotMatch(f.$('inspector-selected-member').innerHTML,/应用里的单独对话/);
   assert.equal(f.$('inspector-member-connect').textContent,'连接 Grok');assert.match(f.$('inspector-connection-note').textContent,/复制一次连接说明/);
   await f.$('inspector-member-connect').onclick();assert.equal(f.$('member-setup-dialog').open,true);assert.match(f.$('member-connect-guide').innerHTML,/data-grok-copy/);assert.equal(f.bridges.length,0);
 });
@@ -318,10 +318,10 @@ test('explicit entry to a historically verified office keeps current connection 
 
 test('inspector keeps actual native model evidence separate and preserves manual client guidance',()=>{
   const native=inspectorFixture({evidence:{native_conversation_loaded:true,model_reply_verified:false}});native.context.renderInspector();
-  assert.match(native.$('inspector-selected-member').innerHTML,/已加载本人对话/);assert.match(native.$('inspector-selected-member').innerHTML,/待实际任务验证/);assert.match(native.$('inspector-members').innerHTML,/实际回复待验证/);
+  assert.match(native.$('inspector-selected-member').innerHTML,/应用里的对话已连上/);assert.match(native.$('inspector-selected-member').innerHTML,/待实际任务验证/);assert.match(native.$('inspector-members').innerHTML,/等待验证回复/);
   native.member.runtime_state.connection_evidence.model_reply_verified=true;native.context.renderInspector();assert.match(native.$('inspector-selected-member').innerHTML,/已核对原问题的真实回答/);
   const manual=inspectorFixture({provider:'claude-desktop',adapter:'mailbox'});manual.client.kind='stdio_json';manual.context.renderInspector();
-  assert.match(manual.$('inspector-selected-member').innerHTML,/本人窗口领取消息/);assert.match(manual.$('inspector-connection-note').textContent,/桌面信箱成员需要在本人窗口领取消息/);
+  assert.match(manual.$('inspector-selected-member').innerHTML,/在它自己的窗口看消息/);assert.match(manual.$('inspector-connection-note').textContent,/这位成员在自己的窗口里看消息/);
   assert.equal(manual.$('inspector-member-connect').textContent,'查看成员连接');assert.equal(manual.$('inspector-member-connect').classList.contains('secondary'),true);assert.equal(manual.$('inspector-member-connect').classList.contains('primary'),false);
 });
 

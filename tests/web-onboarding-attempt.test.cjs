@@ -43,7 +43,7 @@ test('legacy recheck observations stay read-only and cannot borrow old ready fla
   for(const source of ['connection_repair_required','connection_recheck_available']){
     const f=fixture({...recheckState,stage:source,status:'ready_automatic',ready_for_office:true,can_wake:true,message:'OLD SUCCESS'});f.context.api=async(route,body)=>{f.calls.push({route,body});return{...f.job,...recheckState};};
     await f.context.checkOnboarding(f.job.id);assert.equal(f.calls.length,1);assert.equal(f.calls[0].body,undefined);const job=f.context.onboardingJobs.get(f.job.id),html=f.context.onboardingJobMarkup(job);
-    assert.equal(f.context.onboardingOfficeReady(job),false);assert.equal(f.context.onboardingReady(job),null);assert.equal(f.context.onboardingRunning(job),false);assert.match(html,/沿用已有登录，重新验证/);assert.doesNotMatch(html,/onboarding-job ready|OLD SUCCESS|data-onboarding-check|login_client|复制/);
+    assert.equal(f.context.onboardingOfficeReady(job),false);assert.equal(f.context.onboardingReady(job),null);assert.equal(f.context.onboardingRunning(job),false);assert.match(html,/重新验证连接/);assert.doesNotMatch(html,/onboarding-job ready|OLD SUCCESS|data-onboarding-check|login_client|复制/);
   }
 });
 test('safe cached-login recheck needs one explicit retry and adopts the new attempt before navigation',async()=>{
