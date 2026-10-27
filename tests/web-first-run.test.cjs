@@ -21,3 +21,25 @@ test('first run is one path: folder, then an AI, with no separate room form',()=
   assert.doesNotMatch(html,/聊天室/,'one name for rooms in the interface');
   assert.doesNotMatch(html,/原生执行成员/);
 });
+
+test('every add-AI button opens the same picker, or the folder step when there is no room yet',()=>{
+  const calls=[];const context=vm.createContext({professionalView:true,roomId:'room',legacyId:null,projectId:'project',openSecretaryConnect:()=>calls.push('picker'),openFirstRoom:id=>calls.push('room:'+id),showProject:()=>calls.push('folder'),setProfessionalView:()=>calls.push('office'),action:callback=>callback()});
+  vm.runInContext(section('function openAddAI(','$(\'professional-toggle\').onclick'),context);
+  context.openAddAI();context.roomId=null;context.openAddAI();context.projectId=null;context.openAddAI();
+  assert.deepEqual(calls,['picker','room:project','folder']);
+  for(const id of ['professional-toggle','room-member-add','empty-add-member','inspector-add-member'])assert.match(source,new RegExp(`(\\$\\('${id}'\\)\\.onclick = openAddAI|'${id}'[^\\]]*\\]\\) \\$\\(id\\)\\.onclick = openAddAI)`),id);
+  assert.equal((html.match(/aria-label="连接设置"/g)||[]).length,1,'one settings gear');
+});
+
+test('the collaboration panel leads with goals and tasks; meetings, brief and the Grok group are folded',()=>{
+  const main=html.slice(html.indexOf('<section id="inspector-team-page"'),html.indexOf('</section>',html.indexOf('<section id="inspector-team-page"')));
+  assert.ok(main.indexOf('id="team-content"')<main.indexOf('id="team-more"'));assert.ok(main.indexOf('id="team-more"')<main.indexOf('id="mirror-open"'));
+  const render=section('function renderTeam() {','function teamEvidence(');
+  assert.match(render,/extra \+= `<details class="team-section team-brief"/);assert.match(render,/if \(activeMeeting\) html \+= meetingHtml; else extra = meetingHtml \+ extra/);
+});
+
+test('the sidebar never says the service is running while it is stopped',()=>{
+  const render=section('function renderService() {','if (!desktop) return;');
+  assert.match(render,/webConnected \? '本机运行中/);assert.match(render,/服务已关闭/);
+  assert.doesNotMatch(html,/本机运行，记录留在这里/);
+});

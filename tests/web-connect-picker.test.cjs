@@ -26,7 +26,7 @@ function fixture(candidates = []) {
     section('function openSecretaryConnect()', 'function updateOfficeScene()'), context);
   return {context, $, calls, notices};
 }
-test('running desktop agents appear first while unopened runtimes remain collapsed', () => {
+test('the picker leads with an AI that can be the secretary, lists what is on this computer and folds the rest', () => {
   const state = fixture([
     {id:'qwen-code',name:'Uninstalled CLI',installable:true,capabilities:{automatic_launch:true}},
     {id:'doubao',name:'Running Doubao',installed:true,running:true,capabilities:{mcp_prepare:true}},
@@ -35,14 +35,18 @@ test('running desktop agents appear first while unopened runtimes remain collaps
     {id:'claude-code',name:'Closed Claude',installed:true,running:false,capabilities:{automatic_launch:true}}
   ]);
   state.context.renderLaunchCandidates();
-  const html = state.$('launch-candidates').innerHTML, boundary = html.indexOf('<details');
+  const html = state.$('launch-candidates').innerHTML, boundary = html.indexOf('<details'), shown = html.slice(0,boundary);
   assert.ok(boundary > 0);
-  for (const name of ['Running Doubao','Running Qwen','Running Grok']) assert.ok(html.slice(0,boundary).includes(name));
-  for (const name of ['Uninstalled CLI','Closed Claude']) {
-    assert.equal(html.slice(0,boundary).includes(name), false);
-    assert.ok(html.slice(boundary).includes(name));
-  }
+  assert.ok(shown.indexOf('Closed Claude') >= 0 && shown.indexOf('Closed Claude') < shown.indexOf('Running Doubao'), 'a background AI that can be the secretary comes first');
+  assert.match(shown.slice(0, shown.indexOf('Running Doubao')), /推荐当秘书/);
+  assert.equal((html.match(/推荐/g) || []).length, 1, 'one recommendation');
+  for (const name of ['Running Doubao','Running Qwen','Running Grok']) assert.ok(shown.includes(name));
+  assert.equal(shown.includes('Uninstalled CLI'), false);assert.ok(html.slice(boundary).includes('Uninstalled CLI'));
   assert.doesNotMatch(html.slice(boundary).split('>')[0], /\bopen\b/);
+  // One label to start, one blue button, and no internal terms.
+  assert.deepEqual([...new Set([...shown.matchAll(/data-onboarding-provider="[^"]+"[^>]*>([^<]+)</g)].map(match => match[1]))], ['接入']);
+  assert.equal((shown.match(/class="primary onboarding-start"/g) || []).length, 1);
+  assert.doesNotMatch(html, /本人对话|桥接|握手|后台 CLI|独立会话|MCP|沿用|一键接入|尚未验证 AO/);
   assert.equal(state.calls.length, 0, 'rendering never installs or starts an agent');
 });
 test('opening the picker requests one quiet inventory scan and never onboards a member', async () => {

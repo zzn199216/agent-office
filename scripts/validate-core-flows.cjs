@@ -201,11 +201,14 @@ async function main() {
       const credentials=service.store.db.prepare('SELECT id FROM chat_resume_credentials ORDER BY id').all();
       await server.close();server=null;await service.close();service=null;
       await page.locator('.ao-scene.ao-offline-room').waitFor();assert.equal(await page.locator('.ao-light-switch').isDisabled(),true);
+      // Every place on the page tells the same story, and says how to get back.
+      await page.waitForFunction(()=>!document.getElementById('web-offline-banner').classList.contains('hidden'));assert.match(await page.locator('#sidebar-service-status').textContent(),/服务已关闭/);
       await shot('04-service-disconnected.png');
       token=id();service=new RoomService(files.data,options);server=createServer(service,{port,token});
       assert.equal(await server.listen(),port);service._localUrl=base;
       // The open page must recover its controller cookie; no reload/token injection.
       await page.waitForFunction(()=>document.querySelector('.ao-scene')&&!document.querySelector('.ao-scene.ao-offline-room'));
+      await page.waitForFunction(()=>document.getElementById('web-offline-banner').classList.contains('hidden'));assert.match(await page.locator('#sidebar-service-status').textContent(),/本机运行中/);
       await initialize();const rooms=await tool('agentroom_chat_rooms');assert.equal(rooms.member_id,member.id);
       assert.deepEqual(service.store.db.prepare('SELECT id FROM chat_resume_credentials ORDER BY id').all(),credentials);
       await reply(pending,'隔离回复：重启前的同一条消息已完成');
@@ -262,7 +265,7 @@ async function main() {
         });
         assert.ok(layout.noScroll,'Toolbar needs horizontal scrolling at '+width);
         for(const control of layout.controls)assert.ok(control.visible&&control.reachable,`${control.id} clipped or covered at ${width}px`);
-        await page.locator('#team-open').click();
+        await page.locator('#team-open').click();if(!await page.locator('#team-more').evaluate(details=>details.open))await page.locator('#team-more > summary').click();
         await page.locator('#mirror-open').click();
         await page.locator('#mirror-dialog').waitFor({state:'visible'});
         await shot(`06-mirror-${width}-large-type.png`);

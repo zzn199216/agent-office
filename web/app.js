@@ -107,7 +107,7 @@ function setWebConnected(connected) { webConnected = connected; renderRuntime();
 function setProfessionalView(value) {
   professionalView = !!value; localStorage.setItem('agentroom-professional-view',String(professionalView));
   $('professional-workspace').classList.toggle('hidden',!professionalView); $('launch-home').classList.toggle('hidden',professionalView);
-  $('professional-toggle').textContent = professionalView ? '接入成员 ＋' : '回到办公室 ↖'; $('professional-toggle').setAttribute('aria-pressed',String(professionalView));
+  $('professional-toggle').textContent = professionalView ? '接入 AI ＋' : '回到办公室 ↖'; $('professional-toggle').setAttribute('aria-pressed',String(professionalView));
   document.body.classList.toggle('simple-mode',!professionalView);
   applyRoomView(); applyInspector();
   renderLaunch();
@@ -175,18 +175,25 @@ function renderLaunchCandidates() {
   lastLaunchCandidates = signature;
   const othersOpen = $('launch-candidates').querySelector('.launch-other-candidates')?.open === true;
   if (launchScanning) { $('launch-candidates').innerHTML = '<div class="launch-scan-note"><span class="pulse-dot"></span> 正在查看本机安装和运行情况…</div>'; return; }
-  if (!launchCandidates) { $('launch-candidates').innerHTML = '<div class="launch-scan-note">点击扫描，找到想接入的成员，再点“一键接入”。</div>'; return; }
+  if (!launchCandidates) { $('launch-candidates').innerHTML = '<div class="launch-scan-note">点「重新扫描」，找到你电脑上的 AI。</div>'; return; }
   const visible = launchCandidates.filter(candidate => candidate.id !== 'mailbox' && (candidate.installed || candidate.running || onboardingCanInstall(candidate) || candidate.capabilities?.automatic_launch || candidate.capabilities?.mcp_prepare));
+  // Background CLIs handle messages on their own, so they are the ones that can be the secretary. Codex and Claude Code come first.
+  const RECOMMENDED = ['codex','claude-code'], rank = candidate => { const provider = launchProvider(candidate); return !onboardingSelectable(candidate) ? 9 : RECOMMENDED.includes(provider) ? RECOMMENDED.indexOf(provider) : onboardingMode(candidate) === 'managed' ? 4 : candidate.running ? 5 : 6; };
+  const ordered = visible.slice().sort((a,b) => rank(a) - rank(b)), recommended = ordered.find(candidate => rank(candidate) < 5 && (candidate.installed || candidate.running)), recommendedProvider = recommended && launchProvider(recommended);
+  const needsSecretary = !roomId || typeof currentSecretary !== 'function' || !currentSecretary().member_id;
   const renderCandidate = candidate => {
-    const provider = launchProvider(candidate), selectable = launchSelectable(candidate), canJoin = onboardingSelectable(candidate), mode = onboardingMode(candidate), job = onboardingForProvider(provider), feedback=typeof onboardingFeedback==='undefined'?null:onboardingFeedback.get(job?.id),pending = onboardingStarting.has(provider) || onboardingRunning(job) || feedback?.pending;
-    const availability = onboardingRepairRequired(job)?'连接已暂停 · 保护桌面登录':onboardingRecheckPending(job)?'已有登录可复用 · 等待重新验证':job?.stage==='awaiting_auth'?provider==='codex'?'请先在原 Codex 窗口登录 · 尚未接通':'需要后台账号授权 · 尚未接通':onboardingOfficeReady(job)?job.can_wake?'本次连接已验证 · 可以自动处理消息':'本次信箱连接已验证 · 需要本人窗口处理':pending?'正在验证本次连接':job?.error?'本次接入尚未完成 · 请查看下方原因':!canJoin ? candidate.support === 'unsupported' ? '已发现，接口待适配' : !candidate.installed ? mode === 'managed' ? '需安装官方 CLI · 查看说明' : '尚未安装 · 查看官方接入说明' : '已发现 · 待适配' : !candidate.installed ? '尚未安装 · 可安装接入' : candidate.running ? '已发现本机进程 · 尚未验证 AO 连接' : '已安装 · 尚未接入';
-    const guidedGrok=provider==='grok-bot'&&candidate.capabilities?.native_direct_available!==true,native = nativeDesktopProvider(candidate)&&!guidedGrok, label = onboardingRepairRequired(job)?'查看连接保护说明':onboardingRecheckPending(job)?'查看重新验证步骤':feedback?.pending&&feedback.operation==='login_client'?'正在打开配置…':pending ? '正在接入…' : onboardingOfficeReady(job) ? '进入办公室' : job?.stage==='awaiting_auth'?provider==='codex'?'查看登录状态':'继续账号授权':job?.status === 'needs_action' ? '继续接入' : !candidate.installed && canJoin ? '安装并接入' : guidedGrok?'连接 Grok':native ? '连接本人对话' : '一键接入';
-    const accountNote = guidedGrok?'复制一次说明到已有 Grok Bot，AO 自动检查；无需先建群':native ? provider === 'grok-bot' ? '为这位同事保留专用 Bot，连接后核对实际回复' : '沿用本人客户端的登录，为这位同事保留原生对话' : mode === 'bridge' ? '复用桥接 Bot 的本人窗口；复制接入说明后完成实际握手' : provider==='codex'?'沿用原 Codex 登录缓存，连接仍需本次真实验证':provider === 'qwen-code' ? '首次配置 API 或 Token 计划凭据' : provider === 'gemini-cli' ? '使用 Gemini CLI 自己的账号或 API；网页登录不会自动代替' : '';
-    return `<article class="launch-candidate ${canJoin ? '' : 'unavailable'}"><label class="launch-candidate-select"><input type="checkbox" data-launch-provider="${escape(provider)}" aria-label="批量选择 ${escape(candidate.name || provider)}" ${launchSelection.has(provider) ? 'checked' : ''} ${selectable && !launchBusy ? '' : 'disabled'}></label>${avatar(candidate.name,provider)}<div class="launch-candidate-info"><strong>${escape(candidate.name || provider)}</strong><span class="launch-mode ${mode === 'managed' && canJoin ? 'automatic' : ''}">${escape(native ? '本人对话 · 连接后验证' : mode === 'bridge' ? '本人窗口 · 桥接' : mode === 'managed' ? '后台 CLI · 独立会话' : candidate.capabilities?.mcp_prepare ? '本人 MCP · 信箱' : '接口待适配')}</span><small>${escape(availability)}</small>${accountNote ? `<small>${escape(accountNote)}</small>` : ''}</div><button type="button" class="${canJoin ? 'primary' : 'secondary'} onboarding-start" ${canJoin ? 'data-onboarding-provider' : 'data-onboarding-requirements'}="${escape(provider)}" aria-label="${escape(candidate.name || provider)} ${escape(canJoin ? label : '查看接入要求')}" ${!pending && !launchBusy && !launchScanning && (webConnected || !canJoin) ? '' : 'disabled'}>${escape(canJoin ? label : '查看接入要求')}</button></article>`;
+    const provider = launchProvider(candidate), name = candidate.name || provider, selectable = launchSelectable(candidate), canJoin = onboardingSelectable(candidate), mode = onboardingMode(candidate), job = onboardingForProvider(provider), feedback=typeof onboardingFeedback==='undefined'?null:onboardingFeedback.get(job?.id),pending = onboardingStarting.has(provider) || onboardingRunning(job) || feedback?.pending;
+    const availability = onboardingRepairRequired(job)?'连接已暂停，避免影响你的登录':onboardingRecheckPending(job)?'可以用已有登录重新连接':job?.stage==='awaiting_auth'?provider==='codex'?'需要先在 Codex 里登录':`需要先登录 ${name}`:onboardingOfficeReady(job)?job.can_wake?'已连接，有消息会自动处理':'已连接，在它自己的窗口里查看消息':pending?'正在连接…':job?.error?'上次没有连上，原因见下方':!canJoin ? candidate.support === 'unsupported' ? '暂时不能接入' : !candidate.installed ? '需要先安装' : '暂时不能接入' : !candidate.installed ? '尚未安装，接入时会自动安装' : candidate.running ? '正在运行' : '已安装';
+    const guidedGrok=provider==='grok-bot'&&candidate.capabilities?.native_direct_available!==true,native = nativeDesktopProvider(candidate)&&!guidedGrok, label = onboardingRepairRequired(job)?'查看处理办法':onboardingRecheckPending(job)?'重新连接':feedback?.pending&&feedback.operation==='login_client'?'正在打开…':pending ? '正在接入…' : onboardingOfficeReady(job) ? '进入办公室' : job?.stage==='awaiting_auth'?provider==='codex'?'查看登录状态':'继续登录':job?.status === 'needs_action' ? '继续接入' : '接入';
+    const description = mode === 'managed' ? `在后台工作，有消息会自动处理，可以当秘书。${['qwen-code','gemini-cli'].includes(provider) ? '第一次需要填写它的 API 账号。' : ''}` : guidedGrok || mode === 'bridge' ? `复制一段说明发给你的 ${name}。` : native ? `用你电脑上的 ${name}，有消息会自动处理。` : candidate.capabilities?.mcp_prepare ? `在 ${name} 里加一个连接，在它的窗口里查看消息。` : '';
+    const badge = provider === recommendedProvider && canJoin ? `<span class="launch-recommend">${needsSecretary ? '推荐当秘书' : '推荐'}</span>` : '';
+    return `<article class="launch-candidate ${canJoin ? '' : 'unavailable'} ${badge ? 'recommended' : ''}"><label class="launch-candidate-select"><input type="checkbox" data-launch-provider="${escape(provider)}" aria-label="批量选择 ${escape(name)}" ${launchSelection.has(provider) ? 'checked' : ''} ${selectable && !launchBusy ? '' : 'disabled'}></label>${avatar(candidate.name,provider)}<div class="launch-candidate-info"><strong>${escape(name)}${badge}</strong>${description ? `<span class="launch-description">${escape(tidyCandidateText(description))}</span>` : ''}<small>${escape(tidyCandidateText(availability))}</small></div><button type="button" class="${canJoin && (badge || job) ? 'primary' : 'secondary'} onboarding-start" ${canJoin ? 'data-onboarding-provider' : 'data-onboarding-requirements'}="${escape(provider)}" aria-label="${escape(name)} ${escape(canJoin ? label : '查看说明')}" ${!pending && !launchBusy && !launchScanning && (webConnected || !canJoin) ? '' : 'disabled'}>${escape(canJoin ? label : '查看说明')}</button></article>`;
   };
-  const running = visible.filter(candidate => candidate.running === true), others = visible.filter(candidate => candidate.running !== true);
-  $('launch-candidates').innerHTML = (running.length ? running.map(renderCandidate).join('') : '<div class="launch-scan-note">未发现正在运行的成员。可以打开 AI 应用后重新扫描，或展开其他候选。</div>') + (others.length ? `<details class="launch-other-candidates" ${othersOpen ? 'open' : ''}><summary>其他已安装 / 可安装的成员（${others.length}）</summary>${others.map(renderCandidate).join('')}</details>` : '');
+  // AIs already on this computer are listed; ones that need installing or are not supported yet stay folded.
+  const ready = ordered.filter(candidate => onboardingSelectable(candidate) && (candidate.installed || candidate.running)), others = ordered.filter(candidate => !ready.includes(candidate));
+  $('launch-candidates').innerHTML = (ready.length ? ready.map(renderCandidate).join('') : '<div class="launch-scan-note">没有找到可以直接接入的 AI。打开你常用的 AI 应用后点「重新扫描」，或展开下面安装一个。</div>') + (others.length ? `<details class="launch-other-candidates" ${othersOpen ? 'open' : ''}><summary>更多 AI（需要先安装或暂不支持，${others.length} 个）</summary>${others.map(renderCandidate).join('')}</details>` : '');
 }
+function tidyCandidateText(text) { return String(text).replace(/([一-鿿]) (?=[一-鿿])/g,'$1'); }
 function renderLaunch() {
   const projects = state?.projects || [], selectedProject = projects.find(project => project.id === projectId);
   const options = projects.length ? projects.map(project => `<option value="${escape(project.id)}">${escape(project.name)}</option>`).join('') : '<option value="">先添加项目</option>';
@@ -254,7 +261,7 @@ async function refreshLaunch() {
 async function scanLaunch({quiet = false} = {}) {
   if (launchScanning || launchBusy) return;
   launchScanning = true; launchError = ''; renderLaunch();
-  try { const result = await api('/api/launch/scan',{}); launchCandidates = result.candidates || []; launchScannedAt = result.scanned_at || result.at || new Date().toISOString(); launchSelection.clear(); if (!quiet) toast('扫描完成。点击成员旁的“一键接入”。'); }
+  try { const result = await api('/api/launch/scan',{}); launchCandidates = result.candidates || []; launchScannedAt = result.scanned_at || result.at || new Date().toISOString(); launchSelection.clear(); if (!quiet) toast('扫描完成。点 AI 旁的「接入」。'); }
   catch (error) { launchError = error.message; }
   finally { launchScanning = false; renderLaunch(); }
 }
@@ -504,7 +511,7 @@ async function startOnboarding(provider) {
     if (job.room_id && !selectedRoom && (unchanged || flow && secretaryNavigation===flow && projectId===selectedProject && !legacyId && (roomId===job.room_id || flow.autoRoomId && roomId===flow.autoRoomId))) { roomId = job.room_id; legacyId = null; rememberSelection();if(flow && secretaryNavigation===flow){flow.roomId=roomId;flow.assignment={...currentSecretary()};} }
     if(flow && secretaryNavigationCurrent(flow))flow.jobId=job.id;
     if(secretaryConnecting && unchanged && secretaryNavigation===flow) secretaryConnectJob = job.id;
-    toast(`正在接入 ${candidate.name || provider}。`); renderLaunch(); if(!revealOnboardingAction(job))onboardingProgressTarget().scrollIntoView({behavior:'smooth',block:'nearest'}); returnSecretaryAfterOnboarding(); action(refresh); action(refreshOnboarding);
+    renderLaunch(); if(!revealOnboardingAction(job))onboardingProgressTarget().scrollIntoView({behavior:'smooth',block:'nearest'}); returnSecretaryAfterOnboarding(); action(refresh); action(refreshOnboarding);
   } catch (error) { launchError = /^(Failed to fetch|Load failed|NetworkError)/i.test(error.message || '') ? '接入请求的结果尚未确认。先检查进度，避免重复创建成员。' : error.message; }
   finally { onboardingStarting.delete(provider); renderLaunch(); }
 }
@@ -652,7 +659,7 @@ async function refresh() {
 }
 function scheduleRefresh() { clearUITimeout(refreshTimer); refreshTimer = setUITimeout(() => action(refresh), 160); }
 function roomListRow(room) {
-  const selected=room.id===roomId&&!legacyId,preview=selected&&history?.messages?.length?(history.messages.at(-1).coordination?.title||plainMarkdown(history.messages.at(-1).text)).slice(0,42):room.archived?'已归档 · 历史与协作保留':'消息与成员保存在本机';
+  const selected=room.id===roomId&&!legacyId,latest=selected?(history?.messages||[]).filter(message=>!message.connection_verification).at(-1):null,preview=latest?(latest.coordination?.title||plainMarkdown(latest.text)).slice(0,42):room.archived?'已归档 · 历史与协作保留':'消息与成员保存在本机';
   return `<div class="room-list-row ${selected?'active':''}"><button class="room-button ${selected?'active':''}" data-room="${escape(room.id)}" title="${escape(room.title)}"><span class="room-list-icon">#</span><span class="room-list-content"><strong>${escape(room.title)}</strong><small>${escape(preview)}</small></span></button><button type="button" class="room-actions-button" data-room-actions="${escape(room.id)}" aria-label="管理房间 ${escape(room.title)}" title="房间管理">⋯</button></div>`;
 }
 function showRoomActions(id){const target=state?.chat?.rooms?.find(room=>room.id===id);if(!target||managingRoom)return;managedRoomId=id;$('room-actions-error').textContent='';renderRoomActions();$('room-actions-dialog').showModal();}
@@ -673,9 +680,9 @@ async function toggleRoomArchive(){
   finally{managingRoom=false;renderRoomActions();}
 }
 function renderSidebar() {
-  $('projects').innerHTML = state.projects.length ? state.projects.map(project => `<button class="project-button ${project.id === projectId ? 'active' : ''}" data-project="${escape(project.id)}">${escape(project.name)}</button>`).join('') : '<div class="sidebar-empty">添加一个项目开始</div>';
+  $('projects').innerHTML = state.projects.length ? state.projects.map(project => `<button class="project-button ${project.id === projectId ? 'active' : ''}" data-project="${escape(project.id)}">${escape(project.name)}</button>`).join('') : '<div class="sidebar-empty">还没有项目，点 ＋ 选一个文件夹</div>';
   const rooms = state.chat.rooms.filter(room => room.project_id === projectId);
-  const activeRooms=rooms.filter(room=>!room.archived),archivedRooms=rooms.filter(room=>room.archived);$('rooms').innerHTML=activeRooms.length?activeRooms.map(roomListRow).join(''):'<div class="sidebar-empty">暂无常用房间</div>';$('archived-rooms-list').innerHTML=archivedRooms.map(roomListRow).join('');$('archived-rooms-count').textContent=String(archivedRooms.length);$('archived-rooms').classList.toggle('hidden',!archivedRooms.length);if(archivedRooms.some(room=>room.id===roomId))$('archived-rooms').open=true;
+  const activeRooms=rooms.filter(room=>!room.archived),archivedRooms=rooms.filter(room=>room.archived);$('rooms').innerHTML=activeRooms.length?activeRooms.map(roomListRow).join(''):'<div class="sidebar-empty">还没有房间</div>';$('archived-rooms-list').innerHTML=archivedRooms.map(roomListRow).join('');$('archived-rooms-count').textContent=String(archivedRooms.length);$('archived-rooms').classList.toggle('hidden',!archivedRooms.length);if(archivedRooms.some(room=>room.id===roomId))$('archived-rooms').open=true;
   const old = state.discussions.filter(discussion => discussion.project_id === projectId); $('legacy-section').classList.toggle('hidden', !old.length); $('legacy-count').textContent = old.length ? String(old.length) : '';
   $('discussions').innerHTML = old.map(discussion => `<button class="discussion-button ${discussion.id === legacyId ? 'active' : ''}" data-discussion="${escape(discussion.id)}" title="${escape(discussion.title)}">${escape(discussion.title)}</button>`).join('');
   if (desktop?.offline) $('discussions').querySelectorAll('button').forEach(button => {button.disabled=true;button.title='开启服务后可查看旧讨论';});
@@ -731,11 +738,13 @@ function renderRoom(project) {
   // An announcement is only kept when the person picked it; otherwise a typed message goes to someone who will act on it.
   if (selectedRecipient === undefined || selectedRecipient === '' && !broadcastRooms.has(room.id) || selectedRecipient && !participants.some(member => member.id === selectedRecipient)) selectedRecipient = defaultRecipient(participants, messages);
   $('recipient').innerHTML = '<option value="">房间公告</option>' + participants.map(member => `<option value="${escape(member.id)}">${escape(member.name)}</option>`).join(''); $('recipient').value = selectedRecipient; recipientRoom = room.id; updateRecipientNote();
-  $('empty-room').classList.toggle('hidden', messages.length > 0); $('empty-heading').textContent = participants.length ? '把一个问题带到房间里' : '邀请第一个成员';
-  $('empty-description').textContent = participants.length ? '选择一位成员，或在消息里 @它。\n成员的提问与回复会留在同一条时间线上。' : '添加成员，完成握手后，就可以在这里把问题交给它。\n每个成员拥有自己的身份和工作会话。';
+  // The automatic connection check is not a conversation; the room still invites the first real message.
+  const conversation = messages.filter(message => !message.connection_verification), lead = participants.find(member => member.id === currentSecretary().member_id) || (participants.length === 1 ? participants[0] : null);
+  $('empty-room').classList.toggle('hidden', conversation.length > 0); $('empty-heading').textContent = !participants.length ? '这个房间还没有 AI' : lead ? `和 ${lead.name} 说说你想做什么` : '把一个问题带到房间里';
+  $('empty-description').textContent = !participants.length ? '接入一位你常用的 AI，就可以在这里交代任务。' : lead ? '直接在下面输入，或点一个例子开始。\n进展和结果都会回到这里。' : '在下面选好发给谁，或在消息里 @它。\n进展和结果都会回到这里。';
   $('empty-add-member').classList.toggle('hidden', participants.length > 0); $('suggestions').classList.toggle('hidden', !participants.length);
   const approvals=roomApprovals(messages),reviews=roomApprovalReviews(messages),typing = renderTyping(messages), signature = JSON.stringify([room.id,messages,participants.map(member=>[member.id,member.name,member.appearance]),state.chat?.activeMessages || [],typing,approvals,reviews,history.connection_assists||[]]);
-  $('empty-room').classList.toggle('hidden',messages.length>0 || approvals.length>0 || reviews.length>0);
+  $('empty-room').classList.toggle('hidden',conversation.length>0 || approvals.length>0 || reviews.length>0);
   if (signature !== lastTimeline) { const stream = $('chat-stream'), cached = textScroll.get(room.id), nearEnd = officeView ? cached?.atEnd !== false : stream.scrollHeight - stream.scrollTop - stream.clientHeight < 110, changedRoom = !lastTimeline.startsWith(`["${room.id}"`); setRoomTimeline(messages.map(message => renderMessage(message, messages)).join('') + typing + approvalTimelineMarkup(approvals,messages,reviews),approvals); lastTimeline = signature; if(!officeView){if(nearEnd||changedRoom)stream.scrollTop=messages.length||approvals.length||reviews.length?stream.scrollHeight:0;rememberTextScroll();}else if(changedRoom)textScroll.set(room.id,{top:0,atEnd:true}); }
   renderApprovals([]);updateOfficeApprovalAlert();
   renderService(); renderInspector(); renderSidebar(); applyRoomView(); updateOfficeScene();
@@ -949,7 +958,7 @@ function selectApprovalQuestionChoice(button) {
 }
 function approvalContentMarkup(approval,attribute='data-approve') {
   const id=escape(approval.id);
-  return `${approval.reason ? `<p>${escape(approval.reason)}</p>` : ''}${approval.command ? `<details class="approval-operation"><summary>查看具体操作</summary><pre>${escape(approval.command)}</pre></details>` : ''}${approval.type === 'url' && approval.url ? `<a class="secondary" href="${escape(approval.url)}" target="_blank" rel="noreferrer">在对应服务完成确认 ↗</a><button class="secondary" data-copy-approval-url="${escape(approval.url)}">复制链接</button>` : ''}${approval.type === 'input' ? (approval.questions || []).map(approvalQuestionMarkup).join('') : ''}${approval.type === 'form' ? Object.entries(approval.schema?.properties || {}).map(([key,property]) => `<label>${escape(property.title || property.description || key)}${property.type === 'boolean' ? `<input type="checkbox" data-form-field="${escape(key)}" data-field-type="boolean">` : `<input data-form-field="${escape(key)}" data-field-type="${escape(property.type || 'string')}" ${/password|secret|token|key/i.test(key) ? 'type="password"' : ''} placeholder="${property.enum ? escape(property.enum.join(' / ')) : '填写内容'}">`}</label>`).join('') : ''}<div class="actions">${approval.type === 'input' ? `<button class="primary" data-input-submit="${id}">提交回答</button>` : approval.type === 'form' ? `<button class="primary" data-form-submit="${id}">提交表单</button><button class="secondary" ${attribute}="${id}" data-decision="decline">取消</button>` : `<button class="primary" ${attribute}="${id}" data-decision="accept">${approval.type === 'url' ? '已完成，继续' : '允许这次操作'}</button>${approvalSessionAllowed(approval)?`<button class="secondary" ${attribute}="${id}" data-decision="acceptForSession">本会话允许此操作</button>`:''}<button class="secondary" ${attribute}="${id}" data-decision="decline">不允许</button>`}</div>${approvalSessionAllowed(approval)?'<p class="approval-note"><small>「本会话允许」由 Codex 原生记住这一类操作，此对话内后续同类请求不再询问；只想放行这一次，请选「允许这次操作」。</small></p>':''}`;
+  return `${approval.reason ? `<p>${escape(approval.reason)}</p>` : ''}${approval.command ? `<details class="approval-operation"><summary>查看具体操作</summary><pre>${escape(approval.command)}</pre></details>` : ''}${approval.type === 'url' && approval.url ? `<a class="secondary" href="${escape(approval.url)}" target="_blank" rel="noreferrer">在对应服务完成确认 ↗</a><button type="button" class="secondary" data-copy-approval-url="${escape(approval.url)}">复制链接</button>` : ''}${approval.type === 'input' ? (approval.questions || []).map(approvalQuestionMarkup).join('') : ''}${approval.type === 'form' ? Object.entries(approval.schema?.properties || {}).map(([key,property]) => `<label>${escape(property.title || property.description || key)}${property.type === 'boolean' ? `<input type="checkbox" data-form-field="${escape(key)}" data-field-type="boolean">` : `<input data-form-field="${escape(key)}" data-field-type="${escape(property.type || 'string')}" ${/password|secret|token|key/i.test(key) ? 'type="password"' : ''} placeholder="${property.enum ? escape(property.enum.join(' / ')) : '填写内容'}">`}</label>`).join('') : ''}<div class="actions">${approval.type === 'input' ? `<button class="primary" data-input-submit="${id}">提交回答</button>` : approval.type === 'form' ? `<button class="primary" data-form-submit="${id}">提交表单</button><button class="secondary" ${attribute}="${id}" data-decision="decline">取消</button>` : `<button class="primary" ${attribute}="${id}" data-decision="accept">${approval.type === 'url' ? '已完成，继续' : '允许这次操作'}</button>${approvalSessionAllowed(approval)?`<button class="secondary" ${attribute}="${id}" data-decision="acceptForSession">本会话允许此操作</button>`:''}<button class="secondary" ${attribute}="${id}" data-decision="decline">不允许</button>`}</div>${approvalSessionAllowed(approval)?'<p class="approval-note"><small>「本会话允许」由 Codex 原生记住这一类操作，此对话内后续同类请求不再询问；只想放行这一次，请选「允许这次操作」。</small></p>':''}`;
 }
 async function copyApprovalLink(button) {
   await navigator.clipboard.writeText(button.dataset.copyApprovalUrl);
@@ -1338,9 +1347,14 @@ function renderVersion() {
   label.title=server&&client&&server!==client?'服务与软件版本不同。'+parts.join(' · '):label.textContent;
   label.dataset.mismatch=String(!!(server&&client&&server!==client));
 }
+let serviceSeen = false;
 function renderService() {
   renderVersion();
-  const readOnly = !webConnected;
+  const readOnly = !webConnected; if (webConnected) serviceSeen = true;
+  // The sidebar says the same thing as the rest of the page; in a browser the page cannot start the service itself.
+  $('sidebar-service-status').textContent = webConnected ? '本机运行中 · 记录留在这台电脑' : serviceSeen || desktop?.offline ? '服务已关闭 · 记录仍在这台电脑' : '正在连接本机服务…';
+  $('sidebar-service-dot').classList.toggle('stopped', !webConnected && (serviceSeen || !!desktop?.offline));
+  $('web-offline-banner').classList.toggle('hidden', webConnected || !serviceSeen || !!desktop);
   renderRoomActions();
   document.querySelectorAll('[data-delete-room]').forEach(button=>{button.disabled=readOnly;});
   for (const id of ['add-project','add-room','mobile-add-project','mobile-add-room','launch-add-project','welcome-project','welcome-room','room-member-add','empty-add-member','inspector-add-member','send-button','attach-image','image-input','prompt','recipient','scan-agents','onboarding-refresh','launch-refresh']) {
@@ -1462,7 +1476,7 @@ function currentSecretary(selectedRoom = roomId) {
 }
 function secretaryMember(selected = currentSecretary()) { return (history?.room?.id === roomId ? history.participants || [] : []).find(member => member.id === selected.member_id); }
 function secretaryTutorialVisible() {
-  if (!roomId || legacyId || !history?.room || !professionalView) return false;
+  if (!roomId || legacyId || !history?.room || !professionalView || $('secretary-connect-dialog').open) return false;
   return secretaryOpenRoom === roomId || (!admittedMembers(history.participants).length && !secretaryDismissed.has(roomId));
 }
 function secretaryHasReply(selected) {
@@ -1501,7 +1515,7 @@ function renderSecretary() {
   $('secretary-role-card').classList.toggle('hidden',!available);
   if (!available) return;
   const selected = currentSecretary(), member = secretaryMember(selected), members = admittedMembers(history.participants), ready = selected.status === 'ready' && !!member, replied = secretaryHasReply(selected), started = !!selected.request_id && !!selected.member_id;
-  $('empty-room').classList.toggle('hidden',visible || (history.messages || []).length > 0);
+  $('empty-room').classList.toggle('hidden',visible || (history.messages || []).some(message => !message.connection_verification));
   $('secretary-room-entry').textContent = selected.member_id ? `与 ${selected.name || member?.name || '秘书'} 协作 ↗` : '从 AI 秘书开始 ↗';
   $('secretary-title').textContent = selected.member_id ? `和 ${selected.name || member?.name || '你的秘书'} 一起组织办公室` : '先选一位 AI，当你的秘书';
   $('secretary-intro').textContent = selected.member_id ? '交代目标，秘书会按成员信息安排任务，并跟进交付与验收。' : '让它先了解你的目标，帮你梳理工作，再接入需要的其他 AI。';
@@ -1530,7 +1544,7 @@ function renderSecretary() {
   $('secretary-error').classList.toggle('hidden',!secretaryError); $('secretary-error').textContent = secretaryError;
   $('secretary-role-card').innerHTML = `<div class="secretary-role-heading"><span class="secretary-role-mark">✦</span><div><strong>${escape(selected.name || '办公室秘书')}</strong><small>${escape(secretaryStatusText(selected))}</small></div></div><p>${selected.member_id ? '梳理目标、安排任务并跟进交付。添加其他 AI 仍由你选择。' : '先选一位成员，和它一起组织这间办公室。'}</p><button type="button" class="secondary" data-secretary-open>${selected.member_id ? '管理秘书 / 查看教程' : '选择 AI 秘书'}</button>${selected.member_id ? `<button type="button" class="text-button" data-secretary-reset ${!webConnected || secretaryBusy ? 'disabled' : ''}>清除秘书角色</button>` : ''}`;
   $('secretary-role-card').classList.toggle('hidden',!roomId || !!legacyId);
-  $('secretary-connect-status').textContent = !webConnected ? '服务未连接，请先开启本机服务。' : secretaryConnectRoom === roomId ? '优先显示本机正在运行的 AI。选择成员接入，通信方式见每张卡片。' : '你已切换房间。关闭此页后，在目标房间重新接入。';
+  $('secretary-connect-status').textContent = !webConnected ? '服务未连接，请先开启本机服务。' : secretaryConnectRoom === roomId ? (needsSecretaryHint() ? '推荐先接 Codex 或 Claude Code：它们在后台工作，可以当秘书。其他 AI 随时可以再加。' : '选一位 AI 加入这个房间。') : '你已切换房间。关闭此页后，在目标房间重新接入。';
   $('secretary-scan-agents').disabled = !webConnected || launchScanning || secretaryConnectRoom !== roomId;
   const othersOpen = $('secretary-connect-candidates').querySelector('.launch-other-candidates')?.open === true;
   const candidateCopy = $('launch-candidates').cloneNode(true);
@@ -1538,14 +1552,18 @@ function renderSecretary() {
   const otherCandidates = candidateCopy.querySelector('.launch-other-candidates');
   if (otherCandidates) otherCandidates.open = othersOpen;
   if ($('secretary-connect-candidates').innerHTML !== candidateCopy.innerHTML) $('secretary-connect-candidates').innerHTML = candidateCopy.innerHTML;
-  const attempt=onboardingJobs.get(secretaryConnectJob)||currentOnboardingJobs().find(job=>onboardingRunning(job))||currentOnboardingJobs()[0];
+  // After a click, show only that AI's connection steps, right under the heading, instead of below a long list.
+  const attempt=secretaryConnectRoom===roomId?onboardingJobs.get(secretaryConnectJob):null,busy=currentOnboardingJobs().some(job=>onboardingRunning(job));
+  $('secretary-connect-dialog').classList.toggle('connecting',!!attempt); $('secretary-connect-other').classList.toggle('hidden',!attempt);
+  if(attempt)$('secretary-connect-status').textContent=`正在接入 ${attempt.name||launchCandidates?.find(candidate=>launchProvider(candidate)===attempt.provider)?.name||attempt.provider}`.replace(/([\u4e00-\u9fff]) (?=[\u4e00-\u9fff])/g,'$1');
   setApprovalMarkup($('secretary-connect-progress'),attempt?onboardingJobMarkup(attempt):'',state?.approvals||[]);
-  $('secretary-connect-candidates').querySelectorAll('button').forEach(button => { if(secretaryConnectRoom !== roomId||onboardingRunning(attempt)) button.disabled = true; });
+  $('secretary-connect-candidates').querySelectorAll('button').forEach(button => { if(secretaryConnectRoom !== roomId||busy) button.disabled = true; });
   $('secretary-connect-progress').querySelectorAll('button').forEach(button => { if(secretaryConnectRoom !== roomId || !webConnected) button.disabled = true; });
   if(attempt)revealOnboardingAction(attempt);
   const pickerError=launchError||(secretaryNavigationCurrent(secretaryNavigation)&&secretaryNavigation.source==='picker'?secretaryError:'');
   $('secretary-connect-error').textContent = pickerError; $('secretary-connect-error').classList.toggle('hidden',!pickerError);
 }
+function needsSecretaryHint() { return !currentSecretary().member_id; }
 function beginSecretaryNavigation(source) {
   return secretaryNavigation={source,roomId,projectId,jobId:null,memberId:null,assignment:{...currentSecretary()},accepted:null,assignmentAttempted:false};
 }
@@ -1633,7 +1651,7 @@ function discussWithSecretary() {
   closeSecretaryTutorial(); $('recipient').value = selected.member_id; updateRecipientNote(); if(officeView)toggleOfficeComposer(true); else $('prompt').focus();
 }
 function openSecretaryConnect() {
-  if (!roomId || !webConnected) return; secretaryNavigation=null;secretaryConnectRoom = roomId; secretaryConnectJob = null; secretaryError = ''; renderSecretary(); $('secretary-connect-dialog').showModal();
+  if (!roomId || !webConnected) return; secretaryNavigation=null;secretaryConnectRoom = roomId; secretaryConnectJob = null; secretaryError = ''; $('secretary-connect-dialog').showModal(); renderSecretary();
   void scanLaunch({quiet:true});
 }
 function updateOfficeScene() {
@@ -1725,9 +1743,10 @@ function renderTeam() {
   const review = tasks.filter(task => ['review','blocked','uncertain','failed'].includes(task.status)).length;
   $('team-open').textContent = review ? `协作 · ${review} 项待查看` : '协作';
   const signature = JSON.stringify([roomId,valid,data,webConnected,teamBusy,teamLoadError]); if (signature === teamSignature) return; teamSignature = signature;
-  const expanded = new Set([...root.querySelectorAll('details[open]')].map(item => item.dataset.teamDetails));
-  if (!valid) { root.innerHTML = '<p class="inspector-empty">先打开一个房间，再组织这项工作。</p>'; return; }
-  if (!data) { root.innerHTML = `<p class="inspector-description">${escape(teamLoadError || (webConnected ? '正在读取这间办公室的协作记录…' : '当前没有已读取的协作记录。开启服务后可查看。'))}</p>${webConnected ? teamButton('重新读取','refresh') : ''}`; return; }
+  const more = $('team-more-content'), expanded = new Set([...root.querySelectorAll('details[open]'),...more.querySelectorAll('details[open]')].map(item => item.dataset.teamDetails));
+  $('team-more').classList.toggle('hidden',!valid);
+  if (!valid) { root.innerHTML = '<p class="inspector-empty">先打开一个房间，再组织这项工作。</p>'; more.innerHTML = ''; return; }
+  if (!data) { more.innerHTML = ''; root.innerHTML = `<p class="inspector-description">${escape(teamLoadError || (webConnected ? '正在读取这间办公室的协作记录…' : '当前没有已读取的协作记录。开启服务后可查看。'))}</p>${webConnected ? teamButton('重新读取','refresh') : ''}`; return; }
   const completed = tasks.filter(task => task.status === 'completed').length, currentGoals = goals.filter(goal => goal.status === 'active');
   let html = `<div class="team-summary"><div><span class="team-kicker">这间办公室正在推进</span><strong>${currentGoals.length ? `${currentGoals.length} 个目标` : '从一个明确的目标开始'}</strong><p>${tasks.length ? `${completed} / ${tasks.length} 项任务已验收` : '把目标交给秘书，再把工作分给具体成员。'}</p></div>${teamButton('新目标','goal')}</div>`;
   if (!webConnected) html += '<p class="team-notice">服务未连接，显示本机已保存的协作记录。开启后可以继续更新。</p>';
@@ -1735,7 +1754,9 @@ function renderTeam() {
   if (data.delivery_issues?.length) html += `<details class="team-notice"><summary>${data.delivery_issues.length} 项协作通知未确认送达</summary>${data.delivery_issues.map(issue=>teamText(teamReadable(issue.error || '发送结果待核对',data))).join('')}<p class="team-meta">请核对成员连接与原委托，再继续安排工作。</p></details>`;
   if (teamLoadError) html += `<p class="error-note">${escape(teamLoadError)}</p>${teamButton('重新读取','refresh')}`;
   const brief = data.brief || {};
-  html += `<details class="team-section team-brief" data-team-details="brief" ${expanded.has('brief') ? 'open' : ''}><summary>共同简报 <small>${brief.version ? `第 ${Number(brief.version)} 版` : '尚未形成'}</small></summary>${teamText(teamReadable(brief.content,data) || '会议形成纪要后，这里发布团队共享的简报。')}<p class="team-meta">${escape(time(brief.updated_at))}</p>${cards.length && brief.version ? `<div class="team-acknowledgments">${cards.map(card => `<span>${escape(card.name)} · ${Number(card.ack_version) >= Number(brief.version) ? '已确认此版' : '尚未确认'}</span>`).join('')}</div>${teamButton('记录已确认','brief_ack')}` : ''}</details>`;
+  // Goals and tasks are the everyday view; meetings, the shared brief and member notes are one click away.
+  let extra = '';
+  extra += `<details class="team-section team-brief" data-team-details="brief" ${expanded.has('brief') ? 'open' : ''}><summary>共同简报 <small>${brief.version ? `第 ${Number(brief.version)} 版` : '尚未形成'}</small></summary>${teamText(teamReadable(brief.content,data) || '会议形成纪要后，这里发布团队共享的简报。')}<p class="team-meta">${escape(time(brief.updated_at))}</p>${cards.length && brief.version ? `<div class="team-acknowledgments">${cards.map(card => `<span>${escape(card.name)} · ${Number(card.ack_version) >= Number(brief.version) ? '已确认此版' : '尚未确认'}</span>`).join('')}</div>${teamButton('记录已确认','brief_ack')}` : ''}</details>`;
   html += '<section class="team-section"><div class="team-section-heading"><h3>目标与进度</h3></div>';
   html += goals.length ? goals.map(goal => { const work = tasks.filter(task => task.goal_id === goal.id), done = work.filter(task => task.status === 'completed').length; return `<article class="team-card"><div class="team-card-heading"><strong>${escape(goal.title)}</strong>${teamStatus(goal.status)}</div>${teamText(goal.description)}<p class="team-meta">验收要求：${escape(goal.acceptance || '尚未填写')}</p>${work.length ? `<progress max="${work.length}" value="${done}" aria-label="${escape(goal.title)} 的任务验收进度"></progress><p class="team-meta">${done} / ${work.length} 项任务已验收</p>` : '<p class="team-meta">尚未拆分任务</p>'}${teamText(goal.result || goal.note,'team-result')}<div class="team-actions">${goal.status === 'active' ? teamButton('拆分任务','task',goal.id) + teamButton('验收目标','complete_goal',goal.id) + teamButton('停止目标','cancel_goal',goal.id) : ''}</div></article>`; }).join('') : '<p class="team-empty">写下想交付什么，以及怎样判断完成。</p>';
   html += `</section><section class="team-section"><div class="team-section-heading"><h3>任务</h3>${teamButton('派发任务','task')}</div>`;
@@ -1743,12 +1764,15 @@ function renderTeam() {
     const actions = ['completed','cancelled'].includes(task.status) ? '' : task.status === 'review' ? teamButton('验收通过','task_approve',task.id) + teamButton('退回完善','task_request_changes',task.id) : task.status === 'uncertain' ? (task.message_id ? teamButton('先核实执行消息','message_reconcile',task.message_id) : '') + teamButton('核验任务结果','task_reconcile',task.id) : ['blocked','failed'].includes(task.status) ? teamButton('补充要求并继续','task_request_changes',task.id) + (task.status === 'blocked' ? teamButton('提交验收','task_submit',task.id) : '') + teamButton('停止任务','task_cancel',task.id) : `${task.status === 'queued' ? teamButton('接手推进','task_accept',task.id) : teamButton('记录进展','task_progress',task.id)}${teamButton('提交验收','task_submit',task.id)}${teamButton('记录阻碍','task_block',task.id)}${teamButton('停止任务','task_cancel',task.id)}`;
     return `<article class="team-card team-task" data-task-status="${escape(task.status)}"><div class="team-card-heading"><strong>${escape(task.title)}</strong>${teamStatus(task.status)}</div><p class="team-owner">${escape(teamName(task.assignee_id,data))}${task.goal_id ? ` · ${escape(goals.find(goal => goal.id === task.goal_id)?.title || '所属目标')}` : ''}</p>${teamText(task.note)}${teamText(task.result,'team-result')}<details data-team-details="task-${escape(task.id)}" ${expanded.has('task-'+task.id) ? 'open' : ''}><summary>交付要求与依据</summary>${teamText(task.description)}<p class="team-meta">交付物：${escape(task.deliverable || '尚未填写')}</p><p class="team-meta">验收：${escape(task.acceptance || '尚未填写')}</p>${task.depends_on?.length ? `<p class="team-meta">等待：${escape(task.depends_on.map(id => tasks.find(item => item.id === id)?.title || '前置任务').join('、'))}</p>` : ''}${teamEvidence(task.evidence)}</details><div class="team-actions">${actions}</div></article>`;
   }).join('') : '<p class="team-empty">任务明确负责人、交付物和验收标准，提交后再验收。</p>';
-  html += `</section><section class="team-section"><div class="team-section-heading"><h3>团队会议</h3>${teamButton('开会','meeting')}</div>`;
-  html += meetings.length ? meetings.map(meeting => `<article class="team-card"><div class="team-card-heading"><strong>${escape(meeting.title)}</strong>${teamStatus(meeting.status === 'review' ? 'meeting_review' : meeting.status)}</div>${teamText(meeting.agenda)}<p class="team-meta">第 ${(Number(meeting.round) || 0) + 1} 轮 · ${meeting.deadline_at ? `报告截止 ${escape(time(meeting.deadline_at))}` : '等待成员报告'}</p>${meeting.missing_member_ids?.length ? `<p class="team-warning">待报告：${escape(meeting.missing_member_ids.map(id => teamName(id,data)).join('、'))}</p>` : ''}<details data-team-details="meeting-${escape(meeting.id)}" ${expanded.has('meeting-'+meeting.id) ? 'open' : ''}><summary>成员报告 · ${(meeting.reports || []).length}</summary>${(meeting.reports || []).map(report => `<div class="team-report"><strong>${escape(teamName(report.member_id,data))} · 第 ${(Number(report.round) || 0) + 1} 轮${report.late ? ' · 截止后提交' : ''}</strong>${teamText(report.summary)}${teamText(report.completed ? `已完成：${report.completed}` : '')}${teamText(report.blockers ? `阻碍：${report.blockers}` : '')}${teamText(report.next_steps ? `下一步：${report.next_steps}` : '')}${teamEvidence(report.sources)}</div>`).join('') || '<p class="team-empty">还没有收到报告。</p>'}</details>${teamText(meeting.summary,'team-result')}${meeting.decisions?.length ? `<ul class="team-decisions">${meeting.decisions.map(item => `<li>${escape(typeof item === 'string' ? item : item.text || item.summary || JSON.stringify(item))}</li>`).join('')}</ul>` : ''}<div class="team-actions">${meeting.status !== 'cancelled' ? teamButton('补充报告','meeting_report',meeting.id) + (meeting.status === 'review' ? ((Number(meeting.round) || 0) < 2 ? teamButton('追加讨论','meeting_discuss',meeting.id) : '') + teamButton('形成纪要','meeting_close',meeting.id) : '') : ''}</div></article>`).join('') : '<p class="team-empty">开会收集各成员的进展和阻碍，再形成纪要与后续任务。</p>';
+  html += '</section>';
+  const activeMeeting = meetings.some(meeting => !['closed','cancelled','completed'].includes(meeting.status));
+  let meetingHtml = `<section class="team-section"><div class="team-section-heading"><h3>团队会议</h3>${teamButton('开会','meeting')}</div>`;
+  meetingHtml += meetings.length ? meetings.map(meeting => `<article class="team-card"><div class="team-card-heading"><strong>${escape(meeting.title)}</strong>${teamStatus(meeting.status === 'review' ? 'meeting_review' : meeting.status)}</div>${teamText(meeting.agenda)}<p class="team-meta">第 ${(Number(meeting.round) || 0) + 1} 轮 · ${meeting.deadline_at ? `报告截止 ${escape(time(meeting.deadline_at))}` : '等待成员报告'}</p>${meeting.missing_member_ids?.length ? `<p class="team-warning">待报告：${escape(meeting.missing_member_ids.map(id => teamName(id,data)).join('、'))}</p>` : ''}<details data-team-details="meeting-${escape(meeting.id)}" ${expanded.has('meeting-'+meeting.id) ? 'open' : ''}><summary>成员报告 · ${(meeting.reports || []).length}</summary>${(meeting.reports || []).map(report => `<div class="team-report"><strong>${escape(teamName(report.member_id,data))} · 第 ${(Number(report.round) || 0) + 1} 轮${report.late ? ' · 截止后提交' : ''}</strong>${teamText(report.summary)}${teamText(report.completed ? `已完成：${report.completed}` : '')}${teamText(report.blockers ? `阻碍：${report.blockers}` : '')}${teamText(report.next_steps ? `下一步：${report.next_steps}` : '')}${teamEvidence(report.sources)}</div>`).join('') || '<p class="team-empty">还没有收到报告。</p>'}</details>${teamText(meeting.summary,'team-result')}${meeting.decisions?.length ? `<ul class="team-decisions">${meeting.decisions.map(item => `<li>${escape(typeof item === 'string' ? item : item.text || item.summary || JSON.stringify(item))}</li>`).join('')}</ul>` : ''}<div class="team-actions">${meeting.status !== 'cancelled' ? teamButton('补充报告','meeting_report',meeting.id) + (meeting.status === 'review' ? ((Number(meeting.round) || 0) < 2 ? teamButton('追加讨论','meeting_discuss',meeting.id) : '') + teamButton('形成纪要','meeting_close',meeting.id) : '') : ''}</div></article>`).join('') : '<p class="team-empty">开会收集各成员的进展和阻碍，再形成纪要与后续任务。</p>';
   const schedule = data.schedule || {};
-  html += `<div class="team-schedule"><div><strong>周期会议</strong><p class="team-meta">${schedule.enabled ? `每 ${Number(schedule.interval_hours)} 小时 · ${escape(schedule.timezone || '')}${schedule.next_run_at ? ` · 下次 ${escape(time(schedule.next_run_at))}` : ''}` : '未开启，按需开会'}</p>${teamText(typeof schedule.last_result === 'string' ? schedule.last_result : schedule.last_result?.summary,'team-meta')}</div>${teamButton('设置','schedule')}</div></section>`;
-  html += `<details class="team-section" data-team-details="cards" ${expanded.has('cards') ? 'open' : ''}><summary>成员与窗口信息 <small>${cards.length} 位</small></summary><p class="team-meta">记录这个成员负责什么、掌握哪些资料。资料来源与更新时间会一起保留。</p>${cards.map(card => `<article class="team-card"><div class="team-card-heading"><strong>${escape(card.name)}</strong><span class="team-meta">${card.can_wake ? '可后台处理' : '本人窗口领取'}</span></div>${teamText(card.role || '尚未指定职责')}${card.skills?.length ? `<p class="team-skills">${card.skills.map(skill => `<span>${escape(skill)}</span>`).join('')}</p>` : ''}${teamText(card.information)}${teamEvidence(card.sources)}<p class="team-meta">${card.updated_at ? `更新于 ${escape(time(card.updated_at))}` : '尚未补充信息'}</p><div class="team-actions">${teamButton('编辑信息','card',card.member_id)}</div></article>`).join('') || '<p class="team-empty">接入成员后可以记录职责与资料。</p>'}</details>`;
-  root.innerHTML = html;
+  meetingHtml += `<div class="team-schedule"><div><strong>周期会议</strong><p class="team-meta">${schedule.enabled ? `每 ${Number(schedule.interval_hours)} 小时 · ${escape(schedule.timezone || '')}${schedule.next_run_at ? ` · 下次 ${escape(time(schedule.next_run_at))}` : ''}` : '未开启，按需开会'}</p>${teamText(typeof schedule.last_result === 'string' ? schedule.last_result : schedule.last_result?.summary,'team-meta')}</div>${teamButton('设置','schedule')}</div></section>`;
+  if (activeMeeting) html += meetingHtml; else extra = meetingHtml + extra;
+  extra += `<details class="team-section" data-team-details="cards" ${expanded.has('cards') ? 'open' : ''}><summary>成员与窗口信息 <small>${cards.length} 位</small></summary><p class="team-meta">记录这个成员负责什么、掌握哪些资料。资料来源与更新时间会一起保留。</p>${cards.map(card => `<article class="team-card"><div class="team-card-heading"><strong>${escape(card.name)}</strong><span class="team-meta">${card.can_wake ? '可后台处理' : '本人窗口领取'}</span></div>${teamText(card.role || '尚未指定职责')}${card.skills?.length ? `<p class="team-skills">${card.skills.map(skill => `<span>${escape(skill)}</span>`).join('')}</p>` : ''}${teamText(card.information)}${teamEvidence(card.sources)}<p class="team-meta">${card.updated_at ? `更新于 ${escape(time(card.updated_at))}` : '尚未补充信息'}</p><div class="team-actions">${teamButton('编辑信息','card',card.member_id)}</div></article>`).join('') || '<p class="team-empty">接入成员后可以记录职责与资料。</p>'}</details>`;
+  root.innerHTML = html; more.innerHTML = extra;
 }
 function teamEvidence(items) { return (items || []).length ? `<ul class="team-evidence">${items.map(item => `<li>${escape(typeof item === 'string' ? item : [item.note || item.summary,item.reference || item.source,item.observed_at ? time(item.observed_at) : ''].filter(Boolean).join(' · '))}</li>`).join('')}</ul>` : ''; }
 function teamInput(name, label, value = '', options = {}) {
@@ -1918,7 +1942,9 @@ async function saveScene(reset=false){
 installDesktopChrome();
 for (const id of ['add-project','welcome-project','mobile-add-project','launch-add-project']) $(id).onclick = showProject;
 setProfessionalView(professionalView);
-$('professional-toggle').onclick = () => setProfessionalView(!professionalView);
+// Every "add an AI" button opens the same picker; the picker links to existing members and other ways in.
+function openAddAI() { if (!professionalView) { setProfessionalView(true); return; } if (roomId && !legacyId) openSecretaryConnect(); else if (projectId) action(() => openFirstRoom(projectId)); else showProject(); }
+$('professional-toggle').onclick = openAddAI;
 $('sidebar-toggle').onclick=()=>{const mobile=matchMedia('(max-width:760px)').matches,expanded=mobile?document.body.classList.toggle('mobile-sidebar-open'):!document.body.classList.toggle('sidebar-collapsed');$('sidebar-toggle').setAttribute('aria-expanded',String(expanded));$('sidebar-toggle').setAttribute('aria-label',expanded?'收起房间列表':'展开房间列表');};
 $('sidebar-close').onclick=()=>{document.body.classList.remove('mobile-sidebar-open');$('sidebar-toggle').setAttribute('aria-expanded','false');$('sidebar-toggle').setAttribute('aria-label','展开房间列表');};
 const mobileSidebarMedia=matchMedia('(max-width:760px)');function syncSidebarToggle(){const expanded=mobileSidebarMedia.matches?document.body.classList.contains('mobile-sidebar-open'):!document.body.classList.contains('sidebar-collapsed');$('sidebar-toggle').setAttribute('aria-expanded',String(expanded));$('sidebar-toggle').setAttribute('aria-label',expanded?'收起房间列表':'展开房间列表');}mobileSidebarMedia.addEventListener('change',syncSidebarToggle);syncSidebarToggle();
@@ -1946,6 +1972,8 @@ $('secretary-scan-agents').onclick = ()=>action(scanLaunch);
 $('secretary-connect-candidates').onclick = event => {if(secretaryConnectRoom===roomId)$('launch-candidates').onclick(event);};
 $('secretary-connect-progress').onclick = event => {if(secretaryConnectRoom===roomId)$('onboarding-jobs').onclick(event);};
 $('secretary-connect-back').onclick = ()=>{secretaryNavigation=null;$('secretary-connect-dialog').close();secretaryConnectJob=null;openSecretaryTutorial();};
+$('secretary-connect-dialog').addEventListener('close',()=>{renderSecretary();updateOfficeScene();});
+$('secretary-connect-other').onclick = ()=>{secretaryNavigation=null;secretaryConnectJob=null;renderSecretary();};
 $('secretary-connect-manual').onclick = ()=>{secretaryNavigation=null;$('secretary-connect-dialog').close();secretaryConnectJob=null;action(showMembers);};
 $('secretary-connect-dialog').addEventListener('close',()=>{if(secretaryNavigation?.source==='picker'&&!secretaryNavigation.setupMemberId)secretaryNavigation=null;});
 $('office-approval-alert').onclick=()=>{selectRoomView(false);requestAnimationFrame(()=>{const card=officeApprovalCards().at(-1);if(!card)return;card.scrollIntoView({block:'center',behavior:'smooth'});card.querySelector('input,button,a')?.focus({preventScroll:true});});};
@@ -2025,8 +2053,8 @@ $('launch-refresh').onclick = () => action(async () => { launchError = ''; await
 $('launch-copy').onclick = () => action(async () => { if (!launchSession?.grok_prompt || !launchSession.handoff_file || launchSession.status === 'preparing' || launchBusy) return; try { await navigator.clipboard.writeText(launchSession.grok_prompt); toast('本次接入说明已复制，只包含你指定的成员。'); } catch (error) { document.querySelector('.launch-instructions').open = true; toast('自动复制未完成，本次说明已展开，可手动复制。'); } });
 for (const id of ['add-room','mobile-add-room']) $(id).onclick = () => showRoom();
 $('welcome-room').onclick = () => { if (projectId) action(() => openFirstRoom(projectId)); else showProject(); };
-for (const id of ['settings-button','top-settings']) $(id).onclick = showSettings;
-for (const id of ['room-member-add','empty-add-member']) $(id).onclick = () => action(showMembers);
+$('top-settings').onclick = showSettings;
+for (const id of ['room-member-add','empty-add-member']) $(id).onclick = openAddAI;
 document.querySelectorAll('.close-dialog').forEach(button => button.onclick = () => button.closest('dialog').close());
 $('member-setup-dialog').addEventListener('close',()=>{stopGrokSetupWatch();grokSetupWatchError='';if(secretaryNavigation?.setupMemberId===selectedSetupMember)secretaryNavigation=null;});
 $('connector-fields-dialog').addEventListener('close',()=>{connectorFields=null;for(const name of ['name','transport','url','headers'])$('connector-'+name).value='';$('connector-instructions').textContent='';$('connector-docs').removeAttribute('href');});
@@ -2043,7 +2071,7 @@ $('delete-room-blockers').onclick=event=>action(async()=>{const button=event.tar
 $('discussions').onclick = event => { const button = event.target.closest('[data-discussion]'); if (button) { secretaryNavigation=null;legacyId = button.dataset.discussion; setReply(null); action(refresh); } };
 $('room-members').onclick = event => { const button = event.target.closest('[data-member]'); if (button) openInspector('connections',button.dataset.member); };
 $('inspector-members').onclick = event => { const button = event.target.closest('[data-inspector-member]'); if (button) openInspector('connections',button.dataset.inspectorMember); };
-$('inspector-add-member').onclick = () => setProfessionalView(false);
+$('inspector-add-member').onclick = openAddAI;
 $('inspector-bridge').onclick = () => action(async () => { const bridge = history?.participants?.find(member => member.adapter === 'grok-bridge'); if (bridge) await showBridge(bridge.id); else {setProfessionalView(false);toast('先选中要接入的成员，再将加群说明交给 Grok Bot。');} });
 $('continue-in-room').onclick = () => showRoom(history?.discussion?.title || '');
 $('scan-agents').onclick = () => action(scanAgents);

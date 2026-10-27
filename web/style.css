@@ -256,3 +256,14 @@ body.pixel-theme .secretary-connection-note,body.pixel-theme .secretary-steps,bo
 .setup-cards .upcoming-step{opacity:.6}.setup-cards .upcoming-step p{margin-bottom:0}
 .setup-cards .current-step{outline:2px solid var(--accent);outline-offset:3px}
 .setup-cards .done-step{opacity:.75}.setup-cards .done-step .step-number::after{content:" ✓";color:var(--accent)}
+.secretary-connect-dialog.connecting #secretary-connect-candidates,.secretary-connect-dialog.connecting .secretary-connect-scan{display:none}
+#secretary-connect-other{margin:4px 0 8px}
+.launch-recommend{display:inline-block;margin-left:8px;padding:1px 7px;border-radius:999px;background:var(--soft);color:var(--accent-dark);font-size:10px;font-weight:600;vertical-align:1px}
+.launch-candidate .launch-description{display:block;font-size:11px;color:var(--ink);opacity:.8;margin:4px 0 2px;line-height:1.5}
+.launch-candidate.recommended{border-color:var(--accent)}
+.local-dot.stopped{background:#b4553f!important;box-shadow:none!important}
+.sidebar-footer{color:var(--ink)}.sidebar-footer span{opacity:.85}
+/* Readable on the wooden sidebar: same ink as the section labels. */
+body.pixel-theme .sidebar-empty{color:#4a2e1a;opacity:.8;padding:6px 12px 12px}
+.team-more{margin-top:8px;border-top:1px solid var(--line);padding-top:12px}.team-more>summary{cursor:pointer;font-size:12px;color:var(--muted);margin-bottom:12px}
+.team-more .team-mirror-entry{border-bottom:0;margin:12px 0 0;padding:16px 0 0;border-top:1px solid var(--line)}

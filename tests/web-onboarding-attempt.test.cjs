@@ -146,8 +146,8 @@ test('current attempt readiness is mandatory and native mailbox success cannot m
 
 test('running discovery states are subordinate to actual authorization and attempt progress',()=>{
   const f=fixture();f.context.launchCandidates=[{id:'codex',name:'Codex',installed:true,running:true,capabilities:{automatic_launch:true}}];f.context.renderLaunchCandidates();
-  let html=f.$('launch-candidates').innerHTML;assert.match(html,/请先在原 Codex 窗口登录 · 尚未接通/);assert.match(html,/查看登录状态/);assert.doesNotMatch(html,/正在运行|本次连接已验证|后台账号需单独核对/);
-  f.context.onboardingJobs.clear();f.context.renderLaunchCandidates();html=f.$('launch-candidates').innerHTML;assert.match(html,/已发现本机进程 · 尚未验证 AO 连接/);assert.doesNotMatch(html,/本次连接已验证/);
+  let html=f.$('launch-candidates').innerHTML;assert.match(html,/需要先在 Codex 里登录/);assert.match(html,/查看登录状态/);assert.doesNotMatch(html,/正在运行|本次连接已验证|后台账号需单独核对/);
+  f.context.onboardingJobs.clear();f.context.renderLaunchCandidates();html=f.$('launch-candidates').innerHTML;assert.match(html,/正在运行/);assert.doesNotMatch(html,/本次连接已验证/);
 });
 test('the explicit current attempt wins over historical jobs with newer observation timestamps',()=>{
   const f=fixture();const current={...f.job,id:'current',status:'running',stage:'verifying_reply',created:'2026-10-21T10:00:00Z'};f.context.onboardingJobs.set('current',current);f.job.updated='2099-01-01';f.flow.jobId='current';f.context.secretaryConnectJob='current';
