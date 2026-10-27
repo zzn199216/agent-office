@@ -185,10 +185,10 @@ function renderLaunchCandidates() {
   const renderCandidate = candidate => {
     const provider = launchProvider(candidate), name = candidate.name || provider, selectable = launchSelectable(candidate), canJoin = onboardingSelectable(candidate), mode = onboardingMode(candidate), job = onboardingForProvider(provider), feedback=typeof onboardingFeedback==='undefined'?null:onboardingFeedback.get(job?.id),pending = onboardingStarting.has(provider) || onboardingRunning(job) || feedback?.pending;
     const availability = onboardingRepairRequired(job)?'连接已暂停，避免影响你的登录':onboardingRecheckPending(job)?'可以用已有登录重新连接':job?.stage==='awaiting_auth'?provider==='codex'?'需要先在 Codex 里登录':`需要先登录 ${name}`:onboardingOfficeReady(job)?job.can_wake?'已连接，有消息会自动处理':'已连接，在它自己的窗口里查看消息':pending?'正在连接…':job?.error?'上次没有连上，原因见下方':!canJoin ? candidate.support === 'unsupported' ? '暂时不能接入' : !candidate.installed ? '需要先安装' : '暂时不能接入' : !candidate.installed ? '尚未安装，接入时会自动安装' : candidate.running ? '正在运行' : '已安装';
-    const guidedGrok=provider==='grok-bot'&&candidate.capabilities?.native_direct_available!==true,native = nativeDesktopProvider(candidate)&&!guidedGrok, label = onboardingRepairRequired(job)?'查看处理办法':onboardingRecheckPending(job)?'重新连接':feedback?.pending&&feedback.operation==='login_client'?'正在打开…':pending ? '正在接入…' : inRoom(candidate) ? '已在房间里' : onboardingOfficeReady(job) ? '进入办公室' : job?.stage==='awaiting_auth'?provider==='codex'?'查看登录状态':'继续登录':job?.status === 'needs_action' ? '继续接入' : '接入';
+    const guidedGrok=provider==='grok-bot'&&candidate.capabilities?.native_direct_available!==true,native = nativeDesktopProvider(candidate)&&!guidedGrok, label = onboardingRepairRequired(job)?'查看处理办法':onboardingRecheckPending(job)?'重新连接':onboardingRunning(job)?'查看进度':feedback?.pending&&feedback.operation==='login_client'?'正在打开…':pending ? '正在接入…' : inRoom(candidate) ? '已在房间里' : onboardingOfficeReady(job) ? '进入办公室' : job?.stage==='awaiting_auth'?provider==='codex'?'查看登录状态':'继续登录':job?.status === 'needs_action' ? '继续接入' : '接入';
     const description = mode === 'managed' ? `在后台工作，有消息会自动处理，可以当秘书。${['qwen-code','gemini-cli'].includes(provider) ? '第一次需要填写它的 API 账号。' : ''}` : guidedGrok || mode === 'bridge' ? `复制一段说明发给你的 ${name}。` : native ? `用你电脑上的 ${name}，有消息会自动处理。` : candidate.capabilities?.mcp_prepare ? `在 ${name} 里加一个连接，在它的窗口里查看消息。` : '';
     const badge = provider === recommendedProvider && canJoin ? `<span class="launch-recommend">${needsSecretary ? '推荐当秘书' : '推荐'}</span>` : '';
-    return `<article class="launch-candidate ${canJoin ? '' : 'unavailable'} ${badge ? 'recommended' : ''}"><label class="launch-candidate-select"><input type="checkbox" data-launch-provider="${escape(provider)}" aria-label="批量选择 ${escape(name)}" ${launchSelection.has(provider) ? 'checked' : ''} ${selectable && !launchBusy ? '' : 'disabled'}></label>${avatar(candidate.name,provider)}<div class="launch-candidate-info"><strong>${escape(name)}${badge}</strong>${description ? `<span class="launch-description">${escape(tidyCandidateText(description))}</span>` : ''}<small>${escape(tidyCandidateText(availability))}</small></div><button type="button" class="${canJoin && (badge || job && !inRoom(candidate)) ? 'primary' : 'secondary'} onboarding-start" ${canJoin ? 'data-onboarding-provider' : 'data-onboarding-requirements'}="${escape(provider)}" aria-label="${escape(name)} ${escape(canJoin ? label : '查看说明')}" ${!pending && !launchBusy && !launchScanning && !inRoom(candidate) && (webConnected || !canJoin) ? '' : 'disabled'}>${escape(canJoin ? label : '查看说明')}</button></article>`;
+    return `<article class="launch-candidate ${canJoin ? '' : 'unavailable'} ${badge ? 'recommended' : ''}"><label class="launch-candidate-select"><input type="checkbox" data-launch-provider="${escape(provider)}" aria-label="批量选择 ${escape(name)}" ${launchSelection.has(provider) ? 'checked' : ''} ${selectable && !launchBusy ? '' : 'disabled'}></label>${avatar(candidate.name,provider)}<div class="launch-candidate-info"><strong>${escape(name)}${badge}</strong>${description ? `<span class="launch-description">${escape(tidyCandidateText(description))}</span>` : ''}<small>${escape(tidyCandidateText(availability))}</small></div><button type="button" class="${canJoin && (badge || job && !inRoom(candidate)) ? 'primary' : 'secondary'} onboarding-start" ${canJoin ? 'data-onboarding-provider' : 'data-onboarding-requirements'}="${escape(provider)}" aria-label="${escape(name)} ${escape(canJoin ? label : '查看说明')}" ${(!pending || onboardingRunning(job)) && !launchBusy && !launchScanning && !inRoom(candidate) && (webConnected || !canJoin) ? '' : 'disabled'}>${escape(canJoin ? label : '查看说明')}</button></article>`;
   };
   // AIs already on this computer are listed; ones that need installing or are not supported yet stay folded.
   const ready = ordered.filter(candidate => onboardingSelectable(candidate) && (candidate.installed || candidate.running)), others = ordered.filter(candidate => !ready.includes(candidate));
@@ -496,13 +496,15 @@ function returnSecretaryAfterOnboarding() {
   }).finally(()=>{secretaryFinishing=false;});
 }
 async function startOnboarding(provider) {
-  if($('secretary-connect-dialog').open&&currentOnboardingJobs().some(onboardingRunning))return;
+  const current = onboardingForProvider(provider);
+  // Looking at an in-flight connection must not start another attempt.
+  if($('secretary-connect-dialog').open&&currentOnboardingJobs().some(onboardingRunning)&&!onboardingRunning(current))return;
   const candidate = (launchCandidates || []).find(item => launchProvider(item) === provider); if (!candidate || !onboardingSelectable(candidate) || onboardingStarting.has(provider)) return;
   const project = state?.projects?.find(item => item.id === projectId); if (!project) { showProject(); return; }
   const secretaryConnecting = $('secretary-connect-dialog').open && secretaryConnectRoom === roomId;
   const flow=!legacyId?beginSecretaryNavigation(secretaryConnecting?'picker':professionalView?'member':'launch'):null;
   const selectedRoom=roomId,selectedProject=projectId,selectedLegacy=legacyId;
-  const current = onboardingForProvider(provider); if (current?.status === 'needs_action' || onboardingReady(current)) { if(flow)flow.jobId=current.id;if(secretaryConnecting) secretaryConnectJob = current.id; onboardingProgressTarget().scrollIntoView({behavior:'smooth',block:'start'}); await checkOnboarding(current.id,{retry:false}); return; }
+  if (onboardingRunning(current) || current?.status === 'needs_action' || onboardingReady(current)) { if(flow)flow.jobId=current.id;if(secretaryConnecting) secretaryConnectJob = current.id; renderLaunch(); onboardingProgressTarget().scrollIntoView({behavior:'smooth',block:'start'}); await checkOnboarding(current.id,{retry:false}); return; }
   onboardingStarting.add(provider); launchError = ''; renderLaunch();
   try {
     const job = onboardingView(await api('/api/onboarding/start',{provider,...roomId && !legacyId ? {room_id:roomId} : {project_id:project.id},mode:onboardingMode(candidate),install_client:true,...!candidate.installed && onboardingCanInstall(candidate) ? {install_runtime:true} : {},...$('launch-goal').value.trim() ? {goal:$('launch-goal').value.trim()} : {}}));
@@ -1557,7 +1559,7 @@ function renderSecretary() {
   $('secretary-connect-dialog').classList.toggle('connecting',!!attempt); $('secretary-connect-other').classList.toggle('hidden',!attempt);
   if(attempt)$('secretary-connect-status').textContent=`正在接入 ${attempt.name||launchCandidates?.find(candidate=>launchProvider(candidate)===attempt.provider)?.name||attempt.provider}`.replace(/([\u4e00-\u9fff]) (?=[\u4e00-\u9fff])/g,'$1');
   setApprovalMarkup($('secretary-connect-progress'),attempt?onboardingJobMarkup(attempt):'',state?.approvals||[]);
-  $('secretary-connect-candidates').querySelectorAll('button').forEach(button => { if(secretaryConnectRoom !== roomId||busy) button.disabled = true; });
+  $('secretary-connect-candidates').querySelectorAll('button').forEach(button => { if(secretaryConnectRoom !== roomId||busy&&!onboardingRunning(onboardingForProvider(button.dataset.onboardingProvider))) button.disabled = true; });
   $('secretary-connect-progress').querySelectorAll('button').forEach(button => { if(secretaryConnectRoom !== roomId || !webConnected) button.disabled = true; });
   if(attempt)revealOnboardingAction(attempt);
   const pickerError=launchError||(secretaryNavigationCurrent(secretaryNavigation)&&secretaryNavigation.source==='picker'?secretaryError:'');
@@ -1585,6 +1587,8 @@ function finishSecretaryNavigation(flow,expected) {
   // Only a newly seated secretary becomes the recipient; connecting another member keeps the person's choice.
   if(flow.source==='member'){if(!$('recipient').value){$('recipient').value=flow.memberId;updateRecipientNote();}}
   else if(!flow.memberId || flow.memberId===selected.member_id){$('recipient').value=selected.member_id;updateRecipientNote();}
+  // The first automatic secretary is ready for the person's first task now.
+  if(flow.accepted && !flow.assignment.member_id && selected.member_id===flow.memberId && selected.can_wake)toggleOfficeComposer(true);
   const joinedName=members.find(member=>member.id===flow.memberId)?.name||'这位成员';
   if(flow.fromPicker){toast(`${joinedName}已加入。它在自己的窗口里看消息，所以没有设为秘书；想让秘书自动安排工作，可以再接入 Codex 或 Claude Code。`);return true;}
   toast(job?.reused_connection===true||job?.connection_reused===true?'已加入办公室，用的是原来的连接。':flow.source==='member'||flow.memberId && flow.memberId!==selected.member_id?onboardingReady(job)==='ready_mailbox'?'已连接，进入办公室。它在自己的窗口里看消息。':'成员已真实接通，已进入办公室。':'秘书已真实接通，可以在办公室交代目标。');return true;

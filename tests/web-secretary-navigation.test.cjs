@@ -11,7 +11,7 @@ function fixture(){
   const ready={room_id:'room',member_id:'member',status:'ready',assignment_id:'assignment',can_wake:true};
   const context=vm.createContext({$,state:{projects:[{id:'project'}],secretaries:{room:unassigned}},history:{room:{id:'room'},participants:[{id:'member',verified_at:'verified',status:'ready'}]},roomId:'room',projectId:'project',legacyId:null,professionalView:true,webConnected:true,selectedSetupMember:'member',secretaryNavigation:null,secretaryConnectRoom:'room',secretaryConnectJob:null,secretaryFinishing:false,secretaryBusy:false,secretaryStartBusy:false,secretaryPickingRoom:'room',secretaryOpenRoom:'room',secretaryError:'',secretaryDismissed:new Set(),refreshing:false,refreshWaiters:[],onboardingJobs:new Map(),onboardingFeedback:new Map(),onboardingStarting:new Set(),launchError:'',launchCandidates:[{id:'qwen-desktop',installed:true,capabilities:{mcp_prepare:true}}],
     admittedMembers:members=>members.filter(member=>member.verified_at&&!['connection_failed','failed','disabled','revoked','unavailable'].includes(member.status)),
-    renderSecretary(){},updateOfficeScene(){},renderLaunch(){},updateRecipientNote(){},rememberSelection(){},showProject(){},showRoom(){},localStorage:{setItem(){}},toast:value=>notices.push(value),
+    renderSecretary(){},updateOfficeScene(){},renderLaunch(){},updateRecipientNote(){},rememberSelection(){},showProject(){},showRoom(){},localStorage:{setItem(){}},toast:value=>notices.push(value),toggleOfficeComposer:value=>{context.composerOpen=value;},
     setProfessionalView:value=>{context.professionalView=value;navigation.push(['workspace',value]);},selectRoomView:value=>navigation.push(['office',value]),
     action:async callback=>{try{return await callback();}catch(error){notices.push(error.message);}},
     refresh:async()=>{context.state.secretaries.room={...ready};},refreshLaunch:async()=>{},refreshOnboarding:async()=>{},setTimeout:()=>0,clearTimeout(){},
@@ -31,6 +31,8 @@ test('automatic onboarding cannot leave setup until actual reply verification pe
   await f.context.returnSecretaryAfterOnboarding();assert.equal(f.calls.length,0);assert.equal(f.navigation.length,0);assert.equal(f.$('secretary-connect-dialog').open,true);
   Object.assign(f.context.onboardingJobs.get('job'),{ready_for_office:true,automatic_reply_verified:true});await f.context.returnSecretaryAfterOnboarding();
   assert.equal(f.calls.length,1);assert.deepEqual(f.navigation,[['workspace',true],['office',true]]);
+  assert.equal(f.context.composerOpen,true,'the first secretary opens the shared composer');
+  f.context.composerOpen=false;await f.context.returnSecretaryAfterOnboarding();assert.equal(f.context.composerOpen,false,'later refresh must not reopen a dismissed composer');
 });
 
 test('a newly connected member enters the office without replacing or assigning the secretary',async()=>{
@@ -38,6 +40,7 @@ test('a newly connected member enters the office without replacing or assigning 
   f.$('recipient').value='chosen-person';f.context.refresh=async()=>{};
   await f.context.returnSecretaryAfterOnboarding();assert.equal(f.calls.length,0);assert.equal(f.context.state.secretaries.room.member_id,null);assert.equal(f.$('recipient').value,'chosen-person');
   assert.deepEqual(f.navigation,[['workspace',true],['office',true]]);assert.equal(f.$('member-setup-dialog').open,false);
+  assert.notEqual(f.context.composerOpen,true,'adding an ordinary member does not take over the composer');
 });
 
 test('automatic verification progress remains in setup and never assigns a secretary',async()=>{

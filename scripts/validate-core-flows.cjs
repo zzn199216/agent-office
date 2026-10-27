@@ -111,6 +111,9 @@ async function main() {
     await page.goto(base+'/');
 
     await run('first-connection',async()=>{
+      // Include the automatic secretary path and return-to-progress controls in
+      // the mandatory gate, with a separate fresh instance at desktop/phone widths.
+      proof.screenshots.push(...await require('./validate-onboarding-return.cjs').validateOnboardingReturn(out));
       // Start where a new person starts. A seeded project/room bypasses the
       // first-run controls and cannot catch a broken project picker or form.
       // One path: folder -> AI -> talk. The room is created for the person and the AI picker opens next.
