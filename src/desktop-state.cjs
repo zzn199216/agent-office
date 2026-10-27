@@ -11,7 +11,7 @@ function olderVersion(actual,expected=VERSION){
   if(!a[4]||!b[4])return !!a[4]&&!b[4];
   const x=a[4].split('.'),y=b[4].split('.');for(let i=0;i<Math.max(x.length,y.length);i++){if(x[i]===y[i])continue;if(x[i]===undefined||y[i]===undefined)return x[i]===undefined;const xn=/^\d+$/.test(x[i]),yn=/^\d+$/.test(y[i]);if(xn&&yn)return BigInt(x[i])<BigInt(y[i]);if(xn!==yn)return xn;return x[i]<y[i];}return false;
 }
-function roomInput(value){if(value!=null&&!ROOM_ID.test(value))throw new RoomError('聊天室标识无效。',400,'desktop_room_invalid');return value||null;}
+function roomInput(value){if(value!=null&&!ROOM_ID.test(value))throw new RoomError('房间标识无效。',400,'desktop_room_invalid');return value||null;}
 function operationTimeout(options,maximum=5000){
   const remaining=options.deadline==null?maximum:options.deadline-(options.clock?.()??Date.now());
   if(remaining<=0)throw new RoomError('本机服务操作超过等待期限。请检查状态后重试，没有继续执行过期步骤。',504,'desktop_operation_timeout');
@@ -56,7 +56,7 @@ async function desktopState(dir,input={},options={}){
     if([401,403].includes(error.status))throw new RoomError('本机服务身份与桌面入口不一致，未连接另一个实例。',409,'instance_control_mismatch');
     return {...offline,connection_error:'暂时无法联系本机服务。已保存的聊天仍可查看。'};
   }
-  if(!offline.initialized||snapshot.instance_id!==offline.snapshot.instance_id||control.instance_id!==snapshot.instance_id)throw new RoomError('本机服务与原聊天室身份不一致，未打开替代实例。',409,'instance_control_mismatch');
+  if(!offline.initialized||snapshot.instance_id!==offline.snapshot.instance_id||control.instance_id!==snapshot.instance_id)throw new RoomError('本机服务与原房间身份不一致，未打开替代实例。',409,'instance_control_mismatch');
   const selected=roomInput(input.room_id)||snapshot.chat.rooms[0]?.id||null;
   const [history,team]=selected?await Promise.all([main.apiCall(dir,'/api/chat/rooms/'+selected,undefined,operationTimeout(options)),main.apiCall(dir,'/api/team?room_id='+encodeURIComponent(selected),undefined,operationTimeout(options))]):[null,null];
   operationTimeout(options);

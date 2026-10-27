@@ -251,3 +251,8 @@ body.pixel-theme .secretary-connection-note,body.pixel-theme .secretary-steps,bo
 #member-setup-status .connection-panel{width:100%}#member-setup-status .connection-panel-status strong{color:var(--ink,#20302b);font-weight:600}
 
 .team-mirror-entry{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;padding:0 0 16px;margin-bottom:16px;border-bottom:1px solid var(--line)}.team-mirror-entry strong{font-size:13px}.team-mirror-entry p{font-size:12px;line-height:1.6;margin:6px 0 0;color:var(--muted)}
+
+/* First run: one highlighted step, the next two shown as what comes after. */
+.setup-cards .upcoming-step{opacity:.6}.setup-cards .upcoming-step p{margin-bottom:0}
+.setup-cards .current-step{outline:2px solid var(--accent);outline-offset:3px}
+.setup-cards .done-step{opacity:.75}.setup-cards .done-step .step-number::after{content:" ✓";color:var(--accent)}

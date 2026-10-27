@@ -142,12 +142,12 @@ class ChatStore {
   rooms() { return this.db.prepare(`SELECT r.*,p.name AS project_name,p.path AS project_path FROM chat_rooms r JOIN projects p ON p.id=r.project_id ${this.hasRoomTombstones?'WHERE NOT EXISTS(SELECT 1 FROM chat_room_tombstones d WHERE d.room_id=r.id)':''} ORDER BY r.updated DESC,r.id`).all().map(row=>this.archiveState(row)); }
   room(roomId) {
     const row = this.db.prepare('SELECT r.*,p.name AS project_name,p.path AS project_path FROM chat_rooms r JOIN projects p ON p.id=r.project_id WHERE r.id=?').get(roomId);
-    if (!row) throw new RoomError('聊天室不存在。', 404);
-    if(this.hasRoomTombstones&&this.db.prepare('SELECT 1 FROM chat_room_tombstones WHERE room_id=?').get(roomId))throw new RoomError('这个聊天室已删除，旧接入入口不能恢复或创建替代聊天室。',410,'room_deleted');
+    if (!row) throw new RoomError('房间不存在。', 404);
+    if(this.hasRoomTombstones&&this.db.prepare('SELECT 1 FROM chat_room_tombstones WHERE room_id=?').get(roomId))throw new RoomError('这个房间已删除，旧接入入口不能恢复或创建替代房间。',410,'room_deleted');
     return this.archiveState(row);
   }
   setArchived(roomId,archived){
-    if(this.readOnly)throw new RoomError('只读检查不能归档或恢复聊天室。',403,'read_only_state');
+    if(this.readOnly)throw new RoomError('只读检查不能归档或恢复房间。',403,'read_only_state');
     if(typeof archived!=='boolean'||typeof roomId!=='string'||!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(roomId))throw new RoomError('房间归档请求无效。',400,'room_archive_input_invalid');
     return this.store.transaction(()=>{const room=this.room(roomId);if(room.archived===archived)return room;
       if(archived)this.db.prepare('INSERT INTO chat_room_archives(room_id,archived_at) VALUES(?,?)').run(roomId,now());
@@ -156,17 +156,17 @@ class ChatStore {
     });
   }
   deleteRoom(roomId, checkBusy = () => {}, {force=false} = {}) {
-    if(this.readOnly)throw new RoomError('只读检查不能删除聊天室。',403,'read_only_state');
-    if(typeof roomId!=='string'||!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(roomId))throw new RoomError('聊天室标识无效。',400,'room_delete_input_invalid');
+    if(this.readOnly)throw new RoomError('只读检查不能删除房间。',403,'read_only_state');
+    if(typeof roomId!=='string'||!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(roomId))throw new RoomError('房间标识无效。',400,'room_delete_input_invalid');
     // An immediate write lock makes checking work and recording the tombstone
     // atomic even when another local entrypoint has opened the same database.
     return this.store.transaction(() => {
       const room=this.db.prepare('SELECT id FROM chat_rooms WHERE id=?').get(roomId);
-      if(!room)throw new RoomError('聊天室不存在。',404);
+      if(!room)throw new RoomError('房间不存在。',404);
       const previous=this.db.prepare('SELECT deleted_at FROM chat_room_tombstones WHERE room_id=?').get(roomId);
       if(previous)return {ok:true,room_id:roomId,status:'deleted',deleted_at:previous.deleted_at,already_deleted:true};
       const hasTable=name=>!!this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(name);
-      const busy=()=>{throw new RoomError('聊天室仍有待办、正在处理或结果待核对的任务。请先处理或停止待办任务，并核对不确定的结果，再删除聊天室。',409,'room_busy');};
+      const busy=()=>{throw new RoomError('房间仍有待办、正在处理或结果待核对的任务。请先处理或停止待办任务，并核对不确定的结果，再删除房间。',409,'room_busy');};
       if(!force){
       if(this.db.prepare("SELECT 1 FROM chat_messages WHERE room_id=? AND (status NOT IN ('posted','answered','completed','failed','cancelled','consumed') OR status='consumed' AND kind NOT IN ('reply','acknowledgment')) LIMIT 1").get(roomId))busy();
       if(this.db.prepare("SELECT 1 FROM chat_bindings WHERE room_id=? AND binding_state IN ('creating','creation_uncertain','outcome_uncertain','resume_uncertain') LIMIT 1").get(roomId))busy();
@@ -189,7 +189,7 @@ class ChatStore {
   }
   addRoom(input) {
     this.store.project(input.project_id);
-    const row = { id: id(), title: cleanText(input.title || '聊天室', 100, '聊天室名称'), project_id: input.project_id, created: now(), updated: now() };
+    const row = { id: id(), title: cleanText(input.title || '房间', 100, '房间名称'), project_id: input.project_id, created: now(), updated: now() };
     this.db.prepare('INSERT INTO chat_rooms VALUES(:id,:title,:project_id,:created,:updated)').run(row);
     return this.room(row.id);
   }
@@ -200,7 +200,7 @@ class ChatStore {
   joined(roomId, memberId) { return !!this.db.prepare('SELECT 1 FROM chat_participants WHERE room_id=? AND member_id=? AND joined=1').get(roomId, memberId); }
   requireParticipant(roomId, memberId) {
     this.room(roomId); this.member(memberId);
-    if (!this.joined(roomId, memberId)) throw new RoomError('该成员尚未加入聊天室。', 403, 'not_in_room');
+    if (!this.joined(roomId, memberId)) throw new RoomError('该成员尚未加入房间。', 403, 'not_in_room');
   }
   join(roomId, memberId) {
     return this.transaction(() => {
@@ -318,7 +318,7 @@ class ChatStore {
       }
       if (sender !== 'user') this.requireParticipant(room.id, sender);
       if (target !== null) this.requireParticipant(room.id, target);
-      if (reply !== null && this.message(reply).room_id !== room.id) throw new RoomError('回复只能引用同一聊天室的消息。', 403, 'cross_room_reply');
+      if (reply !== null && this.message(reply).room_id !== room.id) throw new RoomError('回复只能引用同一房间的消息。', 403, 'cross_room_reply');
       const row = { id: id(), room_id: room.id, sender_id: sender, to_member_id: target, text, reply_to: reply, kind, status: target === null ? 'posted' : 'queued', error: null, request_id: null, idempotency_key: key, body_hash: hash, created: now(), updated: now() };
       this.db.prepare('INSERT INTO chat_messages(id,room_id,sender_id,to_member_id,text,reply_to,kind,status,error,request_id,idempotency_key,body_hash,created,updated) VALUES(:id,:room_id,:sender_id,:to_member_id,:text,:reply_to,:kind,:status,:error,:request_id,:idempotency_key,:body_hash,:created,:updated)').run(row);
       this.images.save(room.id,row.id,images);

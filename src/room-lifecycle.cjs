@@ -33,7 +33,7 @@ function deletionPreview(service,roomId){
   return {room_id:roomId,tasks,total:tasks.length,confirmation_token:token,external_warning:tasks.some(task=>task.external)?'已经送达外部窗口或结果不明确的任务无法保证撤回；删除会停止本机处理，保留原始记录供核对。':null};
 }
 async function forceDeleteRoom(service,roomId,token){
-  if(service.closing||service.chat.closing)throw new RoomError('服务正在停止，请稍后删除聊天室。',503,'service_stopping');
+  if(service.closing||service.chat.closing)throw new RoomError('服务正在停止，请稍后删除房间。',503,'service_stopping');
   const confirmation=confirmations.get(service)?.get(token);
   if(!confirmation||confirmation.roomId!==roomId||confirmation.expires<Date.now())throw new RoomError('删除确认已失效，请重新查看当前任务并确认。',409,'room_delete_confirmation_expired');
   const db=service.store.db,stamp=now(),reason='用户确认停止本房间任务并删除；外部已送达或结果不明确的执行未宣称撤回。';
@@ -89,7 +89,7 @@ async function settleInterruptedWork(service,roomId){
 // Local room deletion is a controller operation. Native Grok groups, projects,
 // shared accounts and native session history remain outside this operation.
 function deleteRoom(service,roomId){
-  if(service.closing||service.chat.closing)throw new RoomError('服务正在停止，请稍后删除聊天室。',503,'service_stopping');
+  if(service.closing||service.chat.closing)throw new RoomError('服务正在停止，请稍后删除房间。',503,'service_stopping');
   let result;try{result=service.chat.store.deleteRoom(roomId,(_roomId,busy)=>{
     if(service.store.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='team_records'").get()){
       for(const row of service.store.db.prepare("SELECT kind,body FROM team_records WHERE room_id=? AND kind IN ('goal','task','meeting')").all(roomId)){
@@ -112,7 +112,7 @@ function deleteRoom(service,roomId){
 // Archiving only organises the local list. It preserves ongoing work, messages,
 // participant entries and schedules. Deletion keeps its separate busy checks.
 function archiveRoom(service,roomId,archived){
-  if(service.closing||service.chat.closing)throw new RoomError('服务正在停止，请稍后管理聊天室。',503,'service_stopping');
+  if(service.closing||service.chat.closing)throw new RoomError('服务正在停止，请稍后管理房间。',503,'service_stopping');
   const room=service.chat.store.setArchived(roomId,archived);service.changed();return room;
 }
 module.exports={deleteRoom,archiveRoom,deletionBlockers,settleInterruptedWork,deletionPreview,forceDeleteRoom,stopOwnedChildTree};

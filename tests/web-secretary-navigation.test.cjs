@@ -56,7 +56,10 @@ test('native historical success and missing attempt acceptance cannot close setu
 });
 test('explicit manual connection can enter as a member but cannot become an automatic secretary',async()=>{
   const job={id:'job',room_id:'room',member_id:'member',provider:'qwen-desktop',status:'ready_mailbox',connection_method:'manual_mcp',can_wake:false,ready_for_office:true};
-  const picker=fixture();picker.$('secretary-connect-progress').querySelector=()=>null;connectFlow(picker,'picker',job);await picker.context.returnSecretaryAfterOnboarding();assert.equal(picker.calls.length,0);assert.equal(picker.navigation.length,0);assert.equal(picker.$('secretary-connect-dialog').open,true);assert.match(picker.context.onboardingFeedback.get('job').message,/不会自动处理秘书任务/);
+  // Chosen in the AI picker, it joins as a member instead of stopping at an error; no secretary is assigned.
+  const picker=fixture();picker.context.refresh=async()=>{};picker.$('secretary-connect-progress').querySelector=()=>null;connectFlow(picker,'picker',job);await picker.context.returnSecretaryAfterOnboarding();assert.equal(picker.calls.length,0);assert.equal(picker.context.state.secretaries.room.member_id,null);assert.deepEqual(picker.navigation,[['workspace',true],['office',true]]);assert.equal(picker.$('secretary-connect-dialog').open,false);assert.match(picker.notices.at(-1),/没有设为秘书/);
+  // A native route that ended without automatic handling is still not trusted.
+  const native=fixture();native.$('secretary-connect-progress').querySelector=()=>null;connectFlow(native,'picker',{...job,connection_method:'native_desktop'});await native.context.returnSecretaryAfterOnboarding();assert.equal(native.navigation.length,0);assert.equal(native.$('secretary-connect-dialog').open,true);assert.equal(native.calls.length,0);
   const member=fixture();member.context.refresh=async()=>{};connectFlow(member,'member',job);await member.context.returnSecretaryAfterOnboarding();assert.equal(member.calls.length,0);assert.deepEqual(member.navigation,[['workspace',true],['office',true]]);assert.equal(member.$('member-setup-dialog').open,false);
 });
 test('Grok pending and mailbox-ready picker flows open one owned guide without assigning a secretary',async()=>{

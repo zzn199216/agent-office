@@ -113,16 +113,18 @@ async function main() {
     await run('first-connection',async()=>{
       // Start where a new person starts. A seeded project/room bypasses the
       // first-run controls and cannot catch a broken project picker or form.
-      await page.locator('#welcome-room').click();
+      // One path: folder -> AI -> talk. The room is created for the person and the AI picker opens next.
+      await page.locator('.setup-cards .current-step #welcome-project').click();
       await page.locator('#project-dialog').waitFor();
-      await page.locator('#project-name').fill('六条核心流程 · 隔离验收');
       await page.locator('#project-path').fill(files.project);
-      await page.locator('#project-form button[type="submit"]').click();
-      await page.locator('#room-dialog').waitFor();
-      await page.locator('#room-name').fill('首次接入的办公室');
+      assert.equal(await page.locator('#project-name').inputValue(),path.basename(files.project),'The project name defaults to the folder name');
       const created=page.waitForResponse(response=>response.url()===base+'/api/chat/rooms'&&response.request().method()==='POST');
-      await page.locator('#room-form button[type="submit"]').click();firstRoom=await(await created).json();
-      await connect();
+      await page.locator('#project-form button[type="submit"]').click();firstRoom=await(await created).json();
+      assert.equal(service.store.projects().length,1);assert.equal(service.store.projects()[0].name,path.basename(files.project));
+      await page.locator('#secretary-connect-dialog').waitFor({state:'visible'});
+      assert.equal(await page.locator('#room-dialog').isVisible(),false,'No separate room form on first run');
+      assert.equal(await page.locator('#secretary-tutorial').isVisible(),false,'The AI picker replaces the secretary tutorial');
+      await page.locator('#secretary-connect-candidates [data-onboarding-provider="doubao"]').click();
       const panel=page.locator('#secretary-connect-progress .connection-panel');
       // Doubao now defaults to automatic delivery. This isolated journey also
       // verifies the explicit MCP fallback; a real desktop is never invoked.
@@ -143,7 +145,9 @@ async function main() {
       const rooms=await tool('agentroom_chat_rooms');
       assert.equal(rooms.member_id,member.id);assert.ok(rooms.rooms.some(value=>value.id===firstRoom.id));
       assert.deepEqual(await inbox(),[]);
-      await closeDialog('#secretary-connect-dialog');await closeDialog('#member-setup-dialog');await closeTutorial();
+      // Once the handshake proves the connection, the picker closes by itself and the room opens.
+      await page.locator('#secretary-connect-dialog').waitFor({state:'hidden'});
+      assert.equal(await page.locator('#member-setup-dialog').isVisible(),false);assert.equal(await page.locator('#secretary-tutorial').isVisible(),false);
       await page.locator('#chat-view-button').click();
       await page.locator('#recipient option[value="'+member.id+'"]').waitFor({state:'attached'});
       // The first connected member receives a typed message; the room announcement wakes nobody.
@@ -163,8 +167,9 @@ async function main() {
       // An existing address must work in the new room, but the new attempt
       // still needs fresh tool evidence, not the previous room's timestamp.
       const rooms=await tool('agentroom_chat_rooms');assert.equal(rooms.member_id,member.id);
-      await page.waitForFunction(()=>document.querySelector('#secretary-connect-progress')?.textContent.includes('已连接'));
-      await closeDialog('#secretary-connect-dialog');await closeTutorial();
+      // A member connected by hand cannot be the secretary; it joins the room and the picker closes by itself.
+      await page.locator('#secretary-connect-dialog').waitFor({state:'hidden'});await closeTutorial();
+      await page.waitForFunction(id=>document.getElementById('recipient').value===id,member.id);
       assert.deepEqual(service.chat.store.members().map(value=>value.id).sort(),identities);
       assert.equal(service.chat.store.joined(secondRoom.id,member.id),true);
       assert.equal(service.chat.store.joined(firstRoom.id,member.id),true);

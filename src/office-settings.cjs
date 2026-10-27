@@ -37,7 +37,7 @@ function officeSnapshot(store,rooms){return Object.fromEntries(rooms.map(room=>[
 
 class OfficeSettingsManager{
   constructor(service){this.service=service;}
-  room(roomId){return this.service.chat.store.room(cleanText(roomId,200,'聊天室标识'));}
+  room(roomId){return this.service.chat.store.room(cleanText(roomId,200,'房间标识'));}
   get(roomId){return storedOffice(this.service.store,this.room(roomId).id);}
   snapshot(){return officeSnapshot(this.service.store,this.service.chat.store.rooms());}
   set(input){

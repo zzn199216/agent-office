@@ -103,7 +103,7 @@ function createServer(service,{token,port=47831,onShutdown}={}) {
       if(req.method==='DELETE'&&pathname.startsWith('/api/chat/rooms/')){
         const route=new URL(req.url,'http://127.0.0.1'),input=await body(req);
         const forced=input?.force===true&&typeof input.confirmation_token==='string'&&/^[a-f0-9]{48}$/.test(input.confirmation_token)&&Object.keys(input).length===2;
-        if(!chat||chat[1]!=='rooms'||chat[3]||route.search||!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).length&&!forced)throw new RoomError('删除聊天室的请求范围无效。',400,'room_delete_input_invalid');
+        if(!chat||chat[1]!=='rooms'||chat[3]||route.search||!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).length&&!forced)throw new RoomError('删除房间的请求范围无效。',400,'room_delete_input_invalid');
         const lifecycle=require('./room-lifecycle.cjs');if(forced)return json(res,await lifecycle.forceDeleteRoom(service,chat[2],input.confirmation_token));await lifecycle.settleInterruptedWork(service,chat[2]);return json(res,lifecycle.deleteRoom(service,chat[2]));
       }
       if(req.method==='GET' && chat){const q=new URL(req.url,`http://${req.headers.host}`).searchParams;

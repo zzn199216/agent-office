@@ -295,7 +295,7 @@ async function refreshMirror() {
   if (selected === roomId && mirrorRoom === selected) renderMirror(session);
 }
 async function showMirror() {
-  if (!roomId || legacyId || !history?.room) { toast('请先选择聊天室。'); return; }
+  if (!roomId || legacyId || !history?.room) { toast('请先选择房间。'); return; }
   mirrorRoom = roomId; mirrorSession = null; $('mirror-error').textContent = '';
   $('mirror-name').value = `Agent Office · ${history.room.title} · 手机协作`;
   const people = (history.participants || []).filter(p => !['grok-proxy','grok-bridge'].includes(p.adapter));
@@ -471,6 +471,9 @@ function returnSecretaryAfterOnboarding() {
   if(!job || !onboardingOfficeReady(job) || !job.member_id || (job.room_id && job.room_id!==flow.roomId))return;
   const selected=currentSecretary(),assign=flow.source!=='member'&&(!selected.member_id||selected.status!=='ready');
   if(flow.source!=='member'&&!sameSecretaryAssignment(flow.accepted||flow.assignment,selected)){secretaryNavigation=null;secretaryError='秘书设置已在其他窗口变更，已显示最新角色。请重新确认。';renderSecretary();return;}
+  // A member reached through its own window cannot take secretary work automatically. When the person
+  // connected it on purpose (manual setup), let it join as a member instead of stopping at an error.
+  if(assign && !job.can_wake && flow.source==='picker' && job.connection_method==='manual_mcp'){flow.source='member';flow.fromPicker=true;return returnSecretaryAfterOnboarding();}
   if(assign && !job.can_wake){secretaryError='这位成员的手动信箱已验证，但不会自动处理秘书任务。请选择可后台回答的 AI 作为秘书，或将它作为普通成员加入办公室。';setOnboardingFeedback(job,secretaryError,{error:true});return;}
   if(assign && flow.assignmentAttempted && !flow.accepted)return;
   flow.memberId=job.member_id;flow.requireAutomatic=assign;secretaryFinishing=true;
@@ -558,7 +561,7 @@ async function api(path, input, method = input === undefined ? 'GET' : 'POST', s
     if (/^\/api\/chat\/rooms\/[^/]+$/.test(path)) {
       const selected = decodeURIComponent(path.split('/').at(-1));
       if (desktopState?.history?.room?.id !== selected) desktopState = await desktop.command('select_room',{room_id:selected});
-      return desktopState?.history || {room:(state?.chat?.rooms || []).find(room => room.id === selected) || {id:selected,title:'聊天室'},participants:[],messages:[],approvals:[]};
+      return desktopState?.history || {room:(state?.chat?.rooms || []).find(room => room.id === selected) || {id:selected,title:'房间'},participants:[],messages:[],approvals:[]};
     }
     if (path.startsWith('/api/team?')) {
       const selected = new URL(path,'http://agentroom.local').searchParams.get('room_id');
@@ -568,7 +571,7 @@ async function api(path, input, method = input === undefined ? 'GET' : 'POST', s
     }
     if (path.startsWith('/api/onboarding/jobs')) return {jobs:[]};
     if (path.startsWith('/api/launch/state')) return {latest:null};
-    throw new Error('关闭服务时仅可查看已保存的聊天室。开启服务后可查看连接细节。');
+    throw new Error('关闭服务时仅可查看已保存的房间。开启服务后可查看连接细节。');
   }
   if (input !== undefined && !webConnected && desktopReady) throw new Error('本机服务未连接。请先开启或检查服务，再操作。');
   const options = {method, credentials:'same-origin',headers:input === undefined ? {} : {'Content-Type':'application/json'}, ...(input === undefined ? {} : {body:JSON.stringify(input)})};
@@ -635,7 +638,7 @@ async function refresh() {
     runtime = state.runtime || await api(`/api/runtime${roomId ? `?room_id=${encodeURIComponent(roomId)}` : ''}`); setWebConnected(!desktop?.offline);
     rememberSelection(); renderSidebar(); renderSettings();
     const project = state.projects.find(project => project.id === projectId); $('project-heading').textContent = project?.name || '你的协作空间';
-    $('welcome').classList.toggle('hidden', Boolean(roomId || legacyId)); $('room').classList.toggle('hidden', !roomId && !legacyId);
+    $('welcome').classList.toggle('hidden', Boolean(roomId || legacyId)); renderWelcome(); $('room').classList.toggle('hidden', !roomId && !legacyId);
     $('footer-status').textContent = desktop?.offline ? '服务已关闭 · 仍可查看本机历史' : state.exportError || (state.activeRequest || state.chat.activeMessages?.length ? '成员正在后台工作 · 可以离开这个页面' : '消息留在本机 · 按需查看');
     if (legacyId) { const selected = legacyId; const data = await api(`/api/discussions/${encodeURIComponent(selected)}`); if (selected === legacyId) { history = data; renderLegacy(project); } }
     else if (roomId) { const selected = roomId; const data = await api(`/api/chat/rooms/${encodeURIComponent(selected)}`); if (selected === roomId && !legacyId) { history = data; renderRoom(project); await refreshTeam(selected); } }
@@ -683,7 +686,7 @@ async function loadDeletePreview(id) {
   if(deleteRoomId!==id||!$('delete-room-dialog').open)return;
   deletePreview=preview;
   $('delete-room-blockers').innerHTML=(preview.total?`<p>确认后将停止以下 ${preview.total} 项本房间工作：</p>`:'<p>当前没有未完成任务。</p>')+preview.tasks.map(item=>`<div class="delete-blocker"><span><strong>${escape(item.name)}</strong> · ${escape(labels[item.status]||({connecting:'接入握手中',creating:'正在创建工作记录',waiting:'等待中',active:'进行中',preparing:'准备中',pending:'排队中',creation_uncertain:'创建结果待核对',outcome_uncertain:'执行结果待核对',resume_uncertain:'恢复结果待核对'})[item.status]||item.status)}<br>${escape(item.title||'')}</span></div>`).join('')+(preview.external_warning?`<p class="error-note">${escape(preview.external_warning)}</p>`:'');
-  $('delete-room-confirm').textContent=preview.total?'停止任务并删除聊天室':'删除聊天室';$('delete-room-confirm').disabled=false;
+  $('delete-room-confirm').textContent=preview.total?'停止任务并删除房间':'删除房间';$('delete-room-confirm').disabled=false;
 }
 async function showDeleteRoom(id) {
   const target=state?.chat?.rooms?.find(room=>room.id===id);
@@ -698,7 +701,7 @@ async function confirmDeleteRoom() {
   deletingRoom=true;$('delete-room-confirm').disabled=true;$('delete-room-confirm').textContent='正在停止并删除…';$('delete-room-error').textContent='';
   try {
     const result=await api(`/api/chat/rooms/${encodeURIComponent(id)}`,{force:true,confirmation_token:deletePreview.confirmation_token},'DELETE');
-    if(result.status!=='deleted')throw new Error('删除结果尚未确认，请检查聊天室列表。');
+    if(result.status!=='deleted')throw new Error('删除结果尚未确认，请检查房间列表。');
     resumeEntries=Object.fromEntries(Object.entries(resumeEntries).filter(([,entry])=>entry.room_id!==id));
     localStorage.setItem(entryCacheKey,JSON.stringify(resumeEntries));
     sceneDrafts.delete(id);secretaryDrafts.delete(id);textScroll.delete(id);
@@ -706,11 +709,11 @@ async function confirmDeleteRoom() {
     if(roomId===id){roomId=null;history=null;setReply(null);$('prompt').value='';lastTimeline='';}
     if(launchSession?.room_id===id)launchSession=null;
     $('delete-room-dialog').close();deleteRoomId=null;
-    await refresh();toast('聊天室已删除');
+    await refresh();toast('房间已删除');
   } catch(error) {
     $('delete-room-error').textContent=/^(Failed to fetch|Load failed|NetworkError)/i.test(error.message||'')?'未确认删除结果，请先检查连接和房间列表。':error.message;
     if(['room_delete_tasks_changed','room_delete_confirmation_expired','room_busy'].includes(error.code)){try{await loadDeletePreview(id);}catch(refreshError){deletePreview=null;$('delete-room-error').textContent=refreshError.message;}}
-  } finally {deletingRoom=false;$('delete-room-confirm').disabled=!deletePreview;$('delete-room-confirm').textContent=deletePreview?.total?'停止任务并删除聊天室':'删除聊天室';}
+  } finally {deletingRoom=false;$('delete-room-confirm').disabled=!deletePreview;$('delete-room-confirm').textContent=deletePreview?.total?'停止任务并删除房间':'删除房间';}
 }
 function renderSettings() {
   const codex = state.codex || {}, grok = state.grok || {}; $('codex-detail').textContent = codex.error || (codex.connected ? codex.signedIn ? '本机入口已连接' : '入口已连接，请核对登录与模型配置' : '检测本机安装与登录');
@@ -919,7 +922,7 @@ function messageContent(message) {
 function messageCanReconcile(message) { return ['uncertain','outcome_uncertain','consumed'].includes(message.status) && !(state?.chat?.activeMessages || []).includes(message.id) && !(['reply','acknowledgment'].includes(message.kind) && message.status === 'consumed'); }
 function renderLegacy(project) {
   const discussion = history.discussion; $('discussion-heading').textContent = discussion.title; $('room-heading').textContent = discussion.title; $('room-eyebrow').textContent = 'SAVED DISCUSSION'; $('room-subtitle').textContent = `${project?.name || ''} · 之前保存的讨论`;
-  $('room-members-bar').classList.add('hidden'); $('composer').classList.add('hidden'); $('legacy-note').classList.remove('hidden'); $('empty-room').classList.toggle('hidden', history.requests.length > 0); $('empty-heading').textContent = '这段讨论还没有消息'; $('empty-description').textContent = '可以创建聊天室，邀请更多成员一起交流。'; $('empty-add-member').classList.add('hidden'); $('suggestions').classList.add('hidden');
+  $('room-members-bar').classList.add('hidden'); $('composer').classList.add('hidden'); $('legacy-note').classList.remove('hidden'); $('empty-room').classList.toggle('hidden', history.requests.length > 0); $('empty-heading').textContent = '这段讨论还没有消息'; $('empty-description').textContent = '可以创建房间，邀请更多成员一起交流。'; $('empty-add-member').classList.add('hidden'); $('suggestions').classList.add('hidden');
   $('native-thread').classList.toggle('hidden', !discussion.thread_id);
   $('messages').innerHTML = history.requests.map(request => `<article class="exchange"><div class="message-header">${avatar(request.sender === 'user' ? '你' : request.sender)}<strong>${escape(request.sender === 'user' ? '你' : request.sender)}</strong><time>${time(request.created)}</time></div><pre class="message-content">${escape(request.prompt)}</pre><div class="message-header">${avatar(request.recipient, request.recipient)}<strong>${escape(request.recipient)}</strong>${pill(request.status)}</div><pre class="message-content">${escape(request.answer || request.progress || '')}</pre>${request.error ? `<div class="error-note">${escape(request.error)}</div>` : ''}${request.delivery ? `<div class="delivery-line">${pill(request.delivery.status)}${request.delivery.answer ? `<pre>${escape(request.delivery.answer)}</pre>` : ''}</div>` : ''}</article>`).join('');
   lastTimeline = ''; renderApprovals(state.approvals.filter(approval => history.requests.some(request => request.id === approval.request_id)));
@@ -1023,16 +1026,28 @@ async function browseProjectFolder() {
     if(controller.signal.aborted||!$('project-dialog').open)return;
     if(result.path){
       $('project-path').value=result.path;
-      if(!$('project-name').value.trim())$('project-name').value=result.path.replace(/[\\/]+$/,'').split(/[\\/]/).pop()||'我的项目';
+      if(!projectNameEdited)$('project-name').value=projectNameFromPath(result.path)||'我的项目';
     }
     feedback.textContent='';
   } catch(error) { feedback.textContent=controller.signal.aborted?'已取消选择，可以直接填写文件夹路径。':error.message; }
   finally { if(projectPicker===controller){projectPicker=null;button.disabled=false;button.textContent='浏览';cancel.classList.add('hidden');} }
 }
-function showProject() { $('project-picker-status').textContent=''; $('project-dialog').showModal(); }
+const FIRST_ROOM_TITLE = '主房间';
+let projectNameEdited = false;
+function projectNameFromPath(value) { return String(value || '').trim().replace(/[\\/]+$/,'').split(/[\\/]/).pop() || ''; }
+// With a project already chosen (for example after its last room was deleted), the next step is a room.
+function renderWelcome() {
+  const project = state?.projects?.find(item => item.id === projectId);
+  $('welcome-step-folder').className = project ? 'done-step' : 'current-step'; $('welcome-step-ai').className = project ? 'current-step' : 'upcoming-step';
+  $('welcome-folder-title').textContent = project ? `项目：${project.name}` : '选择项目文件夹';
+  $('welcome-folder-text').textContent = project ? '已选好。也可以换一个文件夹。' : 'AI 会在这个文件夹里查资料、做事。';
+  $('welcome-project').className = project ? 'secondary' : 'primary'; $('welcome-project').firstChild.textContent = project ? '换一个文件夹 ' : '选择文件夹 ';
+  $('welcome-room').classList.toggle('hidden', !project);
+}
+function showProject() { $('project-picker-status').textContent=''; $('project-dialog').showModal(); $('project-path').focus(); }
 function showRoom(prefill = '') { if (!projectId) { toast('先添加一个项目，让成员有共同的工作范围。'); showProject(); return; } $('room-project-label').textContent = `项目：${state.projects.find(project => project.id === projectId)?.name || ''}`; $('room-name').value = prefill; $('room-dialog').showModal(); $('room-name').focus(); }
 function showSettings() { $('settings-dialog').showModal(); }
-async function showMembers() { $('member-room-label').textContent = roomId && !legacyId ? `加入「${history?.room?.title || state.chat.rooms.find(room => room.id === roomId)?.title || '聊天室'}」` : '创建房间后可以邀请成员加入。需要发现本机工具时，点击扫描。'; selectedCandidate = null; $('member-name').value = ''; $('member-adapter').value = 'mailbox'; $('member-dialog').showModal(); renderExistingMembers(); if (candidates.length) renderCandidates(); else $('discovered-agents').innerHTML = '<div class="scan-note">点击扫描本机 agents，或直接添加通用通信成员。</div>'; }
+async function showMembers() { $('member-room-label').textContent = roomId && !legacyId ? `加入「${history?.room?.title || state.chat.rooms.find(room => room.id === roomId)?.title || '房间'}」` : '创建房间后可以邀请成员加入。需要发现本机工具时，点击扫描。'; selectedCandidate = null; $('member-name').value = ''; $('member-adapter').value = 'mailbox'; $('member-dialog').showModal(); renderExistingMembers(); if (candidates.length) renderCandidates(); else $('discovered-agents').innerHTML = '<div class="scan-note">点击扫描本机 agents，或直接添加通用通信成员。</div>'; }
 async function scanAgents() {
   $('scan-agents').disabled = true; $('discovered-agents').innerHTML = '<div class="scan-note"><span class="pulse-dot"></span> 正在发现本机安装与运行进程…</div>';
   try { const result = await api('/api/chat/discover'); candidates = result.candidates || []; renderCandidates(); }
@@ -1069,7 +1084,7 @@ $('native-thread').onclick=showWorkRecord;
 $('work-record-member').onchange=loadWorkRecord;
 function renderExistingMembers() { const joined = new Set(legacyId ? [] : history?.participants?.map(member => member.id) || []), available = state.chat.members.filter(member => !joined.has(member.id)); $('existing-members-section').classList.toggle('hidden', !available.length); $('existing-members').innerHTML = available.map(member => { const status = memberStatus(member); return `<button type="button" class="existing-member" data-join-member="${escape(member.id)}">${avatar(member.name,member.adapter)}<span><strong>${escape(member.name)}</strong><small>${escape(status.label)}</small></span><span>加入 ↗</span></button>`; }).join(''); }
 async function connectMember(id, knownMember) {
-  if (!roomId || legacyId) throw new Error('先创建或打开一个聊天室。');
+  if (!roomId || legacyId) throw new Error('先创建或打开一个房间。');
   const selectedRoom=roomId;
   await api(`/api/chat/rooms/${encodeURIComponent(selectedRoom)}/join`, {member_id:id}); await refresh();if(roomId!==selectedRoom||legacyId)return;$('member-dialog').close();
   const prepared=await api(`/api/chat/members/${encodeURIComponent(id)}/setup?room_id=${encodeURIComponent(selectedRoom)}`);
@@ -1328,7 +1343,7 @@ function renderService() {
   const readOnly = !webConnected;
   renderRoomActions();
   document.querySelectorAll('[data-delete-room]').forEach(button=>{button.disabled=readOnly;});
-  for (const id of ['add-project','add-room','mobile-add-project','mobile-add-room','launch-add-project','welcome-project','welcome-room','welcome-members','room-member-add','empty-add-member','inspector-add-member','send-button','attach-image','image-input','prompt','recipient','scan-agents','onboarding-refresh','launch-refresh']) {
+  for (const id of ['add-project','add-room','mobile-add-project','mobile-add-room','launch-add-project','welcome-project','welcome-room','room-member-add','empty-add-member','inspector-add-member','send-button','attach-image','image-input','prompt','recipient','scan-agents','onboarding-refresh','launch-refresh']) {
     const control = $(id); if (!control) continue;
     if (readOnly && !control.disabled) {control.dataset.serviceBlocked='true';control.disabled=true;}
     else if (!readOnly && control.dataset.serviceBlocked === 'true') {control.disabled=false;delete control.dataset.serviceBlocked;}
@@ -1358,7 +1373,7 @@ function renderService() {
 async function showServiceStop() {
   desktopState = await desktop.command('state',roomId ? {room_id:roomId} : {}); desktopReady = true;
   const busy = typeof desktopState?.busy?.is_busy === 'boolean' ? desktopState.busy.is_busy : currentServiceBusy();
-  $('service-stop-detail').textContent = busy ? '当前有消息处理、授权或接入任务。请先在聊天室完成或停止这些工作，再暂停服务。' : '暂停服务后仍可查看历史；下次打开软件会自动启动服务。最小化窗口可让成员继续工作。';
+  $('service-stop-detail').textContent = busy ? '当前有消息处理、授权或接入任务。请先在房间完成或停止这些工作，再暂停服务。' : '暂停服务后仍可查看历史；下次打开软件会自动启动服务。最小化窗口可让成员继续工作。';
   $('service-stop-confirm').disabled = busy; $('service-stop-dialog').showModal(); renderService();
 }
 async function changeService(operation) {
@@ -1546,12 +1561,14 @@ function finishSecretaryNavigation(flow,expected) {
   if(flow.jobId && (!job || !onboardingOfficeReady(job) || job.member_id!==flow.memberId || job.room_id && job.room_id!==flow.roomId || flow.requireAutomatic && !job.can_wake))return false;
   // Consume only this user-initiated flow. Loading an already-ready room never navigates.
   secretaryNavigation=null;if(flow.jobId===secretaryConnectJob)secretaryConnectJob=null;
-  if(flow.source==='picker' && secretaryConnectRoom===flow.roomId && $('secretary-connect-dialog').open)$('secretary-connect-dialog').close();
+  if((flow.source==='picker'||flow.fromPicker) && secretaryConnectRoom===flow.roomId && $('secretary-connect-dialog').open)$('secretary-connect-dialog').close();
   if(selectedSetupMember===(flow.memberId||selected.member_id) && $('member-setup-dialog').open)$('member-setup-dialog').close();
   secretaryPickingRoom=null;closeSecretaryTutorial();setProfessionalView(true);selectRoomView(true);
   // Only a newly seated secretary becomes the recipient; connecting another member keeps the person's choice.
   if(flow.source==='member'){if(!$('recipient').value){$('recipient').value=flow.memberId;updateRecipientNote();}}
   else if(!flow.memberId || flow.memberId===selected.member_id){$('recipient').value=selected.member_id;updateRecipientNote();}
+  const joinedName=members.find(member=>member.id===flow.memberId)?.name||'这位成员';
+  if(flow.fromPicker){toast(`${joinedName}已加入。它在自己的窗口里看消息，所以没有设为秘书；想让秘书自动安排工作，可以再接入 Codex 或 Claude Code。`);return true;}
   toast(job?.reused_connection===true||job?.connection_reused===true?'已加入办公室，沿用原有连接和配置。':flow.source==='member'||flow.memberId && flow.memberId!==selected.member_id?onboardingReady(job)==='ready_mailbox'?'成员信箱已接通，已进入办公室。':'成员已真实接通，已进入办公室。':'秘书已真实接通，可以在办公室交代目标。');return true;
 }
 function secretaryResponse(value, selectedRoom) {
@@ -1632,7 +1649,7 @@ function diagnosticText(value){return String(value||'').replace(/crsr_[A-Za-z0-9
 function doctorSummary(){
   const current=doctorCurrent();if(webConnected&&current)return current.summary;
   const room=history?.room?.id===roomId?history.room:null,members=room?history.participants||[]:[];
-  return [`本机服务：${webConnected?'页面已连接，尚未诊断':'离线，查看已保存记录'}。`,room?`房间：${diagnosticText(room.title)}（${room.id}），已保存 ${members.length} 位成员。`:'房间：请先选择一个聊天室。',`Grok Windows 宿主和原生群工具：需要在 Grok 内核对。`,`通知 Webhook：${state?.grok?.configured?'已保存':'未保存或未核实'}，不能证明 Windows 宿主在线。`].join('\n');
+  return [`本机服务：${webConnected?'页面已连接，尚未诊断':'离线，查看已保存记录'}。`,room?`房间：${diagnosticText(room.title)}（${room.id}），已保存 ${members.length} 位成员。`:'房间：请先选择一个房间。',`Grok Windows 宿主和原生群工具：需要在 Grok 内核对。`,`通知 Webhook：${state?.grok?.configured?'已保存':'未保存或未核实'}，不能证明 Windows 宿主在线。`].join('\n');
 }
 function doctorLayer(title,status,detail,kind='unknown'){return `<article class="connection-doctor-layer ${kind}"><div><strong>${escape(title)}</strong><span>${escape(status)}</span></div><p>${escape(detail)}</p></article>`;}
 function renderConnectionDoctor(){
@@ -1645,9 +1662,9 @@ function renderConnectionDoctor(){
   $('connection-doctor-run').disabled=connectionDoctorBusy||!available||!webConnected;$('connection-doctor-run').textContent=connectionDoctorBusy?'检查中…':'检查连接';
   $('connection-doctor-member').disabled=!available||connectionDoctorBusy;$('connection-doctor-old-member').disabled=!available||connectionDoctorBusy;
   const current=doctorCurrent(), selected=doctorMember();
-  $('connection-doctor-note').textContent=!available?'先选择一个聊天室，再核对它的连接。':!webConnected?'服务已关闭或未连接；这里只显示已保存记录，不会自动启动。':current?`本次只读检查 ${time(current.observed_at)}，不会刷新心跳或重新发问。`:'只查看当前房间的连接证据，不扫描、不重连。';
+  $('connection-doctor-note').textContent=!available?'先选择一个房间，再核对它的连接。':!webConnected?'服务已关闭或未连接；这里只显示已保存记录，不会自动启动。':current?`本次只读检查 ${time(current.observed_at)}，不会刷新心跳或重新发问。`:'只查看当前房间的连接证据，不扫描、不重连。';
   let rows=[];
-  if(!webConnected){rows=[doctorLayer('本机协作服务','离线','房间记录仍保存在本机。需要服务器的诊断暂不可用。','blocked'),doctorLayer('所选房间',snapshot?'已保存':'尚未选择',snapshot?`${snapshot.room.title} · 已保存 ${snapshot.participants?.length||0} 位成员。`:'请先从左侧选择聊天室。'),doctorLayer('Grok Windows 宿主','需在 Grok 核对','Agent Office 不能读取 Grok 注册电脑的连接状态。')];}
+  if(!webConnected){rows=[doctorLayer('本机协作服务','离线','房间记录仍保存在本机。需要服务器的诊断暂不可用。','blocked'),doctorLayer('所选房间',snapshot?'已保存':'尚未选择',snapshot?`${snapshot.room.title} · 已保存 ${snapshot.participants?.length||0} 位成员。`:'请先从左侧选择房间。'),doctorLayer('Grok Windows 宿主','需在 Grok 核对','Agent Office 不能读取 Grok 注册电脑的连接状态。')];}
   else if(current){
     const target=current.target,entry=current.entry,credential={pending:'待本人接入',active:'有效',revoked:'已撤销',missing:'不存在',invalid:'无效',not_selected:'未选择'};
     rows=[doctorLayer('本机协作服务',current.local_service.online?'在线':'未核实',`当前实例 ${current.local_service.instance_id}。`,current.local_service.online?'observed':'blocked'),doctorLayer('所选房间',current.room.exists?'存在':'未找到',current.room.exists?`${current.room.title} · ${current.room.member_count} 位实际成员。`:'这个标识不在当前实例中，请核对原房间。',current.room.exists?'observed':'blocked'),doctorLayer('成员与长期入口',target.status==='missing_member'?'当前实例无此成员':target.joined?entry.credential_valid?'入口有效':'入口需核对':target.status==='not_selected'?'未选择':'未在本房间',target.detail+' '+(target.joined?`入口文件${entry.exists?'存在':'缺失'}，凭据${credential[entry.credential_status]||'待核对'}。`:''),target.joined&&entry.credential_valid?'observed':'blocked'),doctorLayer('Grok Windows 宿主','需在 Grok 核对',current.grok_windows_host.detail),doctorLayer('Grok 群与原生工具',current.grok_group.status==='host_reported'?'只有宿主报告':'需在 Grok 核对',current.grok_group.detail+(current.grok_group.reference_saved?' 本机保存过群引用。':' 尚未保存群引用。')),doctorLayer('通知 Webhook',current.grok_notification.status==='unavailable'?'无法读取':current.grok_notification.configured?'已配置':'未配置',current.grok_notification.detail)];
@@ -1709,7 +1726,7 @@ function renderTeam() {
   $('team-open').textContent = review ? `协作 · ${review} 项待查看` : '协作';
   const signature = JSON.stringify([roomId,valid,data,webConnected,teamBusy,teamLoadError]); if (signature === teamSignature) return; teamSignature = signature;
   const expanded = new Set([...root.querySelectorAll('details[open]')].map(item => item.dataset.teamDetails));
-  if (!valid) { root.innerHTML = '<p class="inspector-empty">先打开一个聊天室，再组织这项工作。</p>'; return; }
+  if (!valid) { root.innerHTML = '<p class="inspector-empty">先打开一个房间，再组织这项工作。</p>'; return; }
   if (!data) { root.innerHTML = `<p class="inspector-description">${escape(teamLoadError || (webConnected ? '正在读取这间办公室的协作记录…' : '当前没有已读取的协作记录。开启服务后可查看。'))}</p>${webConnected ? teamButton('重新读取','refresh') : ''}`; return; }
   const completed = tasks.filter(task => task.status === 'completed').length, currentGoals = goals.filter(goal => goal.status === 'active');
   let html = `<div class="team-summary"><div><span class="team-kicker">这间办公室正在推进</span><strong>${currentGoals.length ? `${currentGoals.length} 个目标` : '从一个明确的目标开始'}</strong><p>${tasks.length ? `${completed} / ${tasks.length} 项任务已验收` : '把目标交给秘书，再把工作分给具体成员。'}</p></div>${teamButton('新目标','goal')}</div>`;
@@ -2006,9 +2023,10 @@ $('mirror-copy').onclick = () => action(async () => {
 $('mirror-dialog').addEventListener('close', () => { clearUITimeout(mirrorTimer); mirrorRoom = null; mirrorSession = null; mirrorDispatched = null; });
 $('launch-refresh').onclick = () => action(async () => { launchError = ''; await refreshLaunch(); });
 $('launch-copy').onclick = () => action(async () => { if (!launchSession?.grok_prompt || !launchSession.handoff_file || launchSession.status === 'preparing' || launchBusy) return; try { await navigator.clipboard.writeText(launchSession.grok_prompt); toast('本次接入说明已复制，只包含你指定的成员。'); } catch (error) { document.querySelector('.launch-instructions').open = true; toast('自动复制未完成，本次说明已展开，可手动复制。'); } });
-for (const id of ['add-room','welcome-room','mobile-add-room']) $(id).onclick = () => showRoom();
+for (const id of ['add-room','mobile-add-room']) $(id).onclick = () => showRoom();
+$('welcome-room').onclick = () => { if (projectId) action(() => openFirstRoom(projectId)); else showProject(); };
 for (const id of ['settings-button','top-settings']) $(id).onclick = showSettings;
-for (const id of ['welcome-members','room-member-add','empty-add-member']) $(id).onclick = () => action(showMembers);
+for (const id of ['room-member-add','empty-add-member']) $(id).onclick = () => action(showMembers);
 document.querySelectorAll('.close-dialog').forEach(button => button.onclick = () => button.closest('dialog').close());
 $('member-setup-dialog').addEventListener('close',()=>{stopGrokSetupWatch();grokSetupWatchError='';if(secretaryNavigation?.setupMemberId===selectedSetupMember)secretaryNavigation=null;});
 $('connector-fields-dialog').addEventListener('close',()=>{connectorFields=null;for(const name of ['name','transport','url','headers'])$('connector-'+name).value='';$('connector-instructions').textContent='';$('connector-docs').removeAttribute('href');});
@@ -2081,7 +2099,25 @@ $('resume-revoke').onclick = () => action(async () => { const memberId = $('resu
 $('browse-folder').onclick = () => action(browseProjectFolder);
 $('cancel-folder').onclick = () => projectPicker?.abort();
 $('project-dialog').addEventListener('close',()=>projectPicker?.abort());
-$('project-form').onsubmit = event => { event.preventDefault(); action(async () => { const project = await api('/api/projects',{name:$('project-name').value,path:$('project-path').value,access:$('project-write').checked ? 'workspace-write' : 'read-only'}); projectId = project.id; roomId = null; legacyId = null; $('project-dialog').close(); await refresh(); showRoom(); }); };
+$('project-name').oninput = () => { projectNameEdited = !!$('project-name').value.trim(); };
+$('project-path').oninput = () => { if (!projectNameEdited) $('project-name').value = projectNameFromPath($('project-path').value); };
+// One step from folder to a room: the project gets its first room right away, then the person picks an AI.
+$('project-form').onsubmit = event => { event.preventDefault(); action(async () => {
+  const path = $('project-path').value.trim(), name = $('project-name').value.trim() || projectNameFromPath(path) || '我的项目';
+  const project = await api('/api/projects',{name,path,access:$('project-write').checked ? 'workspace-write' : 'read-only'}); projectId = project.id; roomId = null; legacyId = null;
+  $('project-dialog').close(); $('project-form').reset(); projectNameEdited = false;
+  await openFirstRoom(project.id);
+}); };
+async function openFirstRoom(selectedProject) {
+  let room;
+  try { room = await api('/api/chat/rooms',{project_id:selectedProject,title:FIRST_ROOM_TITLE}); }
+  catch (error) { await refresh(); showRoom(FIRST_ROOM_TITLE); throw error; }
+  if (projectId !== selectedProject) { await refresh(); return; }
+  roomId = room.id; legacyId = null; rememberSelection(); setReply(null);
+  // The AI picker replaces the secretary tutorial for the first AI; it does not need to open again in this room.
+  secretaryDismissed.add(roomId); try { localStorage.setItem('agentoffice-secretary-dismissed',JSON.stringify([...secretaryDismissed])); } catch {}
+  await refresh(); openSecretaryConnect();
+}
 $('room-form').onsubmit = event => { event.preventDefault(); action(async () => { const room = await api('/api/chat/rooms',{project_id:projectId,title:$('room-name').value}); roomId = room.id; legacyId = null; setReply(null); $('room-dialog').close(); await refresh(); $('prompt').focus(); }); };
 $('check-codex').onclick = () => action(async () => { const button = $('check-codex'); button.disabled = true; button.textContent = '检查中…'; try { const result = await api('/api/codex/check',{}); toast(result.connected ? '本机 Codex 入口已连接。' : result.error); await refresh(); } finally { button.disabled = false; button.textContent = '检查连接'; } });
 $('scene-time-zone').onfocus = () => $('scene-time-zone').select();
@@ -2131,7 +2167,7 @@ $('approval-panel').onclick = event => action(()=>respondToApproval(event.target
 function bridgeKey() { return `${bridgeMemberId}:${bridgeRoomId}`; }
 function showBridgeError(message = '') { $('bridge-error').textContent = message; $('bridge-error').classList.toggle('hidden', !message); }
 async function showBridge(id) {
-  if (!roomId || legacyId) throw new Error('先打开这个成员所在的聊天室。');
+  if (!roomId || legacyId) throw new Error('先打开这个成员所在的房间。');
   bridgeMemberId = id; bridgeRoomId = roomId; bridgeSetup = null; bridgeEntries = []; bridgeTest = null; bridgeEntriesSignature = '';
   const cached = bridgePrompts.get(bridgeKey()); $('bridge-group-label').value = cached?.groupLabel || ''; $('bridge-webhook-key').value = ''; $('bridge-webhook-url').value = ''; $('bridge-conversation-ref').value = ''; showBridgeError();
   if ($('member-setup-dialog').open) $('member-setup-dialog').close();
@@ -2178,7 +2214,7 @@ function renderBridge() {
   $('bridge-local-proof').textContent = localVerified ? '本机通路已验证' : ['waiting','running','queued'].includes(bridgeTestState(latestTest)) ? '检查中…' : ['failed','uncertain'].includes(bridgeTestState(latestTest)) ? '检查未完成' : '尚未测试'; $('bridge-local-proof').className = localVerified ? 'proof-verified' : '';
   $('bridge-native-proof').textContent = nativeVerified ? '你已确认原对话回报' : bridgeEntries.some(bridgeReported) ? 'Bot 已报告 · 等待你核对' : '尚未验证'; $('bridge-native-proof').className = nativeVerified ? 'proof-verified' : '';
   const selectedTarget = $('bridge-test-target').value, targets = state?.chat?.members?.filter(item => ['codex','native'].includes(item.adapter) && (history?.participants || []).some(participant => participant.id === item.id)) || [];
-  $('bridge-test-target').innerHTML = targets.length ? targets.map(target => `<option value="${escape(target.id)}">${escape(target.name)}</option>`).join('') : '<option value="">先给聊天室添加 Codex 成员</option>';
+  $('bridge-test-target').innerHTML = targets.length ? targets.map(target => `<option value="${escape(target.id)}">${escape(target.name)}</option>`).join('') : '<option value="">先给房间添加 Codex 成员</option>';
   if (targets.some(target => target.id === selectedTarget)) $('bridge-test-target').value = selectedTarget;
   const waiting = bridgeTesting || ['waiting','running','queued'].includes(bridgeTestState(bridgeTest)); $('bridge-run-test').disabled = waiting || !targets.length; $('bridge-run-test').textContent = waiting ? '检查中…' : '检查本机通路';
   $('bridge-test-result').classList.toggle('hidden', !latestTest);
