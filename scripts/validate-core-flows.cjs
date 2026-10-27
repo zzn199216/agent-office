@@ -146,6 +146,8 @@ async function main() {
       await closeDialog('#secretary-connect-dialog');await closeDialog('#member-setup-dialog');await closeTutorial();
       await page.locator('#chat-view-button').click();
       await page.locator('#recipient option[value="'+member.id+'"]').waitFor({state:'attached'});
+      // The first connected member receives a typed message; the room announcement wakes nobody.
+      await page.waitForFunction(id=>document.getElementById('recipient').value===id,member.id);
       assert.ok(service.chat.store.member(member.id).verified_at);
       await shot('01-first-connected.png');
     });

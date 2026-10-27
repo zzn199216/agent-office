@@ -63,7 +63,7 @@ try { for (const id of JSON.parse(localStorage.getItem('agentoffice-secretary-di
 const secretaryDefaultGoal = '帮我梳理办公室目标与 AI 分工，先告诉我你需要了解什么。';
 const textScroll = new Map(), appearanceDrafts = new Map();
 const roomRecipients = new Map();
-let recipientRoom = null, mentionIndex = 0;
+let recipientRoom = null, mentionIndex = 0; const broadcastRooms = new Set();
 const sceneDrafts = new Map(), sceneAssets = [['background_data','背景'],['desk_data','办公桌'],['beanbag_data','懒人沙发'],['plant_data','绿植'],['door_data','入口']];
 const sceneDefaults = Object.freeze({time_zone:'auto',time_mode:'auto',lights_on:true,auto_layout:true,columns:3,spacing:1,wall_color:'#f8f7f3',floor_color:'#faf7ef',show_window:true,show_clock:true,show_plant:true,motion:true});
 if (desktop) {
@@ -725,7 +725,8 @@ function renderRoom(project) {
   $('native-thread').classList.toggle('hidden',!history.participants.some(m=>['codex','native'].includes(m.adapter)&&m.native_thread_id)); $('composer').classList.remove('hidden'); $('legacy-note').classList.add('hidden'); $('room-members-bar').classList.remove('hidden');
   renderMemberChips(participants);
   let selectedRecipient = roomRecipients.get(room.id);
-  if (selectedRecipient === undefined || selectedRecipient && !participants.some(member => member.id === selectedRecipient)) selectedRecipient = messages.slice().reverse().find(message => message.sender_id === 'user' && participants.some(member => member.id === message.to_member_id))?.to_member_id || (participants.some(member => member.id === currentSecretary().member_id) ? currentSecretary().member_id : participants.length === 1 ? participants[0].id : '');
+  // An announcement is only kept when the person picked it; otherwise a typed message goes to someone who will act on it.
+  if (selectedRecipient === undefined || selectedRecipient === '' && !broadcastRooms.has(room.id) || selectedRecipient && !participants.some(member => member.id === selectedRecipient)) selectedRecipient = defaultRecipient(participants, messages);
   $('recipient').innerHTML = '<option value="">房间公告</option>' + participants.map(member => `<option value="${escape(member.id)}">${escape(member.name)}</option>`).join(''); $('recipient').value = selectedRecipient; recipientRoom = room.id; updateRecipientNote();
   $('empty-room').classList.toggle('hidden', messages.length > 0); $('empty-heading').textContent = participants.length ? '把一个问题带到房间里' : '邀请第一个成员';
   $('empty-description').textContent = participants.length ? '选择一位成员，或在消息里 @它。\n成员的提问与回复会留在同一条时间线上。' : '添加成员，完成握手后，就可以在这里把问题交给它。\n每个成员拥有自己的身份和工作会话。';
@@ -735,6 +736,13 @@ function renderRoom(project) {
   if (signature !== lastTimeline) { const stream = $('chat-stream'), cached = textScroll.get(room.id), nearEnd = officeView ? cached?.atEnd !== false : stream.scrollHeight - stream.scrollTop - stream.clientHeight < 110, changedRoom = !lastTimeline.startsWith(`["${room.id}"`); setRoomTimeline(messages.map(message => renderMessage(message, messages)).join('') + typing + approvalTimelineMarkup(approvals,messages,reviews),approvals); lastTimeline = signature; if(!officeView){if(nearEnd||changedRoom)stream.scrollTop=messages.length||approvals.length||reviews.length?stream.scrollHeight:0;rememberTextScroll();}else if(changedRoom)textScroll.set(room.id,{top:0,atEnd:true}); }
   renderApprovals([]);updateOfficeApprovalAlert();
   renderService(); renderInspector(); renderSidebar(); applyRoomView(); updateOfficeScene();
+}
+function defaultRecipient(participants, messages = []) {
+  const present = id => id && participants.some(member => member.id === id);
+  const recent = messages.slice().reverse().find(message => message.sender_id === 'user' && present(message.to_member_id))?.to_member_id;
+  if (recent) return recent;
+  const secretary = currentSecretary().member_id; if (present(secretary)) return secretary;
+  return (participants.find(member => member.status === 'ready' && member.can_notify === true) || participants.find(member => member.status === 'ready') || participants[0])?.id || '';
 }
 function renderMessage(message, messages) {
   if(message.connection_verification){
@@ -2083,7 +2091,7 @@ $('edit-grok').onclick = () => { editingGrok = true; $('grok-form').classList.re
 $('grok-form').onsubmit = event => { event.preventDefault(); action(async () => { await api('/api/grok/configure',{url:$('grok-url').value,key:$('grok-key').value}); $('grok-key').value = ''; $('grok-url').value = ''; editingGrok = false; await refresh(); toast('连接已保存，成员接入仍需单独验证。'); }); };
 async function copy(kind) { const data = await api('/api/onboarding'); await navigator.clipboard.writeText(kind === 'grok' ? data.grokInstructions : kind === 'mcp' ? JSON.stringify(data.mcp,null,2) : data.skill); toast('已复制。'); }
 $('copy-grok-setup').onclick = () => action(() => copy('grok')); $('copy-mcp').onclick = () => action(() => copy('mcp')); $('copy-skill').onclick = () => action(() => copy('skill'));
-$('recipient').onchange = updateRecipientNote; $('cancel-reply').onclick = () => setReply(null);
+$('recipient').onchange = () => { if (recipientRoom === roomId) { if ($('recipient').value) broadcastRooms.delete(roomId); else broadcastRooms.add(roomId); } updateRecipientNote(); }; $('cancel-reply').onclick = () => setReply(null);
 document.querySelectorAll('[data-prompt]').forEach(button => button.onclick = () => { $('prompt').value = button.dataset.prompt; if (!$('recipient').value && history?.participants?.length) $('recipient').value = history.participants[0].id; updateRecipientNote(); $('prompt').focus(); });
 $('attach-image').onclick=()=>$('image-input').click();
 $('image-input').onchange=()=>{const files=Array.from($('image-input').files||[]);$('image-input').value='';action(()=>addChatImages(files));};
