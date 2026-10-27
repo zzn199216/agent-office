@@ -62,3 +62,11 @@ test('opening the picker requests one quiet inventory scan and never onboards a 
   state.context.openSecretaryConnect();
   assert.equal(state.calls.length, 1);
 });
+test('an AI already connected in this room is marked as such and is not recommended again', () => {
+  const state = fixture([{id:'codex',name:'Codex',installed:true,capabilities:{automatic_launch:true}},{id:'claude-code',name:'Claude Code',installed:true,capabilities:{automatic_launch:true}}]);
+  state.context.onboardingJobs.set('job',{id:'job',provider:'codex',room_id:'room',status:'ready',stage:'ready_automatic',ready_for_office:true,can_wake:true});
+  state.context.renderLaunchCandidates();
+  const html = state.$('launch-candidates').innerHTML, codex = html.slice(0, html.indexOf('Claude Code'));
+  assert.match(codex, /已在房间里/);assert.match(codex, /disabled>已在房间里/);assert.doesNotMatch(codex, /推荐/);
+  assert.match(html.slice(html.indexOf('Claude Code')), /推荐/);
+});
