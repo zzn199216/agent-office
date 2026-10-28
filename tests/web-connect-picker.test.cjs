@@ -70,3 +70,10 @@ test('an AI already connected in this room is marked as such and is not recommen
   assert.match(codex, /已在房间里/);assert.match(codex, /disabled>已在房间里/);assert.doesNotMatch(codex, /推荐/);
   assert.match(html.slice(html.indexOf('Claude Code')), /推荐/);
 });
+
+test('a requirements-only button has no provider and cannot dereference an absent active connection',()=>{
+  const state=fixture();
+  state.context.onboardingJobs.set('pending',{id:'pending',provider:'codex',room_id:'room',status:'running',stage:'verifying_reply'});
+  for(const provider of [undefined,null,''])assert.equal(state.context.onboardingForProvider(provider),null);
+  assert.equal(state.context.onboardingForProvider('codex').id,'pending');
+});

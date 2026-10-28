@@ -31,7 +31,7 @@ async function validateOnboardingReturn(out=outputDirectory('onboarding-return')
       const forbidden=async()=>{throw Error('This acceptance cannot use real clients, installers or upstream models');};
       service=new RoomService(files.data,{codex:new FakeCodex(),vault:new FakeVault(),fetch:forbidden,
         chat:{clientFactory:member=>new NativeFixture(member)},
-        launch:{discover:()=>({candidates:[{id:'codex',provider:'codex',name:'Codex',adapter:'codex',installed:true,executable,capabilities:{automatic_launch:true}},{id:'qwen-desktop',provider:'qwen-desktop',name:'Qwen',adapter:'mailbox',installed:true,capabilities:{mcp_prepare:true}}]}),installer:forbidden},
+        launch:{discover:()=>({candidates:[{id:'codex',provider:'codex',name:'Codex',adapter:'codex',installed:true,executable,capabilities:{automatic_launch:true}},{id:'qwen-desktop',provider:'qwen-desktop',name:'Qwen',adapter:'mailbox',installed:true,capabilities:{mcp_prepare:true}},{id:'unsupported',name:'Unsupported AI',installed:true,support:'unsupported',capabilities:{}}]}),installer:forbidden},
         onboarding:{verification:{timeoutMs:120000,pollMs:10},desktopConnector:forbidden,runtimeInstaller:forbidden}});
       server=createServer(service,{port:0,token:id()});const port=await server.listen(),base='http://127.0.0.1:'+port;service._localUrl=base;
       browser=await playwright.chromium.launch({headless:true});const context=await browser.newContext({viewport:{width,height:900},timezoneId:'Asia/Taipei',reducedMotion:'reduce'});
@@ -42,6 +42,7 @@ async function validateOnboardingReturn(out=outputDirectory('onboarding-return')
       const panel=page.locator('#secretary-connect-progress .connection-panel');await panel.waitFor();
       await page.waitForFunction(()=>document.querySelector('#secretary-connect-progress [data-conn-state="waiting"]'));
       await page.locator('#secretary-connect-other').click();
+      assert.equal(await page.locator('#secretary-connect-candidates [data-onboarding-requirements]').count(),1,'include a requirements-only button with no onboarding provider');
       const progress=page.locator('#secretary-connect-candidates [data-onboarding-provider="codex"]');
       assert.equal(await progress.textContent(),'查看进度');assert.equal(await progress.isEnabled(),true);
       assert.equal(await page.locator('#secretary-connect-candidates [data-onboarding-provider="qwen-desktop"]').isDisabled(),true,'another connection waits for this one');

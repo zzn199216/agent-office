@@ -167,7 +167,7 @@ function onboardingOfficeReady(job){
   return !native||ready==='ready_automatic'&&job.can_wake===true;
 }
 function activeOnboardingJob(){const flow=typeof secretaryNavigation==='undefined'?null:secretaryNavigation;return flow?.roomId===roomId&&flow.projectId===projectId?onboardingJobs.get(flow.jobId):null;}
-function onboardingForProvider(provider) { const active=activeOnboardingJob();if(active?.provider===provider&&(!active.room_id||active.room_id===roomId))return active;return [...onboardingJobs.values()].filter(job => job.provider === provider && (!job.room_id || job.room_id === roomId)).sort((a,b) => String(b.updated_at || b.updated || b.created_at || b.created || '').localeCompare(String(a.updated_at || a.updated || a.created_at || a.created || '')))[0]; }
+function onboardingForProvider(provider) { if(typeof provider!=='string'||!provider)return null;const active=activeOnboardingJob();if(active&&active.provider===provider&&(!active.room_id||active.room_id===roomId))return active;return [...onboardingJobs.values()].filter(job => job.provider === provider && (!job.room_id || job.room_id === roomId)).sort((a,b) => String(b.updated_at || b.updated || b.created_at || b.created || '').localeCompare(String(a.updated_at || a.updated || a.created_at || a.created || '')))[0]; }
 function currentOnboardingJobs() { const providers = new Map(); for (const job of [...onboardingJobs.values()].filter(job => (!job.room_id || job.room_id === roomId) && (!job.project_id || job.project_id === projectId)).sort((a,b) => String(b.created_at || b.created || b.updated_at || b.updated || '').localeCompare(String(a.created_at || a.created || a.updated_at || a.updated || '')))) if (!providers.has(job.provider)) providers.set(job.provider,job);const active=activeOnboardingJob();if(active&&(!active.room_id||active.room_id===roomId)&&(!active.project_id||active.project_id===projectId))providers.set(active.provider,active);return [...providers.values()]; }
 function renderLaunchCandidates() {
   const signature = JSON.stringify([launchScanning,launchBusy,launchCandidates,webConnected,projectId,[...onboardingStarting],[...onboardingJobs.values()].map(job => [job.id,job.status,job.stage,job.ready_for_office,job.updated_at||job.updated]),typeof onboardingFeedback==='undefined'?[]:[...onboardingFeedback]]);
@@ -657,7 +657,12 @@ async function refresh() {
     if ($('member-setup-dialog').open && selectedSetupMember) renderSetup();
     if ($('bridge-dialog').open) action(refreshBridge);
     renderRuntime(); renderLaunch(); renderInspector(); renderService(); returnSecretaryAfterOnboarding(); action(refreshLaunch); action(refreshOnboarding); if ($('resume-dialog').open) renderResume(); if (!desktop?.offline && events?.readyState === EventSource.CLOSED) connectEvents();
-  } catch (error) { setWebConnected(false); $('footer-status').textContent = '本机服务未连接 · 记录仍在这台电脑'; throw error; }
+  } catch (error) {
+    // Rendering can fail after HTTP succeeded. Only a transport failure proves
+    // the page lost its service connection; a UI error must not disable sending.
+    if(error.code==='local_read_timeout'||/^(Failed to fetch|Load failed|NetworkError)/i.test(error.message||'')){setWebConnected(false);$('footer-status').textContent='本机服务未连接 · 记录仍在这台电脑';}
+    throw error;
+  }
   finally { refreshing = false; for(const resolve of refreshWaiters.splice(0))resolve(); if (refreshAgain) { refreshAgain = false; scheduleRefresh(); } }
 }
 function scheduleRefresh() { clearUITimeout(refreshTimer); refreshTimer = setUITimeout(() => action(refresh), 160); }

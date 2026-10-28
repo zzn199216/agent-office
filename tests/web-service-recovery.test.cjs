@@ -88,6 +88,23 @@ test('bounded read failures include response-body timeouts and do not retry a ne
     await assert.rejects(f.context.api('/api/state'),error=>error.code==='local_read_timeout'&&/没有重发/.test(error.message));assert.equal(requests.length,1);assert.ok(requests[0].options.signal);assert.equal(f.calls.length,0);
   }
 });
+test('a render exception after a successful service read must not mark the service disconnected',async()=>{
+  const f=fixture(),failure=new TypeError("Cannot read properties of null (reading 'room_id')");
+  Object.assign(f.context,{viewTimers:{active:true},refreshing:false,refreshAgain:false,refreshWaiters:[],projectId:null,roomId:null,legacyId:null,secretaryNavigation:null,
+    api:async()=>({projects:[],chat:{rooms:[],members:[]},runtime:{}}),rememberSelection(){},renderSidebar(){throw failure;}});
+  f.context.desktop.offline=false;
+  vm.runInContext(section('async function refresh()','function scheduleRefresh()'),f.context);
+  await assert.rejects(f.context.refresh(),error=>error===failure);
+  assert.equal(f.context.webConnected,true,'a UI exception is not evidence that HTTP disconnected');
+  assert.doesNotMatch(f.$('footer-status').textContent,/未连接/);assert.equal(f.context.refreshing,false);
+});
+test('refresh still marks actual transport failures and read timeouts disconnected',async()=>{
+  for(const failure of [Error('Failed to fetch'),Object.assign(Error('read timeout'),{code:'local_read_timeout'})]){
+    const f=fixture();Object.assign(f.context,{viewTimers:{active:true},refreshing:false,refreshAgain:false,refreshWaiters:[],webConnected:true,api:async()=>{throw failure;}});
+    vm.runInContext(section('async function refresh()','function scheduleRefresh()'),f.context);
+    await assert.rejects(f.context.refresh(),error=>error===failure);assert.equal(f.context.webConnected,false);assert.match(f.$('footer-status').textContent,/未连接/);
+  }
+});
 test('business POST has no observation deadline or automatic replay after a transport failure',async()=>{
   const f=fixture(),requests=[];f.context.desktop=null;f.context.webConnected=true;f.context.fetch=async(route,options)=>{requests.push({route,options});throw Error('Failed to fetch');};
   await assert.rejects(f.context.api('/api/chat/messages',{text:'single original message'}),/Failed to fetch/);assert.equal(requests.length,1);assert.equal(requests[0].options.signal,undefined);assert.equal(f.calls.length,0);
