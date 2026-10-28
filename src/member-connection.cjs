@@ -62,7 +62,9 @@ function present(snapshot = {}, context = {}) {
   const ready = status === 'ready' && (snapshot.ready_for_office === true || snapshot.local_verified === true);
   const details = { stage, status, error_code: code, error: errorText || null, member_id: snapshot.member_id || snapshot.target_member_id || null };
   const result = (state, headline, primary = null, secondary = null, extra = {}) => ({ state, headline: tidy(headline), primary: primary && { ...primary, label: tidy(primary.label) }, secondary: secondary && { ...secondary, label: tidy(secondary.label) }, busy: false, provider, name, details, ...extra });
-  const manualDesktop = headline => provider === 'doubao'
+  const manualDesktop = headline => provider === 'claude-desktop'
+    ? result('waiting', '把接入内容发给 Claude', button('copy_setup', '复制接入内容'))
+    : provider === 'doubao'
     ? result('waiting', '在豆包本地任务中启用 AO', button('copy_config', '复制连接地址'), button('copy_handshake_prompt', '复制验证语句'), {steps:[
       '打开豆包「技能 · 连接器 · 伙伴」→ 新建自定义连接器，名称填 Agent Office，传输选 HTTP，将连接地址填入服务器 URL，保存。',
       '在「我的技能 → 连接器」启用 Agent Office，查看「包含的操作」是否有 agentroom_chat_rooms。',

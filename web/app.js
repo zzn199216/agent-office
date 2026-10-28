@@ -825,6 +825,13 @@ async function connectionCopy(operation,ctx) {
   if(!ctx.memberId)throw Error('这位成员还没创建好，请先点「连接」。');
   const data=await api(`/api/chat/members/${encodeURIComponent(ctx.memberId)}/setup?room_id=${encodeURIComponent(ctx.roomId)}`);
   const client=data?.client||{},guide=client.kind==='native_desktop'?client.fallback||client:client,name=ctx.view?.name||ctx.provider;
+  if(operation==='copy_setup'){
+    const bootstrap=guide.bootstrap||client.bootstrap;
+    if(!guide.copy||!bootstrap)throw Error(guide.error||'接入内容还没准备好，请稍后再试。');
+    const text=[guide.installation_prompt||`请帮我把 ${name} 接入 Agent Office。`, '连接配置：\n```json\n'+guide.copy+'\n```', '配置启用后，请按下面的说明验证连接：\n'+bootstrap].join('\n\n');
+    await navigator.clipboard.writeText(text);
+    toast(tidyText(`已复制完整接入内容，发到 ${name} 对话中。`));return;
+  }
   if(operation==='copy_config'){
     if(!guide.copy)throw Error(guide.error||'配置还没准备好，请稍后再试。');
     await navigator.clipboard.writeText(guide.copy);
@@ -837,7 +844,7 @@ async function connectionCopy(operation,ctx) {
 }
 async function runConnectionOperation(operation,ctx,target) {
   const name=ctx.view?.name||ctx.provider;
-  if(operation==='copy_config'||operation==='copy_handshake_prompt')return connectionCopy(operation,ctx);
+  if(operation==='copy_setup'||operation==='copy_config'||operation==='copy_handshake_prompt')return connectionCopy(operation,ctx);
   if(operation==='start'){await api('/api/onboarding/start',{room_id:ctx.roomId,provider:ctx.provider});return refreshAfterConnection();}
   if(operation==='new_member'){await api('/api/onboarding/start',{room_id:ctx.roomId,provider:ctx.provider,new_member:true});return refreshAfterConnection();}
   if(operation==='enable_wake'){

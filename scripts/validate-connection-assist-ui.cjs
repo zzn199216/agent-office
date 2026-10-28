@@ -13,7 +13,7 @@ const {playwright,outputDirectory}=require('./browser-validation.cjs');
   try{
     let releaseReply;const replyGate=new Promise(resolve=>{releaseReply=resolve;});
     class Actor extends FakeCodex{constructor(member){super();this.member=member;}async run(input){const thread=input.discussion.thread_id||id();input.onBinding('bound',thread);input.onTurn(id());await replyGate;return {threadId:thread,turnId:id(),answer:'请在这条回复里的接入卡片继续操作，连接状态会实时更新。'};}}
-    const candidates=['doubao','qwen-desktop'].map(provider=>({id:provider,provider,name:provider==='doubao'?'豆包':'Qwen',adapter:'mailbox',installed:true,capabilities:{mcp_prepare:true}}));
+    const candidates=['doubao','qwen-desktop','claude-desktop'].map(provider=>({id:provider,provider,name:provider==='doubao'?'豆包':provider==='claude-desktop'?'Claude':'Qwen',adapter:'mailbox',installed:true,capabilities:{mcp_prepare:true}}));
     candidates.push({id:'unsupported',name:'Unsupported AI',installed:true,support:'unsupported',capabilities:{}});
     service=new RoomService(f.data,{codex:new FakeCodex(),vault:new FakeVault(),fetch:async()=>{throw Error('No external requests');},chat:{clientFactory:member=>new Actor(member)},launch:{discover:()=>({candidates})}});clearInterval(service.team.timer);
     const project=service.addProject({name:'接入流程隔离验收',path:f.project}),room=service.chat.addRoom({project_id:project.id,title:'聊天接入'}),other=service.chat.addRoom({project_id:project.id,title:'其他房间'}),actor=service.chat.addMember({name:'Codex',adapter:'codex'});
@@ -35,9 +35,9 @@ const {playwright,outputDirectory}=require('./browser-validation.cjs');
     await page.locator('#secretary-connect-dialog .close-dialog').click();
     const setupGate=new Promise(resolve=>{releaseSetup=resolve;}),prepare=service.launch.prepare.bind(service.launch);
     service.launch.prepare=async input=>{await setupGate;return prepare(input);};
-    await page.locator('#recipient').selectOption(actor.id);await page.locator('#prompt').fill('把豆包和qwen接入');await page.locator('#send-button').click();
+    await page.locator('#recipient').selectOption(actor.id);await page.locator('#prompt').fill('把豆包和qwen和claude接入');await page.locator('#send-button').click();
     const card=page.locator('.ao-system-card').first();await card.waitFor();
-    await page.waitForFunction(()=>document.querySelectorAll('.ao-system-card .connection-panel').length===2);
+    await page.waitForFunction(()=>document.querySelectorAll('.ao-system-card .connection-panel').length===3);
     await page.waitForFunction(()=>[...onboardingJobs.values()].some(job=>job.status==='running'));
     assert.equal(await page.locator('#secretary-connect-dialog').isVisible(),false);
     await page.locator('#prompt').fill('后续消息');
@@ -57,8 +57,15 @@ const {playwright,outputDirectory}=require('./browser-validation.cjs');
     for(const panel of await card.locator('.connection-panel').all())assert.ok(await panel.locator('[data-conn-op]').count()<=2);
     assert.doesNotMatch(await card.textContent(),/保留|沿用|本人对话|握手|没有自动重试/);proof.checks.plain_copy=true;
     await page.screenshot({path:path.join(out,'connection-card.png')});
+    const claudePanel=card.locator('.connection-panel').filter({has:page.locator('[data-conn-op="copy_setup"]')});
+    assert.equal(await claudePanel.locator('[data-conn-op]').count(),1);
+    await claudePanel.locator('[data-conn-op="copy_setup"]').click();
+    await page.waitForFunction(()=>window.fixtureClipboard?.includes('配置启用后'));
+    const combined=await page.evaluate(()=>window.fixtureClipboard);
+    assert.match(combined,/"mcpServers"/);assert.match(combined,/agentroom_chat_rooms/);assert.match(combined,/agentroom_chat_inbox/);
+    proof.checks.claude_one_button_copies_complete_setup=true;
     // Copy config returns this member's real local MCP address.
-    await card.locator('[data-conn-op="copy_config"]').first().click();await page.waitForFunction(()=>typeof window.fixtureClipboard==='string');
+    await card.locator('[data-conn-op="copy_config"]').first().click();await page.waitForFunction(base=>window.fixtureClipboard?.startsWith(base+'/mcp/')||window.fixtureClipboard?.includes('\"url\": \"'+base+'/mcp/'),base);
     assert.match(await page.evaluate(()=>window.fixtureClipboard),new RegExp(base.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'/mcp/'));proof.checks.copy_config=true;
     await card.locator('[data-conn-op="copy_handshake_prompt"]').first().click();await page.waitForFunction(()=>/agentroom_chat_inbox/.test(window.fixtureClipboard||''));proof.checks.copy_sentence=true;
     // Narrow screens do not scroll sideways.

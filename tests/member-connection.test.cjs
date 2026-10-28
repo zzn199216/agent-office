@@ -130,3 +130,10 @@ test('an MCP member gets the MCP config guide, the dialog gets the same presenta
   assert.ok(created.member_id);assert.notEqual(created.member_id,state.member_id);
   assert.notEqual(service.chat.store.member(created.member_id).name,service.chat.store.member(state.member_id).name);
 });
+
+test('Claude manual setup offers one complete copy action at each handoff stage',()=>{
+  for(const stage of ['awaiting_import','awaiting_handshake','awaiting_reload']){
+    const view=present({provider:'claude-desktop',status:'needs_action',stage});
+    assert.equal(view.primary.operation,'copy_setup');assert.equal(view.primary.label,'复制接入内容');assert.equal(view.secondary,null);
+  }
+});

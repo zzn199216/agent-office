@@ -171,3 +171,21 @@ test('connection-flow copy avoids reassurance and internal terms, and every quot
     }
   }
 });
+
+test('one Claude button copies its scoped configuration and verification instructions together',async()=>{
+  const f=fixture(),view=require('../src/member-connection.cjs').present({provider:'claude-desktop',status:'needs_action',stage:'awaiting_handshake'});
+  f.context.history.connection_assists=[f.assist(view,{provider:'claude-desktop'})];
+  f.context.__setup={client:{kind:'stdio_json',installation_prompt:'fixture install instructions',copy:'{"mcpServers":{"fixture":{}}}',bootstrap:'fixture verification sentence'}};
+  assert.equal((f.render(f.reply).match(/data-conn-op=/g)||[]).length,1);
+  await f.click('copy_setup');assert.equal(f.calls.copy.length,1);
+  for(const text of ['fixture install instructions','{"mcpServers":{"fixture":{}}}','fixture verification sentence'])assert.ok(f.calls.copy[0].includes(text));
+  assert.deepEqual(f.calls.api.filter(([url])=>url.includes('/setup')).map(([url])=>url),['/api/chat/members/target/setup?room_id=room']);
+  assert.equal(f.calls.operations.length,0);assert.match(f.calls.toast[0],/完整接入内容/);
+});
+test('combined setup never copies incomplete configuration or verification text',async()=>{
+  for(const client of [{copy:'config only'},{bootstrap:'sentence only'}]){
+    const f=fixture();f.context.__setup={client};
+    await assert.rejects(()=>f.context.connectionCopy('copy_setup',{memberId:'target',roomId:'room',provider:'claude-desktop'}),/还没准备好/);
+    assert.equal(f.calls.copy.length,0);
+  }
+});
