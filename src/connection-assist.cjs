@@ -27,7 +27,7 @@ function parseConnectionProviders(input){
   // A qualification in another clause still governs the whole request. Never
   // connect first and discover "wait for my confirmation" after the fact.
   if(/(?:先|暂时|现在|还)?\s*(?:不要|别|勿|不必|不)\s*(?:执行|操作|开始|动手|动)|(?:等|等待|待)(?:我|用户|本人)(?:确认|同意|授权|批准|说)|(?:确认|同意|批准|授权)(?:之后|以后|后|才)|暂缓|\b(?:wait\s+for\s+(?:my\s+)?(?:confirmation|approval)|after\s+(?:my\s+)?(?:confirmation|approval)|hold\s+off|do\s+not\s+(?:execute|start))\b/i.test(text))return [];
-  if(/(?:先|暂时|现在|还)\s*(?:不要|别|勿|不必|不)\s*(?:接入|连接|添加|加入|邀请|接|拉)|先\s*(?:让)?(?:我|用户|本人)\s*(?:先)?(?:确认|决定|同意|授权)|(?:等|等待|待)(?:我|用户|本人)(?:再说|再决定|再通知)/i.test(text))return [];
+  if(/(?:先|暂时|现在|还)\s*(?:不要|别|勿|不必|不)\s*(?:接入|连接|连上|添加|加入|邀请|接|拉)|先\s*(?:让)?(?:我|用户|本人)\s*(?:先)?(?:确认|决定|同意|授权)|(?:等|等待|待)(?:我|用户|本人)(?:再说|再决定|再通知)/i.test(text))return [];
   const selected=[];
   for(const clause of text.split(/[，,；;。！？!?\r\n]+/)){
     if(/为什么|为何|怎么|如何|能否|能不能|是不是|是否|失败|连不上|不能|不支持|找原因|分析|排查|诊断|解释|介绍|举例|写.*(?:说明|文档)|\b(?:why|how|cannot|can't|failed|failure|debug|diagnos\w*)\b/i.test(clause))continue;
@@ -42,7 +42,7 @@ function parseConnectionProviders(input){
     const person=String.raw`AO_TARGET_\d+_`,people=String.raw`${person}(?:\s*(?:、|和|与|及|以及|and|&|\+)\s*${person})*`;
     const place=String.raw`(?:(?:到|进入|加入|进|入)?\s*(?:这个|当前|本|我的|该)?\s*(?:办公室|聊天室|房间|群聊|群|AO|Agent\s*Office))?`;
     const destination=String.raw`\s*(?:进来|进群|入群|进办公室|加入)?\s*${place}\s*(?:里|中|来)?\s*(?:吧|一下)?`;
-    const actualPersonAction=new RegExp(String.raw`^(?:(?:把|将)\s*${people}\s*(?:也)?\s*(?:接入|连接|添加|加入|邀请|接上|拉|加|接)${destination}|(?:接入|连接|添加|加入|邀请|接上|拉|加|接)\s*(?:一下|下)?\s*(?:个|一个|一位)?\s*${people}\s*(?:也)?${destination}|(?:please\s+)?(?:connect|add|invite|bring|join)\s+(?:the\s+)?${people}(?:\s+(?:to|into)\s+(?:the\s+)?(?:office|room|AO|Agent\s*Office))?)$`,'i');
+    const actualPersonAction=new RegExp(String.raw`^(?:(?:把|将)\s*${people}\s*(?:也)?\s*(?:接入|连接|连上|添加|加入|邀请|接上|拉|加|接)${destination}|(?:接入|连接|连上|添加|加入|邀请|接上|拉|加|接)\s*(?:一下|下)?\s*(?:个|一个|一位)?\s*${people}\s*(?:也)?${destination}|(?:please\s+)?(?:connect|add|invite|bring|join)\s+(?:the\s+)?${people}(?:\s+(?:to|into)\s+(?:the\s+)?(?:office|room|AO|Agent\s*Office))?)$`,'i');
     // The entire clause must describe people being connected. This rejects a
     // provider's logs/docs as objects and another named agent as a destination.
     if(!actualPersonAction.test(remaining))continue;

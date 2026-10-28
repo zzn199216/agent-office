@@ -77,8 +77,8 @@ test('connected states have no copy actions and busy states disable their button
 test('Doubao connector steps stay visible and escaped in every shared connection card',()=>{
   const f=fixture(),view=require('../src/member-connection.cjs').present({provider:'doubao',status:'needs_action',stage:'awaiting_handshake'});
   f.context.history.connection_assists=[f.assist(view)];const html=f.render(f.reply);
-  assert.match(html,/connection-panel-steps/);assert.match(html,/本地电脑/);assert.match(html,/包含的操作/);assert.match(html,/在对话中试用/);assert.match(html,/复制连接地址/);assert.match(html,/复制验证语句/);
-  assert.equal((html.match(/data-conn-op=/g)||[]).length,2);
+  assert.match(html,/connection-panel-steps/);assert.match(html,/本地电脑/);assert.match(html,/包含的操作/);assert.match(html,/在对话中试用/);assert.match(html,/复制接入提示词/);
+  assert.equal((html.match(/data-conn-op=/g)||[]).length,1);
   view.steps=['<img src=x onerror=alert(1)>'];assert.doesNotMatch(f.context.connectionPanelMarkup(view,{source:'member',id:'m'}),/<img/);
 });
 
@@ -188,4 +188,11 @@ test('combined setup never copies incomplete configuration or verification text'
     await assert.rejects(()=>f.context.connectionCopy('copy_setup',{memberId:'target',roomId:'room',provider:'claude-desktop'}),/还没准备好/);
     assert.equal(f.calls.copy.length,0);
   }
+});
+
+test('Doubao prompt includes connection address, local-task steps and verification together',async()=>{
+  const f=fixture();f.context.__setup={client:{kind:'http_fields',copy:'http://127.0.0.1:47831/mcp/fixture',installation_prompt:'fixture install instructions',steps:['在本地电脑任务中启用连接器'],bootstrap:'fixture verification sentence'}};
+  await f.context.connectionCopy('copy_setup',{memberId:'target',roomId:'room',provider:'doubao'});
+  assert.equal(f.calls.copy.length,1);assert.match(f.calls.copy[0],/连接地址：\nhttp:\/\/127\.0\.0\.1:47831\/mcp\/fixture/);
+  assert.match(f.calls.copy[0],/1\. 在本地电脑任务中启用连接器/);assert.match(f.calls.copy[0],/fixture verification sentence/);assert.doesNotMatch(f.calls.copy[0],/```json/);
 });

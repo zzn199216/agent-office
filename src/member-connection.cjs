@@ -65,7 +65,7 @@ function present(snapshot = {}, context = {}) {
   const manualDesktop = headline => provider === 'claude-desktop'
     ? result('waiting', '把接入内容发给 Claude', button('copy_setup', '复制接入内容'))
     : provider === 'doubao'
-    ? result('waiting', '在豆包本地任务中启用 AO', button('copy_config', '复制连接地址'), button('copy_handshake_prompt', '复制验证语句'), {steps:[
+    ? result('waiting', '在豆包本地任务中启用 AO', button('copy_setup', '复制接入提示词'), null, {steps:[
       '打开豆包「技能 · 连接器 · 伙伴」→ 新建自定义连接器，名称填 Agent Office，传输选 HTTP，将连接地址填入服务器 URL，保存。',
       '在「我的技能 → 连接器」启用 Agent Office，查看「包含的操作」是否有 agentroom_chat_rooms。',
       '点「在对话中试用」，或新建工作任务选择「本地电脑」，在输入框的「连接器」菜单勾选 Agent Office，再发送验证语句。'
@@ -103,9 +103,9 @@ function present(snapshot = {}, context = {}) {
   if (stage === 'awaiting_previous_result' || code === 'desktop_request_uncertain')
     return result('attention', `${name} 上一条请求的结果还没确认`, pick(snapshot, 'retry', '确认后继续'));
   if (code === 'desktop_client_restart_required')
-    return result('attention', `${name} 正在运行，需要重启后才能连接`, pick(snapshot, 'open_native_client', `重启 ${name} 并连接`), offered(snapshot, 'manual_mcp') ? pick(snapshot, 'manual_mcp', '改用 MCP 连接') : null);
+    return result('attention', `${name} 正在运行，需要重启后才能连接`, pick(snapshot, 'open_native_client', `重启 ${name} 并连接`), offered(snapshot, 'manual_mcp') ? pick(snapshot, 'manual_mcp', provider === 'doubao' ? '用提示词连接' : '改用 MCP 连接') : null);
   if (INCOMPATIBLE.test(code || '') || INCOMPATIBLE.test(errorText))
-    return result('attention', `这个版本的 ${name} 暂不支持自动连接`, offered(snapshot, 'manual_mcp') ? pick(snapshot, 'manual_mcp', '改用 MCP 连接') : pick(snapshot, 'retry', '重新检查'));
+    return result('attention', `这个版本的 ${name} 暂不支持自动连接`, offered(snapshot, 'manual_mcp') ? pick(snapshot, 'manual_mcp', provider === 'doubao' ? '用提示词连接' : '改用 MCP 连接') : pick(snapshot, 'retry', '重新检查'));
   if (stage === 'requires_explicit_backend_selection')
     return result('attention', `请选择用哪个 ${name} 接入`, pick(snapshot, 'select_provider', '选择接入方式'));
   if (FAILED.has(status) || FAILED.has(stage) || stage === 'verification_failed')
@@ -116,7 +116,7 @@ function present(snapshot = {}, context = {}) {
   // forward; reconnecting the debug port stays available as the alternative.
   if (offered(snapshot, 'native_desktop_connect') || stage === 'awaiting_native_desktop' || actionKind === 'native_connect')
     return offered(snapshot, 'manual_mcp')
-      ? result('waiting', `${name} 还没连上`, pick(snapshot, 'manual_mcp', '改用 MCP 连接'), button('native_connect', `重新连接 ${name}`))
+      ? result('waiting', `${name} 还没连上`, pick(snapshot, 'manual_mcp', provider === 'doubao' ? '用提示词连接' : '改用 MCP 连接'), button('native_connect', `重新连接 ${name}`))
       : result('waiting', `${name} 还没连上`, button('native_connect', `连接 ${name}`));
   if (['import_client_config', 'import_mcp', 'desktop_import', 'configure_connector', 'import_connector'].some(op => offered(snapshot, op)) || stage === 'awaiting_import')
     return manualDesktop(`在 ${name} 里加上 AO 配置`);

@@ -403,7 +403,7 @@ async function runOnboardingOperation(job,operation){
     if(!response)return;
     current=adoptOnboardingJob(response,job,attempt);
     if(operation==='login_client'&&response.action?.launched!==true)throw Error('登录页没有打开，请重试。');
-    const message=response.action?.instruction||(operation==='login_client'?'登录页已打开。登录完成后点「登录后重新检查」。':operation==='manual_mcp'?'已切换到 MCP。点「复制配置」加到客户端，再点「复制那句话」发给它。':'正在核对连接…');
+    const message=response.action?.instruction||(operation==='login_client'?'登录页已打开。登录完成后点「登录后重新检查」。':operation==='manual_mcp'?(['doubao','claude-desktop'].includes(job.provider)?`已切换到手动连接。点「${job.provider==='doubao'?'复制接入提示词':'复制接入内容'}」继续。`:'已切换到 MCP。点「复制配置」加到客户端，再点「复制那句话」发给它。'):'正在核对连接…');
     setOnboardingFeedback(current,message,{operation});
     returnSecretaryAfterOnboarding();action(refresh);action(refreshOnboarding);return current;
   }catch(error){setOnboardingFeedback(current,error.message||'这一步未完成，请检查当前接入进度。',{error:true,operation});throw error;}
@@ -828,7 +828,9 @@ async function connectionCopy(operation,ctx) {
   if(operation==='copy_setup'){
     const bootstrap=guide.bootstrap||client.bootstrap;
     if(!guide.copy||!bootstrap)throw Error(guide.error||'接入内容还没准备好，请稍后再试。');
-    const text=[guide.installation_prompt||`请帮我把 ${name} 接入 Agent Office。`, '连接配置：\n```json\n'+guide.copy+'\n```', '配置启用后，请按下面的说明验证连接：\n'+bootstrap].join('\n\n');
+    const configuration=guide.kind==='http_fields'?'连接地址：\n'+guide.copy:'连接配置：\n```json\n'+guide.copy+'\n```';
+    const steps=Array.isArray(guide.steps)?guide.steps.map((step,index)=>`${index+1}. ${step}`).join('\n'):'';
+    const text=[guide.installation_prompt||`请帮我把 ${name} 接入 Agent Office。`,configuration,steps,'配置启用后，请按下面的说明验证连接：\n'+bootstrap].filter(Boolean).join('\n\n');
     await navigator.clipboard.writeText(text);
     toast(tidyText(`已复制完整接入内容，发到 ${name} 对话中。`));return;
   }

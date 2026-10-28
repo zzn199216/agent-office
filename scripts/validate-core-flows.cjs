@@ -132,13 +132,13 @@ async function main() {
       // Doubao now defaults to automatic delivery. This isolated journey also
       // verifies the explicit MCP fallback; a real desktop is never invoked.
       await panel.locator('[data-conn-op="manual_mcp"]').click();
-      await panel.locator('[data-conn-op="copy_config"]').click();
+      await panel.locator('[data-conn-op="copy_setup"]').click();
       await page.waitForFunction(()=>typeof window.fixtureClipboard==='string');
-      endpoint=await page.evaluate(()=>window.fixtureClipboard);
-      assert.ok(endpoint.startsWith(base+'/mcp/'));
-      assert.match(await panel.textContent(),/本地电脑/);
-      await panel.locator('[data-conn-op="copy_handshake_prompt"]').click();
-      await page.waitForFunction(()=>/agentroom_chat_rooms/.test(window.fixtureClipboard||''));
+      const prompt=await page.evaluate(()=>window.fixtureClipboard);
+      endpoint=prompt.match(/^连接地址：\n(https?:\/\/\S+)$/m)?.[1];
+      assert.ok(endpoint?.startsWith(base+'/mcp/'));
+      assert.match(prompt,/agentroom_chat_rooms/);assert.match(prompt,/agentroom_chat_inbox/);assert.match(prompt,/本地电脑/);
+      assert.match(await panel.textContent(),/本地电脑/);assert.equal(await panel.locator('[data-conn-op]').count(),1);
       const members=service.chat.store.members().filter(value=>value.adapter!=='grok-proxy');assert.equal(members.length,1);member=members[0];
       assert.ok(!member.verified_at,'Copying instructions must not claim a connection');
       await initialize();
@@ -166,7 +166,7 @@ async function main() {
       const created=page.waitForResponse(response=>response.url()===base+'/api/chat/rooms'&&response.request().method()==='POST');
       await page.locator('#room-form button[type="submit"]').click();secondRoom=await(await created).json();
       await connect();
-      await page.locator('#secretary-connect-progress [data-conn-op="copy_config"]').waitFor();
+      await page.locator('#secretary-connect-progress [data-conn-op="copy_setup"]').waitFor();
       // An existing address must work in the new room, but the new attempt
       // still needs fresh tool evidence, not the previous room's timestamp.
       const rooms=await tool('agentroom_chat_rooms');assert.equal(rooms.member_id,member.id);

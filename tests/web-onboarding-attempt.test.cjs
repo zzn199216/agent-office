@@ -118,7 +118,7 @@ test('login failure and unconfirmed launch stay as errors inside the current att
 
 test('native client start explains one full exit and keeps a typed restart failure visible',async()=>{
   const f=fixture({provider:'doubao',stage:'awaiting_native_desktop',next_actions:[{kind:'open_native_client',operation:'open_native_client'},{operation:'native_desktop_connect'},{operation:'manual_mcp',target_member_id:'member'}]});
-  f.context.renderLaunch();const before=f.$('secretary-connect-progress').innerHTML;assert.match(before,/data-conn-op="manual_mcp"[^>]*>改用 MCP 连接/);assert.match(before,/data-conn-op="native_connect"[^>]*>重新连接豆包/);
+  f.context.renderLaunch();const before=f.$('secretary-connect-progress').innerHTML;assert.match(before,/data-conn-op="manual_mcp"[^>]*>用提示词连接/);assert.match(before,/data-conn-op="native_connect"[^>]*>重新连接豆包/);
   f.context.api=async(route,body)=>{f.calls.push({route,body});throw Object.assign(Error('客户端仍在运行。请从菜单或托盘完整退出，再开启连接。'),{code:'desktop_client_restart_required'});};
   await assert.rejects(f.context.runOnboardingOperation(f.job,'open_native_client'),/完整退出/);
   assert.deepEqual(plain(f.calls),[{route:'/api/onboarding/action',body:{run_id:'original',operation:'open_native_client'}}]);assert.match(f.$('secretary-connect-progress').innerHTML,/role="alert"/);assert.match(f.$('secretary-connect-progress').innerHTML,/客户端仍在运行/);

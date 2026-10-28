@@ -92,8 +92,8 @@ test('explicit MCP keeps config-first setup and an existing automatic member kee
     const state=service.onboarding.state({run_id:job.id});
     assert.equal(state.connection_method,'manual_mcp',provider);
     assert.equal(state.presentation.state,'waiting');
-    assert.equal(state.presentation.primary.operation,'copy_config');
-    assert.equal(state.presentation.secondary.operation,'copy_handshake_prompt');
+    assert.equal(state.presentation.primary.operation,provider==='doubao'?'copy_setup':'copy_config');
+    assert.equal(state.presentation.secondary?.operation,provider==='doubao'?undefined:'copy_handshake_prompt');
     assert.doesNotMatch(state.presentation.headline,/ 豆包|豆包 /);
     if(provider==='doubao'){
       service._localUrl='http://127.0.0.1:47831';const guide=service.chat.setup(state.member_id,room.id).client;

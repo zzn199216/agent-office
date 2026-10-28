@@ -256,3 +256,16 @@ for(const [provider,request,options]of [['doubao','连接豆包',{nativeError:'c
   for(let i=0;i<3;i++){const again=v.manager.snapshotForMessage(message.id)[0];assert.deepEqual(again.presentation,card.presentation);if(secret)assert.ok(!JSON.stringify(again).includes(secret));}
   assert.deepEqual(counts(v),before);assert.equal(v.service.revision,revision);if(bytes)assert.deepEqual(fs.readFileSync(entry.file),bytes);
 });
+
+test('connect phrasing from the Doubao chat triggers setup but questions and pauses do not',()=>{
+  for(const text of ['把豆包也连上吧','帮我连上豆包','连上豆包','把豆包和Claude也连上吧'])
+    assert.ok(parseConnectionProviders(text).includes('doubao'),text);
+  for(const text of ['豆包连上了吗','豆包已经连上了','不要连上豆包','怎么连上豆包','先别连上豆包，然后连上Claude','把豆包也连上吧，等我确认','帮我连上豆包的官网','他说“把豆包也连上吧”'])
+    assert.deepEqual(parseConnectionProviders(text),[],text);
+});
+test('the exact Doubao request creates a scoped connection card with a prompt fallback',async t=>{
+  const v=setup(t),message=v.message('把豆包也连上吧');v.manager.begin(message);
+  const [card]=await v.finish();assert.equal(card.provider,'doubao');assert.equal(card.room_id,v.room.id);
+  assert.ok(card.target_member_id);assert.equal(card.ready_for_office,false);
+  assert.equal(card.presentation.primary.operation,'manual_mcp');assert.equal(card.presentation.primary.label,'用提示词连接');
+});
