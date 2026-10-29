@@ -287,6 +287,30 @@ test('one imported connection receives messages in newly joined rooms and report
   assert.equal(automaticPost.data.result.structuredContent.room_id, fresh.id);
 });
 
+test('two HTTP sessions sharing one member connection can address different joined rooms without changing each other', async t => {
+  const h=await setup(t),card=h.first.card,url=h.endpoint(card);
+  const other=h.service.chat.addRoom({title:'Second window room',project_id:h.project.id});h.service.chat.join(other.id,h.first.person.id);
+  const first=await h.initialize(card),second=await h.initialize(card);assert.notEqual(first,second);
+  const replies=await Promise.all([
+    h.invoke(card,first,'agentroom_chat_post',{room_id:h.room.id,text:'window A',idempotency_key:'window-a'}),
+    h.invoke(card,second,'agentroom_chat_post',{room_id:other.id,text:'window B',idempotency_key:'window-b'})
+  ]);
+  for(const reply of replies)assert.equal(reply.data.result.isError,undefined,reply.raw);
+  const histories=await Promise.all([
+    h.invoke(card,first,'agentroom_chat_history',{room_id:h.room.id}),
+    h.invoke(card,second,'agentroom_chat_history',{room_id:other.id})
+  ]);
+  assert.deepEqual(histories.map(reply=>reply.data.result.structuredContent.messages.map(message=>message.text)),[['window A'],['window B']]);
+  assert.equal(h.endpoint(card),url);
+  // Explicit room arguments are per request; the connection does not infer a
+  // new default from a client window or another session's previous request.
+  for(const session of [first,second]){
+    const rooms=await h.invoke(card,session,'agentroom_chat_rooms');
+    assert.equal(rooms.data.result.structuredContent.connection.default_room_id,h.room.id);
+    assert.equal(rooms.data.result.structuredContent.connection.room_scope,'joined_rooms');
+  }
+});
+
 test('having no room keeps the identity connection alive without exposing deleted room data', async t => {
   const h = await setup(t), session = await h.initialize(h.first.card);
   h.service.chat.store.deleteRoom(h.room.id, () => {}, { force: true });

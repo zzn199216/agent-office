@@ -138,7 +138,9 @@ async function main() {
       endpoint=prompt.match(/^连接地址：\n(https?:\/\/\S+)$/m)?.[1];
       assert.ok(endpoint?.startsWith(base+'/mcp/'));
       assert.match(prompt,/agentroom_chat_rooms/);assert.match(prompt,/agentroom_chat_inbox/);assert.match(prompt,/本地电脑/);
-      assert.match(await panel.textContent(),/本地电脑/);assert.equal(await panel.locator('[data-conn-op]').count(),1);
+      assert.match(await panel.textContent(),/本地电脑/);assert.equal(await panel.locator('[data-conn-op]:visible').count(),1);
+      assert.equal(await panel.locator('.connection-panel-manual').getAttribute('open'),null);
+      assert.equal(await panel.locator('[data-conn-op="copy_config"]').isVisible(),false);
       const members=service.chat.store.members().filter(value=>value.adapter!=='grok-proxy');assert.equal(members.length,1);member=members[0];
       assert.ok(!member.verified_at,'Copying instructions must not claim a connection');
       await initialize();

@@ -794,10 +794,11 @@ function connectionPanelMarkup(view,scope,{extraDetails='',pending:external=fals
   const key=`${scope.source}:${scope.id}`,pending=connectionOperationsPending.has(key)||external===true,busy=view.busy===true||pending;
   const actionButton=(action,kind)=>action?`<button type="button" class="${kind}" data-conn-op="${escape(action.operation)}" data-conn-source="${escape(scope.source)}" data-conn-id="${escape(scope.id)}"${action.target_member_id?` data-conn-target="${escape(action.target_member_id)}"`:''}${busy?' disabled':''}>${escape(pending&&kind==='primary'?'正在处理…':action.label)}</button>`:'';
   const buttons=actionButton(view.primary,'primary')+actionButton(view.secondary,'secondary');
-  const steps=Array.isArray(view.steps)?`<ol class="connection-panel-steps">${view.steps.map(step=>`<li>${escape(step)}</li>`).join('')}</ol>`:'';
+  const stepList=Array.isArray(view.steps)?`<ol class="connection-panel-steps">${view.steps.map(step=>`<li>${escape(step)}</li>`).join('')}</ol>`:'';
+  const steps=stepList&&view.steps_title?`<details class="connection-panel-details connection-panel-manual"><summary>${escape(view.steps_title)}</summary>${stepList}${actionButton(view.steps_action,'secondary')}</details>`:stepList;
   const error=view.details?.error?`<p class="small-note">${escape(view.details.error)}</p>`:'';
   const details=error||extraDetails?`<details class="connection-panel-details"><summary>详情</summary>${error}${extraDetails}</details>`:'';
-  return `<div class="connection-panel" data-conn-state="${escape(view.state)}"><div class="connection-panel-status"><span class="connection-dot ${escape(view.state)}${busy?' busy':''}" aria-hidden="true"></span><strong>${escape(view.headline)}</strong></div>${steps}${buttons?`<div class="actions">${buttons}</div>`:''}${details}</div>`;
+  return `<div class="connection-panel" data-conn-state="${escape(view.state)}"><div class="connection-panel-status"><span class="connection-dot ${escape(view.state)}${busy?' busy':''}" aria-hidden="true"></span><strong>${escape(view.headline)}</strong></div>${buttons?`<div class="actions">${buttons}</div>`:''}${steps}${details}</div>`;
 }
 // Keep spaces around Latin names only ("连接 Qwen", but "连接豆包").
 const tidyText=text=>String(text).replace(/([\u3000-\u303f\u4e00-\u9fff\uff00-\uffef]) (?=[\u3000-\u303f\u4e00-\u9fff\uff00-\uffef])/g,'$1');
@@ -830,7 +831,8 @@ async function connectionCopy(operation,ctx) {
     const bootstrap=guide.bootstrap||client.bootstrap;
     if(!guide.copy||!bootstrap)throw Error(guide.error||'接入内容还没准备好，请稍后再试。');
     const configuration=guide.kind==='http_fields'?'连接地址：\n'+guide.copy:'连接配置：\n```json\n'+guide.copy+'\n```';
-    const steps=Array.isArray(guide.steps)?guide.steps.map((step,index)=>`${index+1}. ${step}`).join('\n'):'';
+    const stepList=Array.isArray(guide.steps)?guide.steps.map((step,index)=>`${index+1}. ${step}`).join('\n'):'';
+    const steps=stepList&&ctx.provider==='doubao'?'仅当 AO 工具未加载时，下面是给用户的手动配置步骤，不是让豆包执行的电脑操作：\n'+stepList:stepList;
     const text=[guide.installation_prompt||`请帮我把 ${name} 接入 Agent Office。`,configuration,steps,'配置启用后，请按下面的说明验证连接：\n'+bootstrap].filter(Boolean).join('\n\n');
     await navigator.clipboard.writeText(text);
     toast(tidyText(`已复制完整接入内容，发到 ${name} 对话中。`));return;

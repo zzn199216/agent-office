@@ -204,10 +204,11 @@ class ConnectionAssist{
         // Templates hold the target's credentials locally. The shared helper
         // document contains only their paths, never another person's URL/token.
         instruction=[guide.installation_prompt,guide.bootstrap,guide.kind==='command'?guide.copy:null,
-          Array.isArray(guide.steps)?guide.steps.join('\n'):null,guide.note].filter(Boolean).join('\n\n');}
+          Array.isArray(guide.steps)?(row.provider==='doubao'?'仅在工具未加载时，由用户手动完成以下步骤；连接地址在 AO 接入卡片的手动配置中复制。\n':'')+guide.steps.join('\n'):null,guide.note].filter(Boolean).join('\n\n');}
     }
     const title=names.get(row.provider)||row.provider;
-    const text=`# 连接 ${title} 与 Agent Office\n\n这份文档交给 ${title} 自己的窗口，使用其已有且获准的本机工具完成；保留已有配置。文档存在不表示连接成功。\n\n`+
+    const intro=row.provider==='doubao'?'这份文档只用于连接已有 AO 服务。先使用已加载的 AO 工具；没有工具时请用户回到 AO 接入卡片展开手动配置，不要查找配置文件或操作桌面。':`这份文档交给 ${title} 自己的窗口，使用其已有且获准的本机工具完成；保留已有配置。文档存在不表示连接成功。`;
+    const text=`# 连接 ${title} 与 Agent Office\n\n${intro}\n\n`+
       (credentialUnavailable?'原有入口不可用或已撤销。请回 AO 的接入成员页面明确重新授权，不能复用文档自动重发凭据。\n\n':instruction?instruction+'\n\n':
         `当前阶段：${safe(state?.stage||row.status)}。${safe(state?.error||row.error||'尚未发现可用的自动接入入口。')}\n请在该客户端完成自己的安装、登录或本机工具授权，再从 AO 接入成员页面检查进度；此步骤不会自动安装软件、代输账号或新建其他身份。\n\n`)+
       '仅处理这次连接。不要操作用户桌面，不改用云端代码解释器访问本机 localhost，不删除或覆盖已有连接，不自动创建群聊或设置定期任务。找不到 AO 工具时说明当前对话尚未加载连接器，不能把电子邮箱工具当作 AO 信箱。只有实际工具返回或原生对话验证才报告成功；配置存在、接口自测和应用打开均不能代替验证。\n';

@@ -103,6 +103,9 @@ test('explicit MCP keeps config-first setup and an existing automatic member kee
     if(provider==='doubao'){
       service._localUrl='http://127.0.0.1:47831';const guide=service.chat.setup(state.member_id,room.id).client;
       assert.equal(guide.kind,'http_fields');assert.match(guide.copy,/^http:\/\/127\.0\.0\.1:47831\/mcp\//);
+      assert.match(guide.installation_prompt,/直接调用它们验证连接/);assert.match(guide.installation_prompt,/立即停止接入尝试/);
+      assert.match(guide.installation_prompt,/不要申请创建虚拟桌面/);
+      assert.doesNotMatch(guide.installation_prompt,/STDIO：|Streamable HTTP：|按目标客户端的原生格式备份并合并配置|client-config/);
       assert.match(guide.bootstrap,/本地电脑/);assert.match(guide.bootstrap,/连接器菜单勾选 Agent Office/);assert.doesNotMatch(guide.bootstrap,/127\.0\.0\.1|\/mcp\//);
       assert.match(guide.steps.join('\n'),/服务器 URL/);assert.match(guide.steps.join('\n'),/包含的操作/);assert.match(guide.steps.join('\n'),/在对话中试用/);
       assert.equal(service.onboarding.state({run_id:job.id}).ready_for_office,false);

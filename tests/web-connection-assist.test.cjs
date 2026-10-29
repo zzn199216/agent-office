@@ -74,11 +74,16 @@ test('connected states have no copy actions and busy states disable their button
   assert.match(f.render(f.reply),/data-conn-op="retry"[^>]* disabled/);
 });
 
-test('Doubao connector steps stay visible and escaped in every shared connection card',()=>{
+test('Doubao starts with one prompt action and folds manual setup behind an explicit fallback',()=>{
   const f=fixture(),view=require('../src/member-connection.cjs').present({provider:'doubao',status:'needs_action',stage:'awaiting_handshake'});
   f.context.history.connection_assists=[f.assist(view)];const html=f.render(f.reply);
   assert.match(html,/connection-panel-steps/);assert.match(html,/本地电脑/);assert.match(html,/包含的操作/);assert.match(html,/在对话中试用/);assert.match(html,/复制接入提示词/);
-  assert.equal((html.match(/data-conn-op=/g)||[]).length,1);
+  assert.equal((html.match(/data-conn-op=/g)||[]).length,2);
+  assert.match(html,/把接入提示词发给豆包/);
+  assert.match(html,/<details class="connection-panel-details connection-panel-manual"><summary>提示词无法完成？手动配置<\/summary><ol/);
+  assert.doesNotMatch(html,/<details[^>]* open/);
+  assert.ok(html.indexOf('data-conn-op="copy_setup"')<html.indexOf('connection-panel-manual'));
+  assert.ok(html.indexOf('data-conn-op="copy_config"')>html.indexOf('connection-panel-manual'));
   view.steps=['<img src=x onerror=alert(1)>'];assert.doesNotMatch(f.context.connectionPanelMarkup(view,{source:'member',id:'m'}),/<img/);
 });
 

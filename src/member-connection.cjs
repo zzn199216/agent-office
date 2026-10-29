@@ -65,7 +65,7 @@ function present(snapshot = {}, context = {}) {
   const manualDesktop = headline => provider === 'claude-desktop'
     ? result('waiting', '把接入内容发给 Claude', button('copy_setup', '复制接入内容'))
     : provider === 'doubao'
-    ? result('waiting', '在豆包本地任务中启用 AO', button('copy_setup', '复制接入提示词'), null, {steps:[
+    ? result('waiting', '把接入提示词发给豆包', button('copy_setup', '复制接入提示词'), null, {steps_title:'提示词无法完成？手动配置',steps_action:button('copy_config','复制连接地址'),steps:[
       '打开豆包「技能 · 连接器 · 伙伴」→ 新建自定义连接器，名称填 Agent Office，传输选 HTTP，将连接地址填入服务器 URL，保存。',
       '在「我的技能 → 连接器」启用 Agent Office，查看「包含的操作」是否有 agentroom_chat_rooms。',
       '点「在对话中试用」，或新建工作任务选择「本地电脑」，在输入框的「连接器」菜单勾选 Agent Office，再发送验证语句。'

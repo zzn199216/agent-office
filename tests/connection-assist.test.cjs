@@ -167,7 +167,9 @@ test('historical Grok handshake with a stale connection failure keeps guiding un
 test('mailbox document is private and read-only polling never scans, issues credentials or generates templates again',async t=>{
   const v=setup(t,{manualOnly:true}),message=v.message('那拉个豆包进来');v.manager.begin(message);const [state]=await v.finish(),before=counts(v),scans=v.calls.scans,revision=v.service.revision;
   const cardFile=v.service.entry.describe(state.target_member_id,v.room.id).file,card=JSON.parse(fs.readFileSync(cardFile,'utf8')),bytes=fs.readFileSync(cardFile),doc=v.manager.document(state.id,v.room.id);
-  assert.ok(!doc.text.includes(card.secret),'document points to the target private template without embedding its secret');assert.match(doc.text,/STDIO/);assert.match(doc.text,/Streamable HTTP/);
+  assert.ok(!doc.text.includes(card.secret),'shared helper document never embeds the target secret');
+  assert.match(doc.text,/先使用已加载的 AO 工具/);assert.match(doc.text,/立即停止接入尝试/);assert.match(doc.text,/由用户手动完成/);
+  assert.doesNotMatch(doc.text,/STDIO：|Streamable HTTP：|client-config/);
   const first=fs.statSync(state.document_path).mtimeMs;
   for(let i=0;i<4;i++){assert.ok(!JSON.stringify(v.manager.listRoom(v.room.id)).includes(card.secret));assert.ok(!(await v.manager.prepareContext(message.id)).includes(card.secret));v.manager.document(state.id,v.room.id);}
   assert.equal(v.calls.scans,scans);assert.deepEqual(counts(v),before);assert.equal(v.service.revision,revision);assert.deepEqual(fs.readFileSync(cardFile),bytes);assert.equal(fs.statSync(state.document_path).mtimeMs,first);
