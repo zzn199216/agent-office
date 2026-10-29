@@ -66,7 +66,7 @@ class RoomService extends EventEmitter {
   }
   start() {
     const pulse=()=>{this.runtime.serviceHeartbeat(this.runtimeRef,{pid:process.pid});for(const memberId of new Set([...this.chat.connectedMembers,...this.chat.active.keys()])){const client=this.chat.clients.get(memberId);if(['claude-code','qwen-code','gemini-cli'].includes(this.chat.store.member(memberId).adapter)&&!client?.child)continue;this.runtime.workerHeartbeat(`native:${memberId}`,{member_id:memberId,pid:client?.child?.pid||null});this.runtime.heartbeat(memberId,{session_ref:`native:${memberId}`});}};
-    pulse();this.runtimeTimer=setInterval(()=>{pulse();this.desktop.pulse();},10000);this.runtimeTimer.unref();
+    pulse();this.runtimeTimer=setInterval(()=>{pulse();this.desktop.pulse();this.chat.pumpNotifications().catch(()=>{});},10000);this.runtimeTimer.unref();
     this.chat.start();
     this.desktop.start();
     this.team.start();

@@ -35,6 +35,40 @@ test('unverified historical native binding cannot shadow an existing configured 
   const message=v.post();await v.settle();assert.equal(v.posts.length,1);assert.equal(v.service.chat.store.message(message.id).status,'delivered');assert.deepEqual(v.service.desktop.row(v.member.id),original);assert.deepEqual(fs.readFileSync(v.entry.file),v.bytes);assert.equal(v.service.codex.calls.length,0);
 });
 
+test('expired contact never blocks a configured automatic notification or fabricates fresh presence',async t=>{
+  const v=setup(t);v.configure();
+  v.service.store.db.prepare("UPDATE runtime_member_presence SET last_seen='2026-01-01T00:00:00Z',lease_expires='2026-01-01T00:01:00Z' WHERE member_id=?").run(v.member.id);
+  assert.equal(v.service.runtime.memberState(v.member.id).presence,'stale');
+  const message=v.post();await v.settle();assert.equal(v.posts.length,1);
+  assert.equal(v.service.chat.store.message(message.id).status,'delivered');
+  assert.equal(v.service.runtime.memberState(v.member.id).presence,'stale','dispatch receipt is not an agent heartbeat');
+});
+
+test('startup and later availability automatically dispatch only previously unclaimed queued notifications',async t=>{
+  const v=setup(t),message=v.post();await v.settle();assert.equal(v.posts.length,0);
+  v.configure();v.service.chat.start();await v.settle();
+  assert.equal(v.posts.length,1);assert.equal(v.service.chat.store.message(message.id).status,'delivered');
+  await v.service.chat.pumpNotifications();assert.equal(v.posts.length,1,'accepted notification cannot be repeated');
+  v.service.chat.store.updateMember(v.member.id,{status:'awaiting_handshake'});
+  const waiting=v.post();await v.service.chat.pumpNotifications();assert.equal(v.posts.length,1);
+  v.service.chat.store.updateMember(v.member.id,{status:'ready'});
+  await v.service.chat.pumpNotifications();assert.equal(v.posts.length,2);assert.equal(v.service.chat.store.message(waiting.id).status,'delivered');
+  assert.deepEqual(fs.readFileSync(v.entry.file),v.bytes,'existing entry is unchanged');
+});
+
+test('notification recovery respects manual mode, revocation, native ownership and uncertain dispatch',async t=>{
+  const v=setup(t);v.configure();const chat=v.service.chat;
+  chat.store.updateMember(v.member.id,{config:{...chat.store.member(v.member.id).config,desktop_delivery_mode:'manual_mcp'}});
+  const manual=v.post();await chat.pumpNotifications();assert.equal(v.posts.length,0);
+  chat.store.updateMember(v.member.id,{config:{...chat.store.member(v.member.id).config,desktop_delivery_mode:'native_desktop'}});
+  assert.equal(chat.store.claimNotification(manual.id),true);chat.store.finishNotification(manual.id,'uncertain','fixture acknowledgement lost');
+  const native=chat.store.post({room_id:v.room.id,sender_id:'user',to_member_id:v.member.id,text:'already dispatched natively',idempotency_key:'native'});
+  v.service.store.db.prepare('INSERT INTO desktop_message_runs(message_id,member_id,native_request_id,status,created,updated) VALUES(?,?,?,?,?,?)').run(native.id,v.member.id,'native-request','completed',now(),now());
+  await chat.pumpNotifications();assert.equal(v.posts.length,0);
+  v.service.entry.revoke(v.member.id,v.room.id);v.post();await chat.pumpNotifications();assert.equal(v.posts.length,0);
+  assert.equal(chat.store.notification(manual.id).status,'uncertain');
+});
+
 test('usable native transport remains preferred and unsupported bindings without notification remain manual',async t=>{
   const v=setup(t);v.legacyNative();let capability=v.service.chat.deliveryCapability(v.member.id);assert.equal(capability.connection_method,'manual');assert.equal(v.service.chat.publicMember(v.service.chat.store.member(v.member.id)).manual_wake,true);
   v.configure();v.service.desktop.options.driverFactory=()=>assert.fail('fixture never constructs a real driver');v.service.desktop.clients.set(v.member.id,{closed:false,close(){}});v.service.desktop.saveSession(v.member.id,{state:'connected',error:null});

@@ -360,7 +360,18 @@ class ChatManager {
     try{const response=await this.service.fetch(credential.url,{method:'POST',headers:{Authorization:`Bearer ${credential.key}`,'Content-Type':'application/json'},body:JSON.stringify({event:'agentroom.chat_message',room_id:message.room_id,member_id:m.id,message_id:message.id,local_command:{command:own.command,args:[...own.args,'chat-inbox','--room',message.room_id,'--member',m.id,'--data-dir',this.service.store.dir]},message:'按已授权的聊天室桥接规则，在 Windows 本机领取此消息。收件结果中的 connection_assists 是 AO 控制器对原消息的接入进度，只按这些实际步骤答复，不另行请求管理工具或重复接入。确认来源和原 Grok 群上下文后处理及回报。Webhook 受理不代表已经回复到原群。'}),signal:AbortSignal.any([abort.signal,AbortSignal.timeout(25000)]),redirect:'error'});let body={};try{body=await response.json();}catch{}if(!response.ok||body.success!==true)throw new RoomError('Webhook 未明确受理，请核对例程；没有自动重发。',502,'outcome_uncertain');if(!this.roomDeleted(message.room_id))this.store.finishNotification(message.id,'accepted');}
     catch(e){if(!this.roomDeleted(message.room_id))this.store.finishNotification(message.id,'uncertain',readableError(e).replaceAll(credential.key,'[凭据已隐藏]').replaceAll(credential.url,'[地址已隐藏]'));}finally{this.notifications.delete(message.id);try{this.changed();}finally{resolveWork();}}
   }
-  start(){for(const m of this.store.members())if(this.adapter(m).capabilities.includes('native-session'))this.pump(m.id).catch(()=>{});}
+  async pumpNotifications(){
+    if(this.closing)return;
+    // Resume only notifications that never claimed an external dispatch.
+    // Accepted/uncertain notifications and native executions retain their
+    // original delivery identity and are never replayed through this path.
+    const queued=this.store.db.prepare("SELECT m.* FROM chat_messages m WHERE m.status='queued' AND m.to_member_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM chat_notifications n WHERE n.message_id=m.id) AND NOT EXISTS (SELECT 1 FROM desktop_message_runs d WHERE d.message_id=m.id) ORDER BY m.seq").all();
+    await Promise.allSettled(queued.filter(message=>{
+      const capability=this.deliveryCapability(message.to_member_id);
+      return capability.connection_method==='configured_notification'&&capability.notification_eligible;
+    }).map(message=>this.notifyMailbox(message)));
+  }
+  start(){for(const m of this.store.members())if(this.adapter(m).capabilities.includes('native-session'))this.pump(m.id).catch(()=>{});this.pumpNotifications().catch(()=>{});}
   exportRooms(){
     let failed=false;const pending=this.store.pendingExports();if(!pending.length){this.exportError=null;return;}
     const names=new Map(this.store.members().map(m=>[m.id,m.name]));
