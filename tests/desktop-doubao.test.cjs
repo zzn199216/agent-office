@@ -233,7 +233,7 @@ test('public preparation fixes all eight pins and rejects source substitution be
   assert.throws(()=>buildDoubaoNativeRegistration([{id:'unknown',source:'x'}]),{code:'desktop_adapter_unsupported'});
 });
 
-for(const [profileId,file] of [['current','doubao-native-2.33.3.json'],['currentRefresh','doubao-native-2.33.3-refresh.json']])test(`${profileId} Doubao profile pins reach the native bridge and reject an unknown or mixed profile`,async()=>{
+for(const [profileId,file] of [['current','doubao-native-2.33.3.json'],['currentRefresh','doubao-native-2.33.3-refresh.json'],['desktop2335','doubao-native-2.33.5.json']])test(`${profileId} Doubao profile pins reach the native bridge and reject an unknown or mixed profile`,async()=>{
   const q=require('../src/'+file);
   const state={contractVersion:q.contractVersion,runtimeGlobal:q.runtimeGlobal,factorySha256:q.factorySha256};
   let calls=0;

@@ -70,7 +70,7 @@ function present(snapshot = {}, context = {}) {
       '在「我的技能 → 连接器」启用 Agent Office，查看「包含的操作」是否有 agentroom_chat_rooms。',
       '点「在对话中试用」，或新建工作任务选择「本地电脑」，在输入框的「连接器」菜单勾选 Agent Office，再发送验证语句。'
     ]})
-    : result('waiting', headline, button('copy_config', '复制配置'), button('copy_handshake_prompt', '复制那句话'));
+    : result('waiting', headline, button('copy_setup', '复制接入提示词'));
 
   // Protection and repair states come first: they override any readiness.
   if (stage === 'connection_repair_required' || CODEX_REPAIR_CODES.has(code) || actionKind === 'connection_repair')

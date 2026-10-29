@@ -62,6 +62,19 @@ test('opening the picker requests one quiet inventory scan and never onboards a 
   state.context.openSecretaryConnect();
   assert.equal(state.calls.length, 1);
 });
+
+test('an undetected MCP client can prepare its prompt without promising an automatic install',()=>{
+  const state=fixture([
+    {id:'claude-desktop',name:'Claude desktop',installed:false,support:'needs_setup',capabilities:{mcp_prepare:true}},
+    {id:'unsupported',name:'Unsupported',installed:false,support:'unsupported',capabilities:{mcp_prepare:true}}
+  ]);
+  state.context.renderLaunchCandidates();const html=state.$('launch-candidates').innerHTML;
+  assert.match(html,/data-onboarding-provider="claude-desktop"/);
+  assert.match(html,/可先复制接入提示词/);assert.doesNotMatch(html,/接入时会自动安装/);
+  assert.match(html,/data-onboarding-requirements="unsupported"/);
+  assert.equal(state.context.onboardingPromptOnly(state.context.launchCandidates[0]),true);
+  assert.equal(state.calls.length,0);
+});
 test('an AI already connected in this room is marked as such and is not recommended again', () => {
   const state = fixture([{id:'codex',name:'Codex',installed:true,capabilities:{automatic_launch:true}},{id:'claude-code',name:'Claude Code',installed:true,capabilities:{automatic_launch:true}}]);
   state.context.onboardingJobs.set('job',{id:'job',provider:'codex',room_id:'room',status:'ready',stage:'ready_automatic',ready_for_office:true,can_wake:true});

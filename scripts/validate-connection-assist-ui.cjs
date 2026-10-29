@@ -15,6 +15,7 @@ const {playwright,outputDirectory}=require('./browser-validation.cjs');
     class Actor extends FakeCodex{constructor(member){super();this.member=member;}async run(input){const thread=input.discussion.thread_id||id();input.onBinding('bound',thread);input.onTurn(id());await replyGate;return {threadId:thread,turnId:id(),answer:'请在这条回复里的接入卡片继续操作，连接状态会实时更新。'};}}
     const candidates=['doubao','qwen-desktop','claude-desktop'].map(provider=>({id:provider,provider,name:provider==='doubao'?'豆包':provider==='claude-desktop'?'Claude':'Qwen',adapter:'mailbox',installed:true,capabilities:{mcp_prepare:true}}));
     candidates.push({id:'unsupported',name:'Unsupported AI',installed:true,support:'unsupported',capabilities:{}});
+    candidates.push({id:'cherry-studio',provider:'cherry-studio',name:'Cherry Studio',adapter:'mailbox',installed:false,support:'needs_setup',capabilities:{mcp_prepare:true}});
     service=new RoomService(f.data,{codex:new FakeCodex(),vault:new FakeVault(),fetch:async()=>{throw Error('No external requests');},chat:{clientFactory:member=>new Actor(member)},launch:{discover:()=>({candidates})}});clearInterval(service.team.timer);
     const project=service.addProject({name:'接入流程隔离验收',path:f.project}),room=service.chat.addRoom({project_id:project.id,title:'聊天接入'}),other=service.chat.addRoom({project_id:project.id,title:'其他房间'}),actor=service.chat.addMember({name:'Codex',adapter:'codex'});
     service.chat.join(room.id,actor.id);service.chat.store.updateMember(actor.id,{status:'ready',verified_at:now()});
@@ -77,10 +78,12 @@ const {playwright,outputDirectory}=require('./browser-validation.cjs');
     assert.equal(service.chat.store.member(originalDoubao).config.desktop_delivery_mode,'manual_mcp');
     proof.checks.doubao_chat_prompt_fallback_preserves_member=true;
     await page.screenshot({path:path.join(out,'doubao-prompt-fallback.png')});
-    // Copy config returns this member's real local MCP address.
-    await card.locator('[data-conn-op="copy_config"]').first().click();await page.waitForFunction(base=>window.fixtureClipboard?.startsWith(base+'/mcp/')||window.fixtureClipboard?.includes('\"url\": \"'+base+'/mcp/'),base);
-    assert.match(await page.evaluate(()=>window.fixtureClipboard),new RegExp(base.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'/mcp/'));proof.checks.copy_config=true;
-    await card.locator('[data-conn-op="copy_handshake_prompt"]').first().click();await page.waitForFunction(()=>/agentroom_chat_inbox/.test(window.fixtureClipboard||''));proof.checks.copy_sentence=true;
+    // Other MCP clients also receive configuration and verification in one prompt.
+    const qwenPanel=card.locator('.connection-panel').filter({hasText:'Qwen'});
+    assert.equal(await qwenPanel.locator('[data-conn-op]').count(),1);
+    await qwenPanel.locator('[data-conn-op="copy_setup"]').click();
+    await page.waitForFunction(base=>window.fixtureClipboard?.includes(base+'/mcp/')&&window.fixtureClipboard?.includes('qwen-desktop'),base);
+    assert.match(await page.evaluate(()=>window.fixtureClipboard),/agentroom_chat_inbox/);proof.checks.qwen_complete_setup_prompt=true;
     // Narrow screens do not scroll sideways.
     await page.setViewportSize({width:390,height:844});await card.scrollIntoViewIfNeeded();assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));await page.screenshot({path:path.join(out,'connection-card-mobile.png')});proof.checks.mobile_no_overflow=true;
     await page.setViewportSize({width:1440,height:1000});
@@ -125,6 +128,18 @@ const {playwright,outputDirectory}=require('./browser-validation.cjs');
     await page.locator('#mirror-dialog .close-dialog').click();await page.setViewportSize({width:1440,height:1000});
     // Another room never shows this room's cards.
     await page.locator(`[data-room="${other.id}"]`).click();await page.waitForFunction(()=>document.querySelectorAll('.ao-system-card').length===0);proof.checks.other_room_isolated=true;
+    await page.locator('#professional-toggle').click();
+    await page.locator('#secretary-connect-candidates .launch-other-candidates > summary').click();
+    await page.locator('#secretary-connect-candidates [data-onboarding-provider="cherry-studio"]').click();
+    const promptPanel=page.locator('#secretary-connect-progress');
+    await promptPanel.getByRole('button',{name:'复制接入提示词',exact:true}).click();
+    await page.waitForFunction(()=>window.fixtureClipboard?.includes('cherry-studio'));
+    const installPrompt=await page.evaluate(()=>window.fixtureClipboard);
+    assert.match(installPrompt,/mcpServers/);assert.match(installPrompt,/保留其他连接/);assert.match(installPrompt,/agentroom_chat_rooms/);assert.match(installPrompt,/agentroom_chat_inbox/);
+    const cherry=service.store.db.prepare("SELECT * FROM onboarding_runs WHERE provider='cherry-studio'").get();
+    assert.equal(cherry.install_client,0);assert.equal(cherry.install_runtime,0);assert.equal(cherry.connection_method,'manual_mcp');
+    assert.equal(service.onboarding.state({run_id:cherry.id}).ready_for_office,false);
+    await page.screenshot({path:path.join(out,'undetected-client-prompt.png')});proof.checks.undetected_client_gets_install_prompt=true;
     assert.deepEqual(errors,[]);proof.ok=true;
   }catch(error){proof.error=error.stack;process.exitCode=1;if(page)await page.screenshot({path:path.join(out,'failure.png')}).catch(()=>{});}
   finally{releaseSetup?.();await browser?.close();await server?.close();await service?.close();proof.page_errors=errors;fs.writeFileSync(path.join(out,'result.json'),JSON.stringify(proof,null,2));const owned=path.resolve(f.root);assert.equal(path.dirname(owned),path.resolve(os.tmpdir()));assert.match(path.basename(owned),/^agentroom-test-/);fs.rmSync(owned,{recursive:true,force:true});console.log(JSON.stringify(proof));}

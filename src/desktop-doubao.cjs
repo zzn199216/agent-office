@@ -5,8 +5,8 @@ const {createHash} = require('node:crypto');
 
 const DOUBAO_NATIVE_CONTRACT = Object.freeze({
   version:'doubao-desktop-native-v1',
-  adapterRevision:'doubao-native-adapter-v4',
-  researchedProductVersion:'2.33.3',
+  adapterRevision:'doubao-native-adapter-v5',
+  researchedProductVersion:'2.33.5',
   runtimeGlobals:Object.freeze(['@flow-web/desktop:stable','webpackChunkflow_web_extension']),
 });
 
@@ -33,7 +33,7 @@ const DOUBAO_NATIVE_PREPARATION = Object.freeze({
   externalModuleIds:Object.freeze([71197,71834,98027,135193,201183,201753,246058,253349,325457,367173,368415,376999,378437,386196,456462,460932,470476,540864,542525,544349,557526,600919,609347,632649,656207,687323,708078,718587,737937,744331,761336,788925,834523,860268,894119,879807,521109,196183,491575,37476,198837,17344]),
 });
 
-const DOUBAO_NATIVE_PROFILES = Object.freeze({legacy:DOUBAO_NATIVE_PREPARATION,current:require('./doubao-native-2.33.3.json'),currentRefresh:require('./doubao-native-2.33.3-refresh.json')});
+const DOUBAO_NATIVE_PROFILES = Object.freeze({legacy:DOUBAO_NATIVE_PREPARATION,current:require('./doubao-native-2.33.3.json'),currentRefresh:require('./doubao-native-2.33.3-refresh.json'),desktop2335:require('./doubao-native-2.33.5.json')});
 
 // Empty Webpack chunks capture only the runtime; no business factory is called.
 // The cache keeps each runtime namespace separate and rejects replaced arrays.
@@ -234,11 +234,11 @@ function createDoubaoNativeBridge(req, options = {}, ownership = new Map()) {
     const entries = Object.entries(value).sort(([a],[b])=>a.localeCompare(b));
     // Exact qualified cold/warm factories across the supported resource builds.
     // This serialized guard must accept every profile's reviewed variants.
-    const infoVariants=['2da587c4e01a8b7b5bcbaea93f8172fab4d3b7f0e9a45e00d58f4160fecd984f','b6f5b2318a59a2f4615d09b95c4ca401ec6af6070b0668cce9c199313bb248f9','c4175cb332af94f157921617461b139eba187f661b4b6f52dc534614cda07af8','de75e1ece83088351392ba5a4eb4b318a5d109485c8a04b78522cf8f1f72b30f','ac1d1aacc61583f1b00a3947603fdbfd66392f1c260e318f8fd2731fbae2f064'];
+    const qualifiedVariants={"messages":["fc912cc073748930c12769790b2fcbf446d9455234c772e9add37bd38152d564","ebea3816a54237e63a7468250edaebb7a38cd97365acd3564b50a8ef84f0bf92"],"text":["e55b34a0d06ccbac35a8bfd0689b7a6f2912ad41c21235bf8a587725c096ae95","a1e81a598ed812dd83e8f804ac97607cafc48e458dd5d0a478aac8ba81ebf5f9"],"messageStore":["5b02fce0f300fe13533835e8a12aeaa64a675b9252c4cc04fd65141d9adafb39","77ffd551f127e47cdc9915eba89145bb4c78cd4272d535cb28d74be02486b5c4"],"conversationInfo":["2da587c4e01a8b7b5bcbaea93f8172fab4d3b7f0e9a45e00d58f4160fecd984f","b6f5b2318a59a2f4615d09b95c4ca401ec6af6070b0668cce9c199313bb248f9","c4175cb332af94f157921617461b139eba187f661b4b6f52dc534614cda07af8","de75e1ece83088351392ba5a4eb4b318a5d109485c8a04b78522cf8f1f72b30f","ac1d1aacc61583f1b00a3947603fdbfd66392f1c260e318f8fd2731fbae2f064","1d2dcd3a5400e3b4b78d0b3a82a16dd527c17d92c2c021fe667591b2594bfe72"],"complete":["8b42239af0c66f8b9f41e636ff10510d25bc952c54c631ac5221ac784bff3cb9","c1f45356f4346dca4d10dc15d5cb0bbb5ae3fb4628778ae283d56967bdee7820"],"identity":["e99cd157a71e0cc55a5fdffa0a6af37b5c54f79d65d14bc25016ca6af8cd5214","f560b390032dcd7d68a85ba3ddc26257d8fed842df580e17243ef6f84356f932"]};
     return Object.fromEntries(entries.map(([kind,expected])=>{
       if(!Object.hasOwn(modules,kind))throw Error('DOUBAO_NATIVE_INVALID_SOURCE_IDENTITY');
       if(Array.isArray(expected)){
-        if(kind!=='conversationInfo'||!expected.length||expected.length>3||expected.some(hash=>!infoVariants.includes(hash)))throw Error('DOUBAO_NATIVE_INVALID_SOURCE_IDENTITY');
+        if(!expected.length||!qualifiedVariants[kind]||expected.length>qualifiedVariants[kind].length||expected.some(hash=>!qualifiedVariants[kind].includes(hash)))throw Error('DOUBAO_NATIVE_INVALID_SOURCE_IDENTITY');
         return [kind,[...new Set(expected)].sort()];
       }
       if(typeof expected!=='string'||!/^[a-f0-9]{64}$/.test(expected))throw Error('DOUBAO_NATIVE_INVALID_SOURCE_IDENTITY');
@@ -464,11 +464,11 @@ function createDoubaoNativeBridge(req, options = {}, ownership = new Map()) {
     // A successful stop API acknowledgement is not a terminal reply record.
     return query(requestId);
   }
-  function inspect() { return {...summary(),adapterRevision:'doubao-native-adapter-v4',
+  function inspect() { return {...summary(),adapterRevision:'doubao-native-adapter-v5',
     moduleIds:Object.fromEntries(Object.entries(modules).map(([kind,value])=>[kind,value.id])),requests:turns.size,
     pendingRequestIds:[...turns.values()].filter(t=>!terminal.has(t.status)).map(t=>t.requestId),
     unsettledRequestIds:[...turns.values()].filter(t=>!t.settled).map(t=>t.requestId)}; }
-  return {adapterRevision:'doubao-native-adapter-v4',runtimeGlobal:options.chunkName||null,initialize,createPersonConversation,send,snapshot:query,restore,cancel,inspect,assertSourceIdentity,verifySourceIdentity:verifyFactories};
+  return {adapterRevision:'doubao-native-adapter-v5',runtimeGlobal:options.chunkName||null,initialize,createPersonConversation,send,snapshot:query,restore,cancel,inspect,assertSourceIdentity,verifySourceIdentity:verifyFactories};
 }
 
 function buildDoubaoNativeBootstrap(options = {}) {

@@ -49,6 +49,15 @@ test('unknown and unverified members retain an empty station until current onlin
   const observed=scene.describe({participants:[readyUnknown],online:true,runtime:{members:[{id:readyUnknown.id,presence:'online',lease_expires:'2026-10-13T08:01:00Z'}]}},now);
   assert.equal(observed.members[0].occupied,true);
 });
+
+test('expired manual MCP contact explains the next step without fabricating presence or consuming queued work',()=>{
+  const manual={...member,adapter:'mailbox',provider:'claude-desktop',manual_wake:true,verified_at:'2026-10-13T07:00:00Z'};
+  const input={participants:[manual],online:true,runtime:{members:[{id:member.id,presence:'online',lease_expires:'2026-10-13T07:59:00Z'}]},messages:[{id:'waiting',sender_id:'user',to_member_id:member.id,status:'queued'}]};
+  const entry=scene.describe(input,now).members[0];assert.equal(entry.presence.label,'需在客户端查看消息');
+  assert.equal(entry.presence.status,'stale');assert.equal(entry.occupied,false);assert.equal(entry.waiting,true);assert.equal(entry.processing,false);
+  assert.equal(scene.describe({...input,online:false},now).members[0].presence.label,'服务已关闭');
+  assert.equal(scene.describe({...input,runtime:online},now).members[0].presence.status,'online');
+});
 test('queued messages and an open client alone do not animate real work',()=>{
   const input={roomId:'room-a',participants:[member],runtime:online,online:true,messages:[{id:'question',sender_id:'user',to_member_id:member.id,status:'queued',text:'问题'}]};
   const waiting=scene.describe(input,now).members[0];assert.equal(waiting.waiting,true);assert.equal(waiting.processing,false);

@@ -194,7 +194,9 @@
     if (worker && status !== 'online') status = 'worker_online';
     if (!(status in LABELS)) status = 'unknown';
     if (!online && ['online','worker_online'].includes(status)) status = 'stale';
-    return {status,label: online ? LABELS[status] : '服务已关闭',worker: online && worker,lastSeen:member.last_seen || observed.last_seen || null};
+    const manual = member.verified_at && (member.manual_wake === true || member.connection_method === 'manual_mcp' || member.response_mode === 'manual_mailbox');
+    const label = manual && ['stale','unknown'].includes(status) && !worker ? '需在客户端查看消息' : LABELS[status];
+    return {status,label: online ? label : '服务已关闭',worker: online && worker,lastSeen:member.last_seen || observed.last_seen || null};
   }
   function roomMessages(input, roomId) {
     const messages = Array.isArray(input.messages) ? input.messages : [];

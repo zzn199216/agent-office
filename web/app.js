@@ -151,7 +151,8 @@ function showOnboardingRequirements(candidate) {
   $('onboarding-requirements-docs').href = docs || '#'; $('onboarding-requirements-docs').classList.toggle('hidden',!docs); $('onboarding-requirements-dialog').showModal();
 }
 function onboardingCanInstall(candidate) { return candidate.capabilities?.runtime_install === true || candidate.capabilities?.runtime_installable === true || candidate.installable === true || candidate.runtime_installable === true; }
-function onboardingSelectable(candidate) { return launchSelectable(candidate) || (candidate.support !== 'unsupported' && onboardingCanInstall(candidate)); }
+function onboardingPromptOnly(candidate) { return !candidate.installed && !onboardingCanInstall(candidate) && candidate.capabilities?.mcp_prepare === true; }
+function onboardingSelectable(candidate) { return launchSelectable(candidate) || (candidate.support !== 'unsupported' && (onboardingCanInstall(candidate) || onboardingPromptOnly(candidate))); }
 function onboardingRunning(job) { return job && !onboardingRepairRequired(job) && !onboardingRecheckPending(job) && ['running','queued','pending','detecting','installing','configuring','starting','handshaking','waiting'].includes(job.status); }
 function onboardingRepairRequired(job){return job?.stage==='connection_repair_required'||['codex_auth_ownership_required','codex_personal_auth_owner_conflict'].includes(job?.error_code);}
 function onboardingRecheckPending(job){return job?.stage==='connection_recheck_available';}
@@ -184,7 +185,7 @@ function renderLaunchCandidates() {
   const needsSecretary = !roomId || typeof currentSecretary !== 'function' || !currentSecretary().member_id;
   const renderCandidate = candidate => {
     const provider = launchProvider(candidate), name = candidate.name || provider, selectable = launchSelectable(candidate), canJoin = onboardingSelectable(candidate), mode = onboardingMode(candidate), job = onboardingForProvider(provider), feedback=typeof onboardingFeedback==='undefined'?null:onboardingFeedback.get(job?.id),pending = onboardingStarting.has(provider) || onboardingRunning(job) || feedback?.pending;
-    const availability = onboardingRepairRequired(job)?'连接已暂停，避免影响你的登录':onboardingRecheckPending(job)?'可以用已有登录重新连接':job?.stage==='awaiting_auth'?provider==='codex'?'需要先在 Codex 里登录':`需要先登录 ${name}`:onboardingOfficeReady(job)?job.can_wake?'已连接，有消息会自动处理':'已连接，在它自己的窗口里查看消息':pending?'正在连接…':job?.error?'上次没有连上，原因见下方':!canJoin ? candidate.support === 'unsupported' ? '暂时不能接入' : !candidate.installed ? '需要先安装' : '暂时不能接入' : !candidate.installed ? '尚未安装，接入时会自动安装' : candidate.running ? '正在运行' : '已安装';
+    const availability = onboardingRepairRequired(job)?'连接已暂停，避免影响你的登录':onboardingRecheckPending(job)?'可以用已有登录重新连接':job?.stage==='awaiting_auth'?provider==='codex'?'需要先在 Codex 里登录':`需要先登录 ${name}`:onboardingOfficeReady(job)?job.can_wake?'已连接，有消息会自动处理':'已连接，在它自己的窗口里查看消息':pending?'正在连接…':job?.error?'上次没有连上，原因见下方':!canJoin ? candidate.support === 'unsupported' ? '暂时不能接入' : !candidate.installed ? '需要先安装' : '暂时不能接入' : !candidate.installed ? onboardingPromptOnly(candidate) ? '可先复制接入提示词，按步骤安装和连接' : '尚未安装，接入时会自动安装' : candidate.running ? '正在运行' : '已安装';
     const guidedGrok=provider==='grok-bot'&&candidate.capabilities?.native_direct_available!==true,native = nativeDesktopProvider(candidate)&&!guidedGrok, label = onboardingRepairRequired(job)?'查看处理办法':onboardingRecheckPending(job)?'重新连接':onboardingRunning(job)?'查看进度':feedback?.pending&&feedback.operation==='login_client'?'正在打开…':pending ? '正在接入…' : inRoom(candidate) ? '已在房间里' : onboardingOfficeReady(job) ? '进入办公室' : job?.stage==='awaiting_auth'?provider==='codex'?'查看登录状态':'继续登录':job?.status === 'needs_action' ? '继续接入' : '接入';
     const description = mode === 'managed' ? `在后台工作，有消息会自动处理，可以当秘书。${['qwen-code','gemini-cli'].includes(provider) ? '第一次需要填写它的 API 账号。' : ''}` : guidedGrok || mode === 'bridge' ? `复制一段说明发给你的 ${name}。` : native ? `用你电脑上的 ${name}，有消息会自动处理。` : candidate.capabilities?.mcp_prepare ? `在 ${name} 里加一个连接，在它的窗口里查看消息。` : '';
     const badge = provider === recommendedProvider && canJoin ? `<span class="launch-recommend">${needsSecretary ? '推荐当秘书' : '推荐'}</span>` : '';
@@ -403,7 +404,7 @@ async function runOnboardingOperation(job,operation){
     if(!response)return;
     current=adoptOnboardingJob(response,job,attempt);
     if(operation==='login_client'&&response.action?.launched!==true)throw Error('登录页没有打开，请重试。');
-    const message=response.action?.instruction||(operation==='login_client'?'登录页已打开。登录完成后点「登录后重新检查」。':operation==='manual_mcp'?(['doubao','claude-desktop'].includes(job.provider)?`已切换到手动连接。点「${job.provider==='doubao'?'复制接入提示词':'复制接入内容'}」继续。`:'已切换到 MCP。点「复制配置」加到客户端，再点「复制那句话」发给它。'):'正在核对连接…');
+    const message=response.action?.instruction||(operation==='login_client'?'登录页已打开。登录完成后点「登录后重新检查」。':operation==='manual_mcp'?(['doubao','claude-desktop'].includes(job.provider)?`已切换到手动连接。点「${job.provider==='doubao'?'复制接入提示词':'复制接入内容'}」继续。`:'已切换到手动连接。点「复制接入提示词」继续。'):'正在核对连接…');
     setOnboardingFeedback(current,message,{operation});
     returnSecretaryAfterOnboarding();action(refresh);action(refreshOnboarding);return current;
   }catch(error){setOnboardingFeedback(current,error.message||'这一步未完成，请检查当前接入进度。',{error:true,operation});throw error;}
@@ -507,7 +508,7 @@ async function startOnboarding(provider) {
   if (onboardingRunning(current) || current?.status === 'needs_action' || onboardingReady(current)) { if(flow)flow.jobId=current.id;if(secretaryConnecting) secretaryConnectJob = current.id; renderLaunch(); onboardingProgressTarget().scrollIntoView({behavior:'smooth',block:'start'}); await checkOnboarding(current.id,{retry:false}); return; }
   onboardingStarting.add(provider); launchError = ''; renderLaunch();
   try {
-    const job = onboardingView(await api('/api/onboarding/start',{provider,...roomId && !legacyId ? {room_id:roomId} : {project_id:project.id},mode:onboardingMode(candidate),install_client:true,...!candidate.installed && onboardingCanInstall(candidate) ? {install_runtime:true} : {},...$('launch-goal').value.trim() ? {goal:$('launch-goal').value.trim()} : {}}));
+    const job = onboardingView(await api('/api/onboarding/start',{provider,...roomId && !legacyId ? {room_id:roomId} : {project_id:project.id},mode:onboardingMode(candidate),install_client:!onboardingPromptOnly(candidate),...onboardingPromptOnly(candidate)?{connection_method:'manual_mcp'}:{},...!candidate.installed && onboardingCanInstall(candidate) ? {install_runtime:true} : {},...$('launch-goal').value.trim() ? {goal:$('launch-goal').value.trim()} : {}}));
     if (!job?.id) throw new Error('尚未返回接入记录。请检查进度，避免重复发起。'); onboardingJobs.set(job.id,job);
     if(flow && secretaryNavigation!==flow)return;
     const unchanged=roomId===selectedRoom && projectId===selectedProject && legacyId===selectedLegacy;
