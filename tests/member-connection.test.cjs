@@ -44,6 +44,11 @@ test('ready connections are connected or auto, and only wake-capable desktop cli
   assert.equal(present({provider:'claude-desktop',status:'ready',stage:'ready_mailbox',local_verified:true}).secondary,null);
 });
 
+test('a configured Grok notification does not tell the person to wake its window or claim a verified automatic reply',()=>{
+  const view=present({provider:'grok-bot',status:'ready',stage:'ready_mailbox',local_verified:true,can_wake:false,can_notify:true});
+  assert.equal(view.state,'connected');assert.match(view.headline,/自动通知/);assert.doesNotMatch(view.headline,/去.*看一下|自动处理/);assert.equal(view.primary,null);assert.equal(view.secondary,null);
+});
+
 test('the four tested dead ends each get a direct action',()=>{
   // Qwen/Doubao not reachable: one button that opens and connects.
   const qwen=present({provider:'qwen-desktop',status:'needs_action',stage:'awaiting_native_desktop',next_actions:[{operation:'open_native_client'},{operation:'native_desktop_connect'},{operation:'manual_mcp',target_member_id:'m1'}]});

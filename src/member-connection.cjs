@@ -81,6 +81,7 @@ function present(snapshot = {}, context = {}) {
   if (ready) {
     const canWake = snapshot.can_wake === true;
     if (canWake) return result('auto', `${name} 已连接，有消息会自动处理`);
+    if (snapshot.can_notify === true) return result('connected', `${name} 已连接，有消息会自动通知它`);
     const secondary = WAKE_CAPABLE.has(provider) ? button('enable_wake', '开启自动唤醒') : null;
     return result('connected', `${name} 已连接，有人找它时去 ${name} 里看一下`, null, secondary);
   }

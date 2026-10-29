@@ -438,6 +438,7 @@ class OnboardingManager{
     // A reused person joins in run(). Snapshotting the newly-created attempt
     // must not inspect a room-scoped entry before that membership exists.
     if(!this.service.chat.store.joined(row.room_id,base.member_id))return {...base,local_verified:false,can_wake:false,ready_for_office:false};
+    base.can_notify=this.service.chat.deliveryCapability(base.member_id).can_notify===true;
     if(base.can_wake&&!base.connection_evidence){const evidence=this.service.runtime.memberState(base.member_id).connection_evidence;Object.assign(base,{connection_evidence:evidence,protocol_verified:evidence?.protocol_verified===true,model_reply_verified:evidence?.model_reply_verified===true,automatic_reply_verified:evidence?.automatic_reply_verified===true,readiness:evidence?.verification_level||'unverified'});}
     if(method==='native_desktop'){
       const connected=this.service.desktop?.canWake(base.member_id)===true,native=this.service.desktop?.state(base.member_id);

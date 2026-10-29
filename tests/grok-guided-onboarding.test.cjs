@@ -44,6 +44,18 @@ test('Grok native connection rejects with an actionable typed reason before netw
   assert.equal(result.response.status,409);assert.equal(result.value.code,'desktop_adapter_unverified');assert.match(result.value.error,/复制连接说明/);assert.doesNotMatch(result.value.error,/fetch failed/);
   assert.equal(v.calls.fetch,0);assert.equal(v.service.desktop.row(member.id),null);assert.deepEqual(v.credentials(),before);assert.equal(v.service.revision,revision);
 });
+
+test('Grok onboarding exposes its configured notification route instead of prescribing manual wake',async t=>{
+  const v=await setup(t),member=v.rawMember();v.service.chat.prepareGrokHandoff(member.id,v.room.id);
+  const entry=v.service.entry.describePrimary(member.id,v.room.id);v.service.entry.accept(JSON.parse(fs.readFileSync(entry.file)));
+  v.service.chat.memberVaults.set(member.id,{stamp:'missing',vault:{status:()=>({configured:true,usable:true})}});
+  v.service.chat.store.updateMember(member.id,{config:{...v.service.chat.store.member(member.id).config,webhook_enabled:true}});
+  const started=v.service.onboarding.start({provider:'grok-bot',room_id:v.room.id});await v.finish();
+  v.service.entry.accept(JSON.parse(fs.readFileSync(entry.file)));
+  const state=v.service.onboarding.state({run_id:started.id});
+  assert.equal(state.can_notify,true);assert.equal(state.can_wake,false);assert.equal(state.ready_for_office,true);
+  assert.match(state.presentation.headline,/自动通知/);assert.doesNotMatch(state.presentation.headline,/去.*看一下/);assert.equal(v.calls.fetch,0,'status checks never send a notification');
+});
 test('explicit injected Grok native drivers remain supported without advertising an unverified default',async t=>{
   let initializations=0;const v=await setup(t,{desktop:{serverName:null,driverFactory:row=>({initialize:async()=>{initializations++;return {detached:true,nativeChatId:'fixture-native-'+row.member_id};},close(){}})}}),member=v.rawMember();
   await v.service.desktop.connect({member_id:member.id,room_id:v.room.id,provider:'grok-bot'});

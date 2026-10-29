@@ -18,7 +18,7 @@ function setup(t,options={}){
     CREATE TABLE chat_resume_credentials(id TEXT PRIMARY KEY,room_id TEXT,member_id TEXT,status TEXT,last_seen TEXT);`);
   const room={id:id(),title:'测试协作群'};db.prepare('INSERT INTO chat_rooms VALUES(?,?)').run(room.id,room.title);
   const members=new Map(),calls=[],runtimes=[],capabilities=new Map();let changes=0,scans=0;
-  const service={store:{db,dir:data},changed(){changes++;},chat:{store:{
+  const service={store:{db,dir:data},changed(){changes++;},chat:{deliveryCapability(){return {can_notify:false};},store:{
     room(value){if(value!==room.id)throw new RoomError('房间不存在。',404);return room;},
     member(value){const member=members.get(value);if(!member)throw new RoomError('成员不存在。',404);return member;},joined(){return true;}
   }},runtime:{memberState(memberId){return {can_wake:capabilities.get(memberId)===true};}}};

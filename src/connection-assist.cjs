@@ -146,16 +146,16 @@ class ConnectionAssist{
     const protectedConnection=state?.stage==='connection_repair_required'||['codex_auth_ownership_required','codex_personal_auth_owner_conflict'].includes(state?.error_code),recheck=state?.stage==='connection_recheck_available';
     const runId=state?.run_id||state?.id||row.run_id,accepted=!protectedConnection&&!recheck&&!!runId&&state?.status==='ready'&&state.ready_for_office===true&&state.local_verified===true;
     const status=state?.status==='ready'&&!accepted?'needs_action':state?.status||(['prepared','document_ready','needs_reauthorization'].includes(row.status)?'needs_action':row.status),stage=state?.stage||(row.status==='needs_reauthorization'?'awaiting_credential':row.status);
-    const ready=accepted,automatic=ready&&state?.can_wake===true,actionKind=this.actionKind(row,state),reused=state?.reused_connection===true||!!row.connection_reused;
+    const ready=accepted,automatic=ready&&state?.can_wake===true,notifiable=ready&&state?.can_notify===true,actionKind=this.actionKind(row,state),reused=state?.reused_connection===true||!!row.connection_reused;
     const fixed=state?.fixed_proxy||(state?.member_id?require('./connection-target.cjs').fixedProxy(this.service,state.member_id):null);
     const documentPath=actionKind==='manual_handoff'?row.document_path||null:null;
-    const summary=protectedConnection?'为保护已登录的 Codex，AO 已暂停这条后台连接。原聊天和成员已保留。':recheck?'已支持沿用原 Codex 登录；请重新验证原人物连接，无需另外登录或重配 MCP。':fixed?'此连接是固定群桥接，原后端路由保留，不能当成独立跨房人物复用。':ready?(automatic?'已接通并验证本次回复，可以直接在 AO 协作。':'本人入口已实际接通；消息由本人窗口处理，AO 自动唤醒尚未验证。'):
+    const summary=protectedConnection?'为保护已登录的 Codex，AO 已暂停这条后台连接。原聊天和成员已保留。':recheck?'已支持沿用原 Codex 登录；请重新验证原人物连接，无需另外登录或重配 MCP。':fixed?'此连接是固定群桥接，原后端路由保留，不能当成独立跨房人物复用。':ready?(automatic?'已接通并验证本次回复，可以直接在 AO 协作。':notifiable?'已连接，有消息会自动通知它；实际回复会回到对应消息。':'本人入口已实际接通；消息由本人窗口处理，AO 自动唤醒尚未验证。'):
       ['interrupted','error','cancelled','failed'].includes(status)?'接入已中断或失败，请查看原有进度继续处理。':
       actionKind==='reauthorize'?'这位同事的原连接已撤销，请在 AO 明确重新授权原人物。':actionKind==='managed'?'这位同事使用 AO 后台接入，请在原接入进度继续处理，无需向外部窗口粘贴配置。':actionKind==='unsupported'?'当前尚无可用的接入入口，请查看这位同事的支持情况。':
       ['interrupted','error','cancelled','failed'].includes(status)?(documentPath?'接入未完成；请查看接入说明和原有进度，没有自动重试。':'接入已中断或失败；请查看原有进度，没有自动重试。'):
       status==='running'?'正在接入选定成员。':documentPath?'需要在对应 AI 窗口完成一步连接，请复制接入句并交给它。':this.jobs.has(row.id)?'正在准备接入帮助；未宣称成员已连接。':'接入需要处理；请查看原有进度，没有自动重试。';
     const guidedGrok=row.provider==='grok-bot'&&actionKind==='manual_handoff'&&!!documentPath,targetWindow=guidedGrok?'已有 Grok Bot 对话':`${names.get(row.provider)||row.provider} 的本人对话`;
-    let nextStep=protectedConnection?'无需重复登录或重新配置 MCP。请查看连接保护说明，或使用其他已接通的成员。':recheck?'点击「沿用已有登录，重新验证」。AO 会检查原人物的真实通信，成功后进入办公室。':automatic?'已连接，可以直接在 AO 给这位同事发消息。':ready?'已接通本机入口，可以在 AO 留消息；当前需由本人窗口处理，自动接手尚未验证。':row.status==='needs_reauthorization'||stage==='awaiting_credential'?'请打开原接入步骤，明确重新授权这位同事；原消息和人物保留。':
+    let nextStep=protectedConnection?'无需重复登录或重新配置 MCP。请查看连接保护说明，或使用其他已接通的成员。':recheck?'点击「沿用已有登录，重新验证」。AO 会检查原人物的真实通信，成功后进入办公室。':automatic?'已连接，可以直接在 AO 给这位同事发消息。':notifiable?'直接在 AO 发消息，会自动通知这位成员处理。':ready?'已接通本机入口，可以在 AO 留消息；当前需由本人窗口处理，自动接手尚未验证。':row.status==='needs_reauthorization'||stage==='awaiting_credential'?'请打开原接入步骤，明确重新授权这位同事；原消息和人物保留。':
       actionKind==='unsupported'?'尚未找到这个客户端当前可用的接入入口。请查看支持情况，或选择已适配的成员；原人物和配置保留。':
       actionKind==='native_connect'?'点击「查看连接步骤」，继续连接这位成员的本人对话；原有配置保留。':
       guidedGrok?'点击下方「复制给 Grok Bot」，把说明发到已有 Grok Bot 对话。AO 会继续检查真实连接，不需要创建群聊。':
