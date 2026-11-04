@@ -30,6 +30,23 @@ function detectCodex() {
   }
   return null;
 }
+function resolveCodexExecutable(executable,{args=[],detect=detectCodex,env=process.env,platform=process.platform}={}){
+  if(!executable)return detect();
+  if(fs.existsSync(executable))return executable;
+  // Only repair the product's versioned installation path. A missing custom
+  // command or script must never silently select a different installation.
+  if(platform==='win32'&&!args.length&&env.LOCALAPPDATA){
+    const root=path.win32.join(env.LOCALAPPDATA,'OpenAI','Codex','bin'),relative=path.win32.relative(root,executable);
+    if(/^[a-f0-9]{8,64}\\codex\.exe$/i.test(relative)){const found=detect();if(found&&fs.existsSync(found))return found;}
+  }
+  throw new RoomError('找不到原 Codex 程序。请确认 Codex 已安装，再重新检查连接；原聊天记录仍在。',503,'codex_missing');
+}
+function providerArguments(overrides){
+  const args=[];for(const [key,value]of Object.entries(overrides||{})){
+    if(value&&typeof value==='object'&&!Array.isArray(value)){for(const [field,part]of Object.entries(value))args.push('-c',`${key}.${field}=${JSON.stringify(part)}`);}
+    else args.push('-c',`${key}=${JSON.stringify(value)}`);
+  }return args;
+}
 // Apply only to the private office thread. Keep custom routing and credentials;
 // the reserved built-in OpenAI provider cannot be redefined in configuration.
 function backgroundTransport(config={}) {
@@ -40,7 +57,7 @@ function backgroundTransport(config={}) {
 }
 class CodexClient extends EventEmitter {
   constructor(options = {}) { super(); this.executable = options.executable || detectCodex(); this.spawnArgs = options.args || []; this.mcpEnvironment=options.mcpEnvironment||{};this.dataDir=options.dataDir;this.extraInstructions=options.developerInstructions||'';this.workspace=options.dataDir&&options.isolate!==false?new CodexWorkspace(options.dataDir,{legacyHome:options.legacyHome}):null;this.legacyHome=options.legacyHome;this.authenticationMode=options.authenticationMode||'isolated';this.pooled=this.authenticationMode==='shared-cache'&&!options.transportOwner;this.pending = new Map(); this.nextId = 1; this.child = null; this.readyPromise = null; this.closed = false;
-    this.activeRuns=new Set();
+    this.activeRuns=new Set();this.providerOverrides=options.providerOverrides||null;this.detectExecutable=options.detectExecutable||detectCodex;
     if(this.pooled){for(const name of ['pending','nextId','child']){let local=this[name];Object.defineProperty(this,name,{configurable:true,get:()=>this.transport?this.transport.owner[name]:local,set:value=>{if(this.transport)this.transport.owner[name]=value;else local=value;}});}}
   }
   legacyClient(){throw new RoomError('为保护已登录的 Codex，AO 不会启动个人登录目录的后台连接。原会话绑定已保留。',409,'codex_personal_auth_owner_conflict');}
@@ -67,8 +84,8 @@ class CodexClient extends EventEmitter {
     if(!this.acquiringTransport)this.acquiringTransport=(async()=>{
       await this.authenticationEnvironment();const {acquireTransport}=require('./codex-transport-pool.cjs');
       const canonical=value=>{const resolved=fs.existsSync(value)?fs.realpathSync.native(value):path.resolve(value);return process.platform==='win32'?resolved.toLowerCase():resolved;};
-      const key=JSON.stringify([canonical(this.executable||''),this.spawnArgs,canonical(this.workspace.legacyHome),canonical(this.workspace.home)]);
-      const handle=await acquireTransport(key,this,()=>new CodexClient({executable:this.executable,args:this.spawnArgs,dataDir:this.dataDir,legacyHome:this.workspace.legacyHome,authenticationMode:'shared-cache',transportOwner:true}));
+      const key=JSON.stringify([canonical(this.executable||''),this.spawnArgs,canonical(this.workspace.legacyHome),canonical(this.workspace.home),this.providerOverrides]);
+      const handle=await acquireTransport(key,this,()=>new CodexClient({executable:this.executable,args:this.spawnArgs,dataDir:this.dataDir,legacyHome:this.workspace.legacyHome,authenticationMode:'shared-cache',transportOwner:true,providerOverrides:this.providerOverrides,detectExecutable:this.detectExecutable}));
       this.transport=handle;handle.owner.poolHasActiveWork=handle.hasActiveWork;
       if(this.closed){await handle.release();this.transport=null;throw new RoomError('后台连接已停止。',409,'cancelled');}
       return handle;
@@ -77,6 +94,7 @@ class CodexClient extends EventEmitter {
   async ready() {
     if(this.closed)throw new RoomError('后台连接已停止。',409,'cancelled');
     this.assertAuthenticationOwner();
+    if(!this.child)this.executable=resolveCodexExecutable(this.executable,{args:this.spawnArgs,detect:this.detectExecutable});
     if(this.pooled){const handle=await this.sharedTransport();return handle.owner.ready();}
     // An explicit cache invalidation reopens only an idle owned app-server.
     // Pending RPCs and active turn listeners keep their original transport.
@@ -105,7 +123,7 @@ class CodexClient extends EventEmitter {
     if(this.pooled)throw new RoomError('共享连接由已有后台统一启动。',409,'codex_transport_owner_conflict');
     const expected=this.authenticationMode==='shared-cache'?this.workspace.legacyHome:this.workspace?.home;
     if(!expected||!env?.CODEX_HOME||path.resolve(env.CODEX_HOME).toLowerCase()!==path.resolve(expected).toLowerCase())throw new RoomError('Codex 认证环境与已选择的缓存不一致，未启动。',409,'codex_personal_auth_owner_conflict');
-    const child = spawn(this.executable, [...this.spawnArgs, 'app-server', '--listen', 'stdio://',...(this.authenticationMode==='shared-cache'?this.workspace.sharedArguments():[])], { env, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawn(this.executable, [...this.spawnArgs, 'app-server', '--listen', 'stdio://',...(this.authenticationMode==='shared-cache'?this.workspace.sharedArguments():[]),...providerArguments(this.providerOverrides)], { env, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
     this.child = child;let initialized=false,stateInitFailed=false,stderr='';
     const lost=error=>{if(this.child===child)this.disconnect(error,!initialized);};
     child.on('error', e => lost(new RoomError(`Codex 无法启动：${e.code || 'unknown'}`, 503, 'codex_start_failed')));
@@ -191,8 +209,9 @@ class CodexClient extends EventEmitter {
     // the user's policies. This does not grant filesystem or publishing rights.
     const server=this.mcpServerName(),serverKey=`mcp_servers.${server}`;
     const config = { [serverKey]: { command: own.command, args: [...own.args, 'mcp','--data-dir',this.dataDir||dataDirectory()], env: { AGENTROOM_CALLER: 'codex',...this.mcpEnvironment,...this.mcpEnvironment.AGENTROOM_MEMBER_ID?{AGENTROOM_ROOM_ID:discussion.id}:{} }, startup_timeout_sec: 20, default_tools_approval_mode: 'approve' } };
+    let current={};
     if(this.workspace){
-      const current=(await this.call('config/read',{includeLayers:false})).config||{};
+      current=(await this.call('config/read',{includeLayers:false})).config||{};
       Object.assign(config,backgroundTransport(current));
       if(this.authenticationMode==='shared-cache'){
         // Reuse native routing and its original credential store in place;
@@ -220,11 +239,13 @@ class CodexClient extends EventEmitter {
       let same = false; try { same = normalizePath(t.cwd) === project.canonical; } catch {}
       if (!same||t.id!==discussion.thread_id) throw new RoomError('这个 Codex 会话与原绑定或项目目录不匹配，原记录已保留。', 409, 'project_mismatch');
       this.checkSharedRecord(discussion.thread_id,t);
+      await this.selectProvider(t.modelProvider||config.model_provider||current.model_provider||'openai',current,config);
       this.transport?.registerThread(discussion.thread_id);
       try{await this.call('thread/resume', { threadId: discussion.thread_id, cwd: project.path, sandbox: project.access, approvalPolicy: 'on-request', approvalsReviewer:'auto_review', excludeTurns: true, config });}
       catch(error){if(error.code==='codex_rpc_error'&&error.message.includes('session '+discussion.thread_id+' is archived'))throw new RoomError('Codex 的协作会话已归档。请在 Codex 恢复该会话后重试消息。',409,'codex_thread_archived');throw error;}
       return discussion.thread_id;
     }
+    await this.selectProvider(config.model_provider||current.model_provider||'openai',current,config);
     onBinding('creating');
     let thread;
     try {
@@ -233,6 +254,20 @@ class CodexClient extends EventEmitter {
     } catch (e) { onBinding(e.code === 'rpc_timeout' || e.code === 'connection_lost' ? 'creation_uncertain' : 'new'); throw e; }
     await this.call('thread/name/set', { threadId: thread.id, name: `AgentRoom · ${project.name} · ${discussion.title}` });
     return thread.id;
+  }
+  async selectProvider(provider,current,config){
+    // Recent app-server releases validate saved provider identity against the
+    // process configuration before applying thread/resume overrides.
+    config.model_provider=provider;
+    if(provider===(current.model_provider||'openai'))return;
+    if(this.activeRuns.size)throw new RoomError('Codex 仍在处理上一条消息，请等待结果后再恢复连接。',409,'outcome_uncertain');
+    let overrides={model_provider:provider};
+    if(provider==='agentoffice_http'&&(current.model_provider||'openai')==='openai')overrides={...backgroundTransport(current),model_provider:provider};
+    else if(provider!=='openai'&&!current.model_providers?.[provider])throw new RoomError('原 Codex 会话使用的模型连接尚未配置。请恢复原连接设置后重试，聊天记录仍在。',409,'codex_provider_unavailable');
+    this.providerOverrides=overrides;
+    if(this.pooled){const previous=this.transport;this.transport=null;this.acquiringTransport=null;await previous?.release();}
+    else{const child=this.child;this.child=null;this.readyPromise=null;if(child)await new Promise(resolve=>{const timer=setTimeout(()=>{child.kill();resolve();},1500);child.once('exit',()=>{clearTimeout(timer);resolve();});child.stdin.end();});}
+    await this.ready();
   }
   mcpServerName(){
     if(this.authenticationMode!=='shared-cache')return 'agentroom';
@@ -350,4 +385,4 @@ class CodexClient extends EventEmitter {
     await new Promise(resolve => { const timer = setTimeout(() => { child.kill(); resolve(); }, 4000); child.once('exit', () => { clearTimeout(timer); resolve(); }); });
   }
 }
-module.exports = { CodexClient, detectCodex,backgroundTransport };
+module.exports = { CodexClient, detectCodex,resolveCodexExecutable,backgroundTransport };

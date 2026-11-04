@@ -23,11 +23,17 @@ test('post-handshake Claude API rejection disables the connection and fails unst
   const queued=chat.store.post({room_id:v.room.id,to_member_id:member.id,text:'尚未执行',idempotency_key:id()}),error=new Error('Claude 模型服务拒绝了 API 凭据（401）。');error.code='claude_api_auth_required';chat.nativeFailed(member,error);
   assert.equal(chat.store.member(member.id).status,'connection_failed');assert.equal(chat.connectedMembers.has(member.id),false);assert.equal(chat.store.message(queued.id).status,'failed');assert.equal(v.service.runtime.memberState(member.id).worker_online,false);assert.ok(chat.store.member(member.id).verified_at);
 });
-for(const code of ['codex_work_record_unavailable','codex_thread_archived'])test(`a bound Codex session failure (${code}) requires repair without executing queued work`,t=>{
+for(const code of ['codex_work_record_unavailable','codex_thread_archived','codex_provider_unavailable'])test(`a bound Codex session failure (${code}) requires repair without executing queued work`,t=>{
   const v=setup(t),chat=v.service.chat,member=chat.addMember({name:'Codex bound session fixture',adapter:'codex'});chat.join(v.room.id,member.id);chat.store.updateMember(member.id,{status:'ready',verified_at:now()});chat.connectedMembers.add(member.id);
   const ref='native:'+member.id;v.service.runtime.workerHeartbeat(ref,{member_id:member.id,pid:process.pid});v.service.runtime.heartbeat(member.id,{session_ref:ref});
   const queued=chat.store.post({room_id:v.room.id,to_member_id:member.id,text:'尚未执行',idempotency_key:id()}),error=Object.assign(new Error('原工作记录需要恢复后才能继续。'),{code});chat.nativeFailed(member,error);
   assert.equal(chat.store.member(member.id).status,'connection_failed');assert.equal(chat.connectedMembers.has(member.id),false);assert.equal(chat.store.message(queued.id).status,'failed');assert.match(chat.store.message(queued.id).error,/未执行/);assert.equal(v.service.runtime.memberState(member.id).worker_online,false);assert.ok(chat.store.member(member.id).verified_at);assert.equal(v.service.codex.calls.length,0);
+});
+test('a verified Codex reconnect records the replacement executable without changing member identity or bindings',t=>{
+  const v=setup(t),chat=v.service.chat,member=chat.addMember({name:'升级恢复',adapter:'codex'});chat.join(v.room.id,member.id);
+  const thread=id();chat.store.bind(v.room.id,member.id,'bound',thread);chat.store.updateMember(member.id,{config:{...member.config,executable:'old-fixture.exe',last_seen:'fixture-contact',custom_setting:'keep'}});
+  chat.nativeCompleted(member,{executable:'stale-facade.exe',transport:{owner:{executable:process.execPath}},child:{pid:process.pid}});
+  const current=chat.store.member(member.id);assert.equal(current.id,member.id);assert.equal(current.config.executable,process.execPath);assert.equal(current.config.last_seen,'fixture-contact');assert.equal(current.config.custom_setting,'keep');assert.equal(chat.store.binding(v.room.id,member.id).thread_id,thread);
 });
 function gate(){let resolve;const promise=new Promise(done=>{resolve=done;});return {promise,resolve};}
 async function until(check){for(let i=0;i<200;i++){if(check())return;await sleep(10);}assert.fail('fixture state did not settle');}

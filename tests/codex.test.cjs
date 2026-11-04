@@ -1,6 +1,14 @@
 'use strict';
 const{test}=require('node:test'),assert=require('node:assert/strict'),path=require('node:path');
 const{CodexClient}=require('../src/codex.cjs');const{fixture}=require('./helpers.cjs');const{id,normalizePath}=require('../src/util.cjs');
+test('only a removed versioned Codex installation is rediscovered after upgrade',()=>{
+  const {resolveCodexExecutable}=require('../src/codex.cjs'),root='C:\\agentroom-test-install',old=path.win32.join(root,'OpenAI','Codex','bin','0123456789abcdef','codex.exe');let discoveries=0;
+  const options={platform:'win32',env:{LOCALAPPDATA:root},detect:()=>{discoveries++;return process.execPath;}};
+  assert.equal(resolveCodexExecutable(old,options),process.execPath);assert.equal(discoveries,1);
+  assert.equal(resolveCodexExecutable(process.execPath,options),process.execPath);assert.equal(discoveries,1);
+  for(const [executable,extra]of [[old,{args:['custom-script']}],[path.win32.join(root,'custom','codex.exe'),{}],[old,{platform:'linux'}]])assert.throws(()=>resolveCodexExecutable(executable,{...options,...extra}),{code:'codex_missing'});
+  assert.equal(discoveries,1);assert.throws(()=>resolveCodexExecutable(old,{...options,detect:()=>null}),{code:'codex_missing'});
+});
 test('private HTTP transport keeps custom provider identity and preserves built-in endpoint overrides',()=>{
   const {backgroundTransport}=require('../src/codex.cjs'),custom={model_provider:'company_proxy',model_providers:{company_proxy:{base_url:'https://fixture.invalid',env_key:'FIXTURE_KEY',supports_websockets:true}}},before=JSON.stringify(custom);
   assert.deepEqual(backgroundTransport(custom),{'model_providers.company_proxy.supports_websockets':false});assert.equal(JSON.stringify(custom),before);

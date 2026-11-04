@@ -179,6 +179,10 @@ class ChatManager {
     }return project;
   }
   nativeCompleted(member,client){
+    if(member.adapter==='codex'){
+      const executable=client.transport?.owner.executable||client.executable,current=this.store.member(member.id);
+      if(executable&&executable!==current.config.executable)this.store.updateMember(member.id,{config:{...current.config,executable}});
+    }
     const ref=`native:${member.id}`;this.service.runtime?.heartbeat(member.id,{session_ref:ref});
     if(['claude-code','qwen-code','gemini-cli'].includes(member.adapter)){this.connectedMembers.delete(member.id);this.service.runtime?.releaseWorker(ref);this.connectionEvidence(member,'runner_stopped');}
     else{this.connectedMembers.add(member.id);this.service.runtime?.workerHeartbeat(ref,{member_id:member.id,pid:client.child?.pid||null});}
@@ -202,7 +206,7 @@ class ChatManager {
     // Infrastructure/account failures require an explicit connection repair.
     // Business denial and cancellation leave a valid connection available.
     const code=String(error?.code||''),detail=readableError(error);
-    const broken=/^(?:codex|claude|qwen|gemini)_(?:login_required|api_auth_required|auth_unknown|missing|start_failed|probe_failed|version_unknown|upgrade_required|mcp_setup|tool_scope_mismatch|managed_settings|quota_required|resume_required)$/.test(code)||['codex_work_record_unavailable','codex_thread_archived','connection_lost'].includes(code)||code==='turn_failed'&&/登录|认证|额度|凭据|API.?key|authentication|unauthenticated|sign.?in|login|credit/i.test(detail);
+    const broken=/^(?:codex|claude|qwen|gemini)_(?:login_required|api_auth_required|auth_unknown|missing|start_failed|probe_failed|version_unknown|upgrade_required|mcp_setup|tool_scope_mismatch|managed_settings|quota_required|resume_required)$/.test(code)||['codex_work_record_unavailable','codex_thread_archived','codex_provider_unavailable','connection_lost'].includes(code)||code==='turn_failed'&&/登录|认证|额度|凭据|API.?key|authentication|unauthenticated|sign.?in|login|credit/i.test(detail);
     if(!broken)return;
     this.store.updateMember(member.id,{status:'connection_failed',error:detail});this.connectedMembers.delete(member.id);
     const ref=`native:${member.id}`;this.service.runtime?.releaseWorker(ref);this.service.runtime?.releaseSession(member.id,ref);

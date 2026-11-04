@@ -44,6 +44,36 @@ test('shared-cache health and two members coalesce one process with native auth 
   assert.equal(fs.existsSync(path.join(f.sqliteHome,'auth.json')),false);assert.equal(fs.existsSync(path.join(f.sqliteHome,'config.toml')),false);
 });
 
+test('OpenAI office threads use a provider-matched process for new rooms and resume after restart',async t=>{
+  const f=setup(t),a=f.member('a'),b=f.member('b'),health=f.member('health');await health.client.ready();const healthPid=health.client.child.pid;
+  fs.writeFileSync(path.join(f.sqliteHome,'fixture-config.json'),JSON.stringify({model:'fixture-model',model_provider:'openai',openai_base_url:'http://127.0.0.1:1'}));
+  await Promise.all([f.run(a),f.run(b)]);const threadId=a.discussion.thread_id,otherThread=b.discussion.thread_id;
+  assert.notEqual(threadId,otherThread);assert.equal((await a.client.read(threadId)).modelProvider,'agentoffice_http');assert.equal(a.client.child.pid,b.client.child.pid);assert.notEqual(a.client.child.pid,healthPid);assert.equal(health.client.child.pid,healthPid);
+  assert.equal(f.startups().length,2);assert.equal((await a.client.call('config/read',{})).config.model_provider,'agentoffice_http');
+  assert.equal((await f.run(a)).threadId,threadId);assert.equal((await a.client.read(threadId)).turns.length,2);
+  await Promise.all([a.client.close(),b.client.close()]);const resumed=f.member('a');resumed.discussion={...a.discussion};
+  assert.equal((await f.run(resumed)).threadId,threadId);assert.equal((await resumed.client.read(threadId)).turns.length,3);
+  assert.equal(f.calls().filter(call=>call.method==='thread/start').length,2);assert.equal(f.calls().filter(call=>call.method==='turn/start').length,4);
+  assert.equal(fs.readFileSync(path.join(f.authHome,'config.toml'),'utf8'),f.nativeConfig);assert.equal(fs.readFileSync(path.join(f.authHome,'auth.json'),'utf8'),'SYNTHETIC NATIVE LOGIN - NEVER LOAD');
+  assert.equal(fs.existsSync(path.join(f.authHome,'sessions')),false);assert.equal(fs.existsSync(path.join(f.sqliteHome,'auth.json')),false);
+});
+
+test('a saved built-in provider continues alongside an active HTTP office thread without restarting it',async t=>{
+  const f=setup(t),a=f.member('a');await a.client.ready();fs.writeFileSync(path.join(f.sqliteHome,'fixture-config.json'),JSON.stringify({model_provider:'openai'}));
+  const created=await a.client.call('thread/start',{cwd:f.project.path,config:{model_provider:'openai'}});a.discussion.thread_id=created.thread.id;a.discussion.binding_state='bound';
+  const b=f.member('b'),pending=f.run(b,{hold:true});pending.catch(()=>{});await until(()=>b.turnId);const pid=b.client.child.pid;
+  assert.equal((await f.run(a)).threadId,created.thread.id);assert.equal((await a.client.read(created.thread.id)).modelProvider,'openai');assert.equal(b.client.child.pid,pid);
+  await b.client.call('fixture/complete',{threadId:b.discussion.thread_id,text:'still running'});assert.equal((await pending).answer,'still running');
+  assert.equal(f.calls().filter(call=>call.method==='thread/start').length,2);assert.equal(f.calls().filter(call=>call.method==='turn/start').length,2);
+});
+
+test('an unavailable saved provider fails before model work and keeps the original binding',async t=>{
+  const f=setup(t),a=f.member('a');await f.bind(a);const saved=a.discussion.thread_id,record=await a.client.read(saved);
+  a.client.read=async()=>({...record,modelProvider:'removed-company-provider'});const before=f.calls().length;
+  await assert.rejects(f.run(a),{code:'codex_provider_unavailable'});assert.equal(a.discussion.thread_id,saved);
+  assert.equal(f.calls().slice(before).some(call=>['thread/start','thread/resume','turn/start'].includes(call.method)),false);
+});
+
 test('Windows path casing cannot create a second owner for the same executable native HOME and SQLite', {skip:process.platform!=='win32'},async t=>{
   const f=setup(t),a=f.member('a'),b=f.member('b',{executable:process.execPath.toUpperCase(),legacyHome:f.authHome.toUpperCase(),dataDir:f.data.toUpperCase()});
   await Promise.all([a.client.status(),b.client.status()]);
