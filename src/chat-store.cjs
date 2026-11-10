@@ -1,6 +1,6 @@
 'use strict';
 const crypto = require('node:crypto');
-const { RoomError, id, now, cleanText, redact } = require('./util.cjs');
+const { RoomError, id, now, cleanText, redact, VERSION } = require('./util.cjs');
 const {ChatImages,validateImages}=require('./chat-images.cjs');
 
 // These tables deliberately share only the existing project identity. Adapters,
@@ -93,9 +93,11 @@ class ChatStore {
       END;
       INSERT OR IGNORE INTO chat_exports(room_id,revision) SELECT id,1 FROM chat_rooms;
     `);
+    this.db.exec('CREATE TABLE IF NOT EXISTS stats_versions(kind TEXT NOT NULL,entity_id TEXT NOT NULL,version TEXT NOT NULL,PRIMARY KEY(kind,entity_id))');
     this.hasRoomTombstones = true;
     this.hasRoomArchives = true;
   }
+  trackVersion(kind,entityId){this.db.prepare('INSERT OR IGNORE INTO stats_versions VALUES(?,?,?)').run(kind,entityId,VERSION);}
   transaction(fn) {
     // SAVEPOINT also works when a caller already entered Store.transaction().
     const name = `chat_write_${++this.savepoint}`;
@@ -178,7 +180,7 @@ class ChatStore {
       }
       checkBusy(roomId,busy);
       const stamp=now();
-      this.db.prepare('INSERT INTO chat_room_tombstones(room_id,deleted_at) VALUES(?,?)').run(roomId,stamp);
+      this.db.prepare('INSERT INTO chat_room_tombstones(room_id,deleted_at) VALUES(?,?)').run(roomId,stamp);this.trackVersion('room_deleted',roomId);
       this.db.prepare('UPDATE chat_participants SET joined=0,left_at=? WHERE room_id=? AND joined=1').run(stamp,roomId);
       this.db.prepare("UPDATE chat_invitations SET status='revoked' WHERE room_id=? AND status IN ('pending','verified')").run(roomId);
       if(hasTable('chat_resume_credentials'))this.rehomeCredentials(roomId);
@@ -190,7 +192,7 @@ class ChatStore {
   addRoom(input) {
     this.store.project(input.project_id);
     const row = { id: id(), title: cleanText(input.title || '房间', 100, '房间名称'), project_id: input.project_id, created: now(), updated: now() };
-    this.db.prepare('INSERT INTO chat_rooms VALUES(:id,:title,:project_id,:created,:updated)').run(row);
+    this.db.prepare('INSERT INTO chat_rooms VALUES(:id,:title,:project_id,:created,:updated)').run(row);this.trackVersion('room',row.id);
     return this.room(row.id);
   }
   participants(roomId) {
@@ -320,7 +322,7 @@ class ChatStore {
       if (target !== null) this.requireParticipant(room.id, target);
       if (reply !== null && this.message(reply).room_id !== room.id) throw new RoomError('回复只能引用同一房间的消息。', 403, 'cross_room_reply');
       const row = { id: id(), room_id: room.id, sender_id: sender, to_member_id: target, text, reply_to: reply, kind, status: target === null ? 'posted' : 'queued', error: null, request_id: null, idempotency_key: key, body_hash: hash, created: now(), updated: now() };
-      this.db.prepare('INSERT INTO chat_messages(id,room_id,sender_id,to_member_id,text,reply_to,kind,status,error,request_id,idempotency_key,body_hash,created,updated) VALUES(:id,:room_id,:sender_id,:to_member_id,:text,:reply_to,:kind,:status,:error,:request_id,:idempotency_key,:body_hash,:created,:updated)').run(row);
+      this.db.prepare('INSERT INTO chat_messages(id,room_id,sender_id,to_member_id,text,reply_to,kind,status,error,request_id,idempotency_key,body_hash,created,updated) VALUES(:id,:room_id,:sender_id,:to_member_id,:text,:reply_to,:kind,:status,:error,:request_id,:idempotency_key,:body_hash,:created,:updated)').run(row);this.trackVersion('message',row.id);
       this.images.save(room.id,row.id,images);
       this.db.prepare('UPDATE chat_rooms SET updated=? WHERE id=?').run(row.updated, room.id);
       return this.message(row.id);
