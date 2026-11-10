@@ -69,7 +69,7 @@ async function settle(v) {
   assert.equal(v.service.chat.active.size, 0);
   return v.service.launch.state({ room_id: v.room.id });
 }
-async function prepare(v) { (await v.service.launch.prepare({ room_id: v.room.id, providers: ['codex'], install_clients: true })); return settle(v); }
+async function prepare(v) { (await v.service.launch.prepare({ room_id: v.room.id, providers: ['codex'], group_name:'Fixture sync mirror', install_clients: true })); return settle(v); }
 function env(t, values = {}) {
   const keys = ['AGENTROOM_SETUP_MODE', 'AGENTROOM_MEMBER_ID', 'AGENTROOM_ROOM_ID', 'AGENTROOM_CALLER'], prior = Object.fromEntries(keys.map(key => [key, process.env[key]]));
   for (const key of keys) { if (values[key] === undefined) delete process.env[key]; else process.env[key] = values[key]; }
@@ -153,7 +153,7 @@ test('new providers are inventory only until separately selected, with original 
   const scanned = (await v.service.launch.scan({ room_id: v.room.id }));
   assert.equal(scanned.candidates.length, 2); assert.equal(v.log.length, calls); assert.equal(v.installations.length, 1);
   const originalThread = v.service.chat.store.binding(v.room.id, original.backend_member_id).thread_id;
-  (await v.service.launch.prepare({ room_id: v.room.id, providers: ['claude-code'], install_clients: true })); const changed = await settle(v);
+  (await v.service.launch.prepare({ room_id: v.room.id, providers: ['claude-code'], group_name:'Fixture sync mirror', install_clients: true })); const changed = await settle(v);
   assert.equal(changed.proxies.length, 2); assert.deepEqual(changed.actions.map(action => action.name), ['Claude Code']);
   assert.equal(v.log.filter(call => call.adapter === 'codex' && call.handshake).length, 1);
   assert.equal(v.log.filter(call => call.adapter === 'claude-code' && call.handshake).length, 1);

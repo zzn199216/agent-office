@@ -1,4 +1,5 @@
 'use strict';
+const {backendRoute}=require('./launch-routes.cjs');
 const {RoomError}=require('./util.cjs');
 const MANAGED=new Set(['codex','claude-code','qwen-code','gemini-cli']);
 function matches(member,provider){return member.config?.launch_provider===provider||MANAGED.has(provider)&&member.adapter===provider||provider==='grok-bot'&&member.adapter==='grok-bridge';}
@@ -14,7 +15,7 @@ function fixedProxy(service,memberId){
 function usable(service,member){const credential=credentials(service,member);return !credential.blocked&&!!member.verified_at&&!member.error&&!['connection_failed','disabled','revoked','unavailable'].includes(member.status);}
 function resolveConnectionTarget(service,{provider,room_id:roomId,target_member_id:explicit}={}){
   const chat=service.chat.store;chat.room(roomId);
-  const bound=service.store.db.prepare('SELECT backend_member_id FROM launch_proxies WHERE room_id=? AND provider=?').get(roomId,provider);
+  const bound=backendRoute(service.store.db,roomId,provider);
   let member,reason;
   if(explicit){member=chat.member(explicit);if(!matches(member,provider))throw new RoomError('所选人物与接入客户端不一致。',409,'connection_target_mismatch');if(bound&&bound.backend_member_id!==member.id)throw new RoomError('当前接入已有固定人物，不能静默替换。',409,'connection_target_mismatch');const fixed=fixedProxy(service,member.id);if(fixed&&fixed.room_id!==roomId)throw new RoomError('固定代理不能改绑到另一个房间。',403,'proxy_not_bound');reason='explicit';}
   else if(bound){member=chat.member(bound.backend_member_id);reason='bound_route';}

@@ -4,6 +4,7 @@ const {RoomError,id,now,cleanText,redact,atomicWrite,asset,ownCommand,shellComma
 const {installClient,prepareManualClient}=require('./install-clients.cjs');
 const manualProviders=new Set(['claude-desktop','qwen-desktop','doubao','opencode','cherry-studio','cline','roo-code']);
 const preparedManualProviders=new Set(['doubao','opencode','cherry-studio','cline','roo-code']);
+const {backendRoute,backendRoutes,saveBackend,retireUnusedProxies}=require('./launch-routes.cjs');
 const {resolveConnectionTarget}=require('./connection-target.cjs');
 // Discovery runs only on request. Preparation affects only explicitly selected
 // providers; native Grok bot creation remains a separate host operation.
@@ -13,6 +14,8 @@ class LaunchManager{
     this.db.exec(`CREATE TABLE IF NOT EXISTS launch_sessions(id TEXT PRIMARY KEY,room_id TEXT NOT NULL REFERENCES chat_rooms(id),status TEXT NOT NULL,goal TEXT NOT NULL,candidates TEXT NOT NULL,install_clients INTEGER NOT NULL DEFAULT 0,error TEXT,created TEXT NOT NULL,updated TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS launch_proxies(id TEXT PRIMARY KEY,room_id TEXT NOT NULL REFERENCES chat_rooms(id),provider TEXT NOT NULL,name TEXT NOT NULL,backend_member_id TEXT NOT NULL REFERENCES chat_members(id),proxy_member_id TEXT NOT NULL REFERENCES chat_members(id),installation TEXT,native_bot_ref TEXT,native_group_ref TEXT,native_group_status TEXT NOT NULL DEFAULT 'pending',created TEXT NOT NULL,updated TEXT NOT NULL,UNIQUE(room_id,provider));
       CREATE TABLE IF NOT EXISTS launch_sync_routes(room_id TEXT PRIMARY KEY REFERENCES chat_rooms(id),routine_ref TEXT NOT NULL,group_ref TEXT NOT NULL,interval_minutes INTEGER NOT NULL,next_run TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'host_reported',updated TEXT NOT NULL);`);
+    this.db.exec('CREATE TABLE IF NOT EXISTS launch_backends(room_id TEXT NOT NULL,provider TEXT NOT NULL,name TEXT NOT NULL,backend_member_id TEXT NOT NULL,installation TEXT,created TEXT NOT NULL,updated TEXT NOT NULL,PRIMARY KEY(room_id,provider))');
+    this.db.exec('INSERT OR IGNORE INTO launch_backends SELECT room_id,provider,name,backend_member_id,installation,created,updated FROM launch_proxies');
     const columns=new Set(this.db.prepare('PRAGMA table_info(launch_sessions)').all().map(row=>row.name));
     if(!columns.has('selected_providers'))this.db.exec('ALTER TABLE launch_sessions ADD COLUMN selected_providers TEXT');
     if(!columns.has('group_name'))this.db.exec('ALTER TABLE launch_sessions ADD COLUMN group_name TEXT');
@@ -20,6 +23,7 @@ class LaunchManager{
     if(!columns.has('dispatch_requested'))this.db.exec('ALTER TABLE launch_sessions ADD COLUMN dispatch_requested INTEGER NOT NULL DEFAULT 0');
     if(!columns.has('dispatch_member_id'))this.db.exec('ALTER TABLE launch_sessions ADD COLUMN dispatch_member_id TEXT');
     if(!columns.has('dispatch_error'))this.db.exec('ALTER TABLE launch_sessions ADD COLUMN dispatch_error TEXT');
+    this.service.chat.store.transaction(()=>retireUnusedProxies(this.db));
     this.db.prepare("UPDATE launch_sessions SET status='interrupted',error='准备期间处理程序结束；请重新指定要接入的成员，不会自动重放业务任务。',updated=? WHERE status='preparing'").run(now());
     // This requests a native pause; it does not pretend that the remote Grok
     // routine has already stopped. Keep its actual refs/history for reporting.
@@ -92,7 +96,7 @@ class LaunchManager{
     if(unknown.length)throw new RoomError('所选 agent 没有在本次扫描中发现，请先扫描并选择实际成员。',409,'provider_not_found');
     const session={id:id(),room_id:room.id,status:'preparing',goal:input.goal?redact(cleanText(input.goal,1200,'协作目标')):'',candidates:JSON.stringify(scan.candidates),install_clients:input.install_clients===true?1:0,error:null,created:now(),updated:now(),selected_providers:JSON.stringify(providers)};
     this.db.prepare('INSERT INTO launch_sessions(id,room_id,status,goal,candidates,install_clients,error,created,updated,selected_providers) VALUES(:id,:room_id,:status,:goal,:candidates,:install_clients,:error,:created,:updated,:selected_providers)').run(session);
-    if(groupName)this.db.prepare('UPDATE launch_sessions SET group_name=? WHERE id=?').run(groupName,session.id);
+    if(groupName){session.group_name=groupName;this.db.prepare('UPDATE launch_sessions SET group_name=? WHERE id=?').run(groupName,session.id);}
     if(input.dispatch===true)this.db.prepare('UPDATE launch_sessions SET dispatch_requested=1,dispatch_member_id=? WHERE id=?').run(input.dispatch_member_id||null,session.id);
     const selected=scan.candidates.filter(candidate=>providers.includes(candidate.provider)).map(candidate=>({...candidate,...input.target_member_id?{target_member_id:input.target_member_id}:{},reauthorize:input.reauthorize===true,new_member:input.new_member===true}));
     const work=this.run(session,selected).catch(e=>{this.db.prepare("UPDATE launch_sessions SET status='needs_setup',error=?,updated=? WHERE id=? AND status!='cancelled'").run(redact(e.message).slice(0,1200),now(),session.id);this.service.changed();}).finally(()=>this.jobs.delete(session.id));this.jobs.set(session.id,work);this.service.changed();return this.state({session_id:session.id});
@@ -134,6 +138,24 @@ class LaunchManager{
     if(!known)return null;
     chat.join(room.id,known.id);return chat.store.member(known.id);
   }
+  mirrorRequested(roomId,session={}){
+    if(session.group_name||this.db.prepare('SELECT 1 FROM launch_proxies WHERE room_id=? AND native_group_ref IS NOT NULL LIMIT 1').get(roomId))return true;
+    return this.service.chat.store.participants(roomId).some(member=>member.adapter==='grok-bridge'&&member.verified_at&&member.status==='ready');
+  }
+  setInstallation(roomId,provider,result){
+    const stamp=now(),text=JSON.stringify(result);
+    this.db.prepare('UPDATE launch_backends SET installation=?,updated=? WHERE room_id=? AND provider=?').run(text,stamp,roomId,provider);
+    this.db.prepare('UPDATE launch_proxies SET installation=?,updated=? WHERE room_id=? AND provider=?').run(text,stamp,roomId,provider);
+  }
+  ensureProxies(session){
+    if(!this.mirrorRequested(session.room_id,session))return;
+    const room=this.service.chat.store.room(session.room_id);
+    for(const provider of session.selected_providers){const route=backendRoute(this.db,room.id,provider);if(!route||route.proxy_member_id)continue;
+      const backend=this.service.chat.store.member(route.backend_member_id);if(!this.service.chat.store.joined(room.id,backend.id))continue;
+      const proxy=this.proxy(room,{provider,name:route.name},backend);if(route.installation)this.setInstallation(room.id,provider,JSON.parse(route.installation));
+      if(!this.service.resume.credentials(proxy.proxy_member_id).length)this.service.entry.issue(proxy.proxy_member_id,room.id);
+    }
+  }
   proxy(room,candidate,backend){
     const old=this.db.prepare('SELECT * FROM launch_proxies WHERE room_id=? AND provider=?').get(room.id,candidate.provider);if(old){this.service.chat.store.requireParticipant(room.id,old.proxy_member_id);this.service.chat.store.requireParticipant(room.id,old.backend_member_id);return old;}
     const chat=this.service.chat;
@@ -167,9 +189,9 @@ class LaunchManager{
         if(this.service.chat.roomDeleted(room.id))return;
         this.service.chat.store.updateMember(backend.id,{status:'connecting',config:{...backend.config,executable:candidate.executable,executable_args:candidate.executable_args||[]}});backend=this.service.chat.store.member(backend.id);carried=false;
       }
-      const proxy=this.proxy(room,candidate,backend),backendEntry=manual?this.service.entry.primary(backend.id,room.id):this.service.entry.issue(backend.id,room.id,{repair_invalid:true});
-      const proxyEntry=this.service.entry.describe(proxy.proxy_member_id,room.id);
-      if(proxyEntry.status==='missing'&&!this.service.resume.credentials(proxy.proxy_member_id).length)this.service.entry.issue(proxy.proxy_member_id,room.id);
+      saveBackend(this.db,room.id,candidate,backend);
+      const proxy=this.mirrorRequested(room.id,session)?this.proxy(room,candidate,backend):null,backendEntry=manual?this.service.entry.primary(backend.id,room.id):this.service.entry.issue(backend.id,room.id,{repair_invalid:true});
+      if(proxy){const proxyEntry=this.service.entry.describe(proxy.proxy_member_id,room.id);if(proxyEntry.status==='missing'&&!this.service.resume.credentials(proxy.proxy_member_id).length)this.service.entry.issue(proxy.proxy_member_id,room.id);}
       if(candidate.provider==='qwen-desktop'){
         let result;
         if(!this.service._localUrl)result={status:'needs_setup',installed:false,connected:false,can_wake:false,reason:'local_transport_not_started',detail:'请启动本机 AgentRoom 后重新生成 Qwen MCP 导入配置。'};
@@ -180,26 +202,26 @@ class LaunchManager{
           result={status:'awaiting_import',installed:false,configured:false,connected:false,can_wake:false,needs_import:true,configuration_file:file,detail:'请在 Qwen 本人窗口的 MCP 设置中通过 JSON 导入该本机配置，再实际调用接入工具。'};
         }
         if(this.service.chat.roomDeleted(room.id))return;
-        this.db.prepare('UPDATE launch_proxies SET installation=?,updated=? WHERE id=?').run(JSON.stringify(result),now(),proxy.id);
+        this.setInstallation(room.id,candidate.provider,result);
       }
       if(preparedManualProviders.has(candidate.provider)){
         const own=ownCommand();let result;
         try{result=prepareManualClient({provider:candidate.provider,data_dir:this.service.store.dir,command:own.command,args:own.args,entry_file:backendEntry.file,local_url:this.service._localUrl});}
         catch(error){result={status:'needs_setup',installed:false,connected:false,can_wake:false,detail:redact(error.message).slice(0,1000)};}
         if(this.service.chat.roomDeleted(room.id))return;
-        this.db.prepare('UPDATE launch_proxies SET installation=?,updated=? WHERE id=?').run(JSON.stringify(result),now(),proxy.id);
+        this.setInstallation(room.id,candidate.provider,result);
       }
       if(session.install_clients&&['codex','claude-code','claude-desktop'].includes(candidate.provider)){
         const own=ownCommand();let result;
         try{if(candidate.provider==='codex'&&!this.options.installer)result={status:'managed_session',installed:false,needs_reload:false,connected:false,configuration_file:null,reason:'成员通信随专属后台会话加载，真实握手另行验证；无需修改个人 Codex MCP 配置。'};else result=await (this.options.installer||installClient)({provider:candidate.provider,executable:candidate.executable,executable_args:candidate.executable_args||[],command:own.command,args:own.args,entry_file:backendEntry.file},this.options.installerOptions||{});}catch(e){result={status:'needs_setup',installed:false,connected:false,reason:redact(e.message).slice(0,1000)};}
         if(this.service.chat.roomDeleted(room.id))return;
-        this.db.prepare('UPDATE launch_proxies SET installation=?,updated=? WHERE id=?').run(JSON.stringify(result),now(),proxy.id);
+        this.setInstallation(room.id,candidate.provider,result);
       }
       if(this.closing||this.service.chat.roomDeleted(session.room_id))return;
       // A verified colleague carried into a new room needs no second handshake.
       if(managed&&!(carried&&backend.status==='ready'&&!backend.error))await this.service.entry.wake(room.id,backend.id);
       if(this.service.chat.roomDeleted(room.id))return;
-      this.role(proxy);this.service.changed();
+      if(proxy)this.role(proxy);this.service.changed();
     }
     this.db.prepare("UPDATE launch_sessions SET status='awaiting_grok',updated=? WHERE id=?").run(now(),session.id);this.handoff(session.id);this.service.changed();
   }
@@ -258,6 +280,7 @@ class LaunchManager{
   }
   handoff(sessionId){
     const session=this.session(sessionId),file=path.join(this.service.store.dir,'launch',session.room_id,'sessions',session.id,'GROUP.md'),skillFile=path.join(this.service.store.dir,'GROK_SKILL.md');
+    this.ensureProxies(session);
     if(session.selected_providers.length===1&&session.selected_providers[0]==='grok-bot'){
       const bridge=this.grokEntryState(session);atomicWrite(file,`# Grok Bot 本人窗口接入\n\n${bridge?.instruction||'本机长期入口尚未准备完成，请回到 Agent Office 重试所选成员。'}\n`);return {file,skillFile};
     }
@@ -275,7 +298,7 @@ class LaunchManager{
   clientConfig(input){
     const session=this.session(input.session_id);
     if(!session.selected_providers.includes(input.provider))throw new RoomError('本次接入没有选择这个客户端。',403,'provider_not_selected');
-    const proxy=this.db.prepare('SELECT * FROM launch_proxies WHERE room_id=? AND provider=?').get(session.room_id,input.provider);
+    const proxy=backendRoute(this.db,session.room_id,input.provider);
     if(!proxy||!manualProviders.has(proxy.provider))throw new RoomError('该客户端没有本次桌面 MCP 导入配置。',409,'client_config_missing');
     if(proxy.provider==='claude-desktop')return {config:this.service.entry.issue(proxy.backend_member_id,session.room_id).mcp};
     const installation=proxy.installation?JSON.parse(proxy.installation):null,file=installation?.configuration_file;
@@ -296,7 +319,7 @@ class LaunchManager{
   }
   state(input={}){
     let session;if(input.session_id)session=this.session(input.session_id);else{const room=input.room_id;if(room)this.service.chat.store.room(room);const active=this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='chat_room_tombstones'").get()?'NOT EXISTS (SELECT 1 FROM chat_room_tombstones t WHERE t.room_id=launch_sessions.room_id)':'1=1';const row=room?this.db.prepare(`SELECT id FROM launch_sessions WHERE room_id=? AND ${active} ORDER BY created DESC,rowid DESC LIMIT 1`).get(room):this.db.prepare(`SELECT id FROM launch_sessions WHERE ${active} ORDER BY created DESC,rowid DESC LIMIT 1`).get();if(!row)return {status:'not_prepared',proxies:[],members:[],candidates:[],selected_providers:[],actions:[],grok_verified:false,policy:this.policy(),native_sync:{status:'disabled',verified:false}};session=this.session(row.id);}
-    const rows=this.db.prepare('SELECT * FROM launch_proxies WHERE room_id=? ORDER BY created').all(session.room_id),members=[];
+    const rows=backendRoutes(this.db,session.room_id),members=[];
     const proxies=rows.map(p=>{const backend=this.service.chat.store.member(p.backend_member_id),manual=manualProviders.has(p.provider),delivery=this.service.chat.deliveryCapability(backend),nativeDesktop=delivery.connection_method==='native_desktop',entry=manual?this.service.entry.describePrimary(backend.id,p.room_id):this.service.entry.describe(backend.id,p.room_id),connecting=backend.status==='connecting'||this.service.chat.active.get(backend.id)?.connecting===true;
       const credentialValid=nativeDesktop?delivery.native_usable===true:manual?entry.status==='active':entry.available,ready=!!backend.verified_at&&credentialValid&&!connecting&&!backend.error&&!['connection_failed','awaiting_handshake'].includes(backend.status),canWake=this.service.runtime.memberState(backend.id).can_wake;
       members.push(this.service.chat.publicMember(backend));return {...p,installation:p.installation?JSON.parse(p.installation):null,credential_status:entry.status,status:ready?(canWake?'ready_local':'ready_mailbox'):connecting?'connecting':manual&&!nativeDesktop?'awaiting_desktop_handshake':'needs_setup',reason:backend.error||(!credentialValid?nativeDesktop?'自动连接尚未就绪，请查看成员连接。':'通信入口不可用，需要明确重新接入。':manual&&!canWake?(ready?`已接入 ${p.name} 消息信箱；需要它在本人窗口领取和回复，不能后台唤醒模型。`:`MCP 配置不代表接入；请在 ${p.name} 本人窗口实际调用工具完成握手。`):null),local_verified:ready,grok_verified:false,can_wake:canWake,response_mode:canWake||nativeDesktop?'managed_native':'manual_mailbox'};});
@@ -325,6 +348,7 @@ class LaunchManager{
     return {...session,status,group_operation:groupOperation,candidates:session.candidates,members,proxies,bridge_members:grokEntry?[{provider:grokEntry.provider,member_id:grokEntry.member_id,name:grokEntry.name,local_verified:grokEntry.local_verified,can_wake:false,response_mode:grokEntry.response_mode,native_group_status:grokEntry.native_group_status,entry_status:grokEntry.entry_status}]:[],selected_handshakes:selectedHandshakes,grok_prompt:prompt+(session.group_name?` 本次明确请求镜像群 ${JSON.stringify(session.group_name)}；有已绑定群时只更新该群，没有时创建一次。`:""),handoff_file:fs.existsSync(handoff)?handoff:null,skill_file:onlyGrok?null:skill,skill_command:onlyGrok?null:'/AgentRoom',grok_verified:false,policy:this.policy(),watch:this.watch?.status(session.room_id)||null,native_sync:syncRoute?{...syncRoute,verified:false}:{status:'disabled',verified:false},sync_command:cli(['group-sync','--changes-only','--room',session.room_id]),sync_report_command:cli(['sync-report','--room',session.room_id,'--routine-ref','真实例程引用','--group-ref','真实群引用','--paused','true']),actions:selected.filter(p=>p.local_verified&&p.native_group_status==='pending').slice(0,5).map(p=>({operation:'create_or_reuse_native_bot',name:p.name,proxy_id:p.id,role_file:path.join(this.service.store.dir,'launch',p.room_id,`role-${p.id}.md`),group_operation:'join_user_requested_group',can_wake:p.can_wake,response_mode:p.response_mode})),mcp_setup:onlyGrok?null:{mcpServers:{agentroom:{command:own.command,args:[...own.args,'mcp','--setup']}}}};
   }
   dispatch(input){
+    this.ensureProxies(this.session(input.session_id));
     const session=this.state({session_id:input.session_id});
     if(!session.handoff_file||session.status==='preparing')throw new RoomError('成员还在准备，请稍后检查进度。',409,'group_preparing');
     if(session.selected_handshakes.length||session.proxies.some(p=>session.selected_providers.includes(p.provider)&&!p.local_verified))throw new RoomError('请先完成所选成员的连接，再继续创建或更新群。',409,'group_members_not_ready');

@@ -1,5 +1,6 @@
 'use strict';
 const fs=require('node:fs'),path=require('node:path');
+const {backendRoute}=require('./launch-routes.cjs');
 const {RoomError,id,now,redact,cleanText}=require('./util.cjs');
 const {resolveConnectionTarget,existingConnectionState}=require('./connection-target.cjs');
 const {present}=require('./member-connection.cjs');
@@ -64,7 +65,7 @@ class OnboardingManager{
   connectionMethod(row){return row.connection_method||(['qwen-desktop','doubao'].includes(row.provider)?'native_desktop':DESKTOP.has(row.provider)?'manual_mcp':BRIDGE.has(row.provider)?'grok_command_bridge':'managed_native');}
   authOwnership(row){
     if(row.provider!=='codex')return null;
-    const memberId=row.target_member_id||row.direct_member_id||this.db.prepare('SELECT backend_member_id FROM launch_proxies WHERE room_id=? AND provider=?').get(row.room_id,row.provider)?.backend_member_id;
+    const memberId=row.target_member_id||row.direct_member_id||backendRoute(this.db,row.room_id,row.provider)?.backend_member_id;
     const target=memberId&&this.service.chat.clients?.get(memberId),client=typeof target?.authOwnershipStatus==='function'?target:this.service.codex;
     try{return client?.authOwnershipStatus?.()||null;}catch(error){return {blocked:true,code:error.code||'codex_auth_ownership_required'};}
   }
@@ -88,7 +89,7 @@ class OnboardingManager{
   }
   pauseForAuthProtection(row,code){this.set(row.id,{status:'needs_action',stage:'connection_repair_required',error:CODEX_REPAIR_MESSAGE,runtime_result:JSON.stringify({status:'connection_repair_required',error_code:code}),auth_revision:row.auth_revision||SHARED_AUTH_REVISION});}
   authProtectionSnapshot(row,code){
-    const memberId=row.target_member_id||row.direct_member_id||this.db.prepare('SELECT backend_member_id FROM launch_proxies WHERE room_id=? AND provider=?').get(row.room_id,row.provider)?.backend_member_id;
+    const memberId=row.target_member_id||row.direct_member_id||backendRoute(this.db,row.room_id,row.provider)?.backend_member_id;
     let name=NAMES[row.provider]||row.provider;try{if(memberId)name=this.service.chat.store.member(memberId).name||name;}catch{}
     return {id:row.id,run_id:row.id,room_id:row.room_id,requested_provider:row.requested_provider,provider:row.provider,mode:row.mode,
       member_id:memberId||null,name,created:row.created,updated:row.updated,started_at:row.started_at||row.created,goal:row.goal||'',
@@ -174,7 +175,7 @@ class OnboardingManager{
     // An explicit request for a separate person skips reuse; nothing existing is rebound.
     const target=input.new_member===true?{member_id:null,blocked:false,reused_connection:false}:this.service.chat.store.participants&&this.service.resume?resolveConnectionTarget(this.service,{provider:selection.provider,room_id:room.id,target_member_id:input.target_member_id}):{member_id:null,blocked:false,reused_connection:false};
     if(input.new_member===true&&(input.target_member_id||input.reauthorize===true))throw new RoomError('新建成员不能同时指定原人物。',400,'onboarding_target_conflict');
-    if(input.new_member===true&&this.db.prepare('SELECT 1 FROM launch_proxies WHERE room_id=? AND provider=?').get(room.id,selection.provider))throw new RoomError('这个房间已经有这位成员了。',409,'onboarding_member_exists');
+    if(input.new_member===true&&backendRoute(this.db,room.id,selection.provider))throw new RoomError('这个房间已经有这位成员了。',409,'onboarding_member_exists');
     if(input.reauthorize===true&&(!input.target_member_id||input.target_member_id!==target.member_id))throw new RoomError('重新授权必须明确指定原人物。',403,'connection_target_required');
     // Doubao defaults to automatic delivery; other desktop clients use MCP.
     // Existing members keep their delivery mode unless explicitly switched.
@@ -562,7 +563,7 @@ class OnboardingManager{
       if(row.status==='running'&&this.jobs.has(row.id)||session?.status==='preparing'){base.status='running';return base;}
       base.status='needs_action';base.stage='unsupported';base.next_actions=[action('verify','重试准备 Grok Bot 本人入口',{operation:'retry'})];return base;
     }
-    const proxy=this.db.prepare('SELECT * FROM launch_proxies WHERE room_id=? AND provider=?').get(row.room_id,row.provider);
+    const proxy=backendRoute(this.db,row.room_id,row.provider);
     let member=null,installation=null,credentialStatus=null,nativeConnecting=false;
     if(proxy){
       member=this.service.chat.store.member(proxy.backend_member_id);installation=json(proxy.installation,null);

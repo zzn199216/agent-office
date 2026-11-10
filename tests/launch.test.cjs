@@ -80,7 +80,7 @@ function setup(t, overrides = {}) {
   return { ...f, service, room, project, clients, installations, catalog: scan, providers: scan.candidates.filter(candidate => candidate.capabilities.automatic_launch).map(candidate => candidate.provider), get scans() { return scans; } };
 }
 async function prepared(v, input = {}) {
-  const start = (await v.service.launch.prepare({ room_id: v.room.id, providers: v.providers, ...input }));
+  const start = (await v.service.launch.prepare({ room_id: v.room.id, providers: v.providers, group_name:'Fixture mirror group', ...input }));
   await Promise.all([...v.service.launch.jobs.values()]);
   await until(() => !v.service.chat.active.size, 'native fixture handshakes');
   return v.service.launch.state({ session_id: start.id });
@@ -362,7 +362,7 @@ test('a pending preparation is reused without accepting a second request to wide
 });
 test('the real local HTTP flow separates preparation, host reports, card entry and correlated answers', async t => {
   const v = setup(t), api = await apiFor(t, v.service);
-  const start = await api('/api/launch/prepare', { room_id: v.room.id, providers: v.providers, goal: '无窗口操作的fixture协作', install_clients: false });
+  const start = await api('/api/launch/prepare', { room_id: v.room.id, providers: v.providers, group_name:'Fixture HTTP mirror', goal: '无窗口操作的fixture协作', install_clients: false });
   await Promise.all([...v.service.launch.jobs.values()]); await until(() => !v.service.chat.active.size);
   const state = await api(`/api/launch/state?session_id=${start.id}`), proxy = state.proxies.find(p => p.provider === 'claude-code');
   assert.equal(state.proxies.length, 2); assert.equal(state.grok_verified, false);
