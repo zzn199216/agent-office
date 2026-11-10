@@ -92,3 +92,17 @@ test('rapid explicit reauthorization clicks reuse the same original-person job w
   await Promise.all([...v.service.onboarding.jobs.values()]);const cards=v.service.resume.credentials(original.member.id),finished=v.service.onboarding.state({run_id:first.id});assert.equal(finished.member_id,original.member.id);assert.equal(cards.length,2);assert.equal(cards.filter(card=>card.status==='revoked').length,1);assert.equal(v.counts().members,2);
   const pending=v.service.onboarding.start(input);assert.equal(pending.id,first.id,'a waiting handshake keeps its same reauthorization run');assert.equal(v.service.resume.credentials(original.member.id).length,2);
 });
+
+test('deleted rooms keep fixed proxy restrictions without blocking a new Grok connection',async t=>{
+  const v=setup(t),legacy=v.member('grok-bot'),backend=v.member('codex');
+  v.service.store.db.prepare("INSERT INTO launch_proxies(id,room_id,provider,name,backend_member_id,proxy_member_id,native_group_status,created,updated) VALUES(?,?,?,?,?,?,'pending',?,?)").run(id(),v.other.id,'codex','Retired fixed',backend.member.id,legacy.member.id,now(),now());
+  v.service.chat.store.deleteRoom(v.other.id);
+  const target=resolveConnectionTarget(v.service,{room_id:v.room.id,provider:'grok-bot'});
+  assert.equal(target.member_id,null);assert.equal(target.reason,'new');
+  assert.throws(()=>resolveConnectionTarget(v.service,{room_id:v.room.id,provider:'grok-bot',target_member_id:legacy.member.id}),{code:'proxy_not_bound'});
+  const start=v.service.onboarding.start({room_id:v.room.id,provider:'grok-bot'});await Promise.all([...v.service.onboarding.jobs.values()]);
+  const current=v.service.onboarding.state({run_id:start.id});assert.ok(current.member_id);assert.notEqual(current.member_id,legacy.member.id);assert.notEqual(current.stage,'fixed_proxy_scope');assert.equal(current.ready_for_office,false);
+  const before=v.counts();assert.equal(v.service.onboarding.start({room_id:v.room.id,provider:'grok-bot'}).member_id,current.member_id);assert.deepEqual(v.counts(),before);
+  assert.equal(v.service.resume.credential(legacy.entry.credential_id).status,'active');assert.equal(v.service.resume.credential(legacy.entry.credential_id).room_id,v.other.id);assert.deepEqual(fs.readFileSync(legacy.entry.file),legacy.bytes);
+  assert.throws(()=>memberConnection({store:v.service.store,chat:v.service.chat.store},legacy.card),{code:'proxy_not_bound'});
+});

@@ -227,3 +227,13 @@ test('Claude Desktop parallel preparations serialize the profile merge and prese
   assert.equal(results.filter(result => result.unchanged === true).length, 1);
   assert.equal(results.every(result => result.status === 'configured'), true);
 });
+
+test('Claude Desktop follows its Store migration marker to the active Claude-Data profile', () => {
+  const f=setup('claude-desktop'),old=path.join(f.home,'AppData/Local/Packages/Claude_fixturefamily/LocalCache/Roaming/Claude'),active=path.join(f.home,'AppData/Local/Claude-Data/claude_fixturefamily/claude_desktop_config.json');
+  fs.mkdirSync(old,{recursive:true});fs.mkdirSync(path.dirname(active),{recursive:true});fs.writeFileSync(path.join(old,'.user-data-left.claude_fixturefamily'),'');fs.writeFileSync(path.join(old,'claude_desktop_config.json'),'{"oldArchive":true}');fs.writeFileSync(active,'{"preferences":{"keep":true}}');
+  assert.equal(planClient(f.input,f.options).configuration_file,active);
+  const executable=path.join(f.root,'Program Files/WindowsApps/Claude_3.6556.1.0_x64__fixturefamily/app/Claude.exe');
+  assert.equal(planClient({...f.input,executable},f.options).configuration_file,active);
+  assert.equal(planClient(f.input,{...f.options,configuration_file:active}).configuration_file,active);
+  assert.equal(fs.readFileSync(path.join(old,'claude_desktop_config.json'),'utf8'),'{"oldArchive":true}');
+});

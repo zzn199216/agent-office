@@ -5,7 +5,12 @@ function matches(member,provider){return member.config?.launch_provider===provid
 function credentials(service,member){const rows=service.resume?.credentials(member.id)||[],usableRows=rows.filter(row=>row.status!=='revoked'&&service.chat.store.joined(row.room_id,member.id));let available=usableRows.length>0,active=usableRows.some(row=>row.status==='active');
   if(available&&service.entry?.describePrimary){const preferred=usableRows[0].room_id,description=service.entry.describePrimary(member.id,preferred);available=description.available;active=available&&description.status==='active';}
   return {rows,blocked:rows.length>0&&rows.every(row=>row.status==='revoked'),active,available};}
-function fixedProxy(service,memberId){return service.store.db.prepare('SELECT room_id,backend_member_id FROM launch_proxies WHERE proxy_member_id=? ORDER BY created,id LIMIT 1').get(memberId)||null;}
+// Keep retired routes for credential restrictions and audit, but never select
+// a deleted room's proxy as an available person for a new connection.
+function fixedProxy(service,memberId){
+  const db=service.store.db,hasTombstones=service.chat.store.hasRoomTombstones??!!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='chat_room_tombstones'").get();
+  return db.prepare(`SELECT p.room_id,p.backend_member_id,${hasTombstones?'t.deleted_at':'NULL'} AS room_deleted FROM launch_proxies p ${hasTombstones?'LEFT JOIN chat_room_tombstones t ON t.room_id=p.room_id':''} WHERE p.proxy_member_id=? ORDER BY p.created,p.id LIMIT 1`).get(memberId)||null;
+}
 function usable(service,member){const credential=credentials(service,member);return !credential.blocked&&!!member.verified_at&&!member.error&&!['connection_failed','disabled','revoked','unavailable'].includes(member.status);}
 function resolveConnectionTarget(service,{provider,room_id:roomId,target_member_id:explicit}={}){
   const chat=service.chat.store;chat.room(roomId);
@@ -22,7 +27,7 @@ function resolveConnectionTarget(service,{provider,room_id:roomId,target_member_
     // A verified revoked identity is retained when it is the only known
     // person, rather than silently creating a replacement for explicit intent.
     if(!member){member=chat.members().filter(value=>matches(value,provider)&&value.verified_at&&!fixedProxy(service,value.id)).sort(rank)[0];reason='historical';}
-    if(!member){member=chat.members().filter(value=>matches(value,provider)&&fixedProxy(service,value.id)).sort(rank)[0];reason='fixed_proxy';}
+    if(!member){member=chat.members().filter(value=>{if(!matches(value,provider))return false;const fixed=fixedProxy(service,value.id);return fixed&&!fixed.room_deleted;}).sort(rank)[0];reason='fixed_proxy';}
   }
   if(!member)return {member:null,member_id:null,reason:'new',blocked:false,reused_connection:false};
   const credential=credentials(service,member),joined=chat.joined(roomId,member.id);

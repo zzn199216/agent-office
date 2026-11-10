@@ -43,7 +43,7 @@ function desktopConfiguration(home, roaming, input, options) {
   const relative = file => path.relative(home, file).replace(/\\/g, '/');
   const knownProfile = file => {
     if (path.resolve(file).toLocaleLowerCase() === path.resolve(standard).toLocaleLowerCase()) return true;
-    return /^AppData\/Local\/Packages\/Claude_[a-z0-9]+\/LocalCache\/Roaming\/Claude\/claude_desktop_config\.json$/i.test(relative(path.resolve(file)));
+    return /^AppData\/Local\/(?:Packages\/Claude_[a-z0-9]+\/LocalCache\/Roaming\/Claude|Claude-Data\/claude_[a-z0-9]+)\/claude_desktop_config\.json$/i.test(relative(path.resolve(file)));
   };
   if (options.configuration_file !== undefined) {
     const explicit = options.configuration_file;
@@ -56,14 +56,19 @@ function desktopConfiguration(home, roaming, input, options) {
   if (family) {
     const packageHome = path.join(packages, 'Claude_' + family);
     if (!fs.existsSync(packageHome)) return { file: null, custom: true };
-    return { file: path.join(packageHome, 'LocalCache', 'Roaming', 'Claude', 'claude_desktop_config.json') };
+    const oldHome=path.join(packageHome,'LocalCache','Roaming','Claude'),migrated=path.join(home,'AppData','Local','Claude-Data','claude_'+family),oldFile=path.join(oldHome,'claude_desktop_config.json'),newFile=path.join(migrated,'claude_desktop_config.json');
+    if(fs.existsSync(path.join(oldHome,'.user-data-left.claude_'+family))&&fs.existsSync(migrated))return {file:newFile};
+    if(regularFile(oldFile)&&regularFile(newFile))return {file:null,custom:true};
+    return { file: regularFile(newFile)?newFile:oldFile };
   }
   const existing = [];
   if (regularFile(standard)) existing.push(standard);
   try {
     for (const name of fs.readdirSync(packages)) if (/^Claude_[a-z0-9]+$/i.test(name)) {
-      const file = path.join(packages, name, 'LocalCache', 'Roaming', 'Claude', 'claude_desktop_config.json');
-      if (regularFile(file)) existing.push(file);
+      const oldHome=path.join(packages,name,'LocalCache','Roaming','Claude'),file=path.join(oldHome,'claude_desktop_config.json'),migrated=path.join(home,'AppData','Local','Claude-Data',name.toLowerCase(),'claude_desktop_config.json');
+      const moved=fs.existsSync(path.join(oldHome,'.user-data-left.'+name.toLowerCase()));
+      if (regularFile(file)&&!moved) existing.push(file);
+      if (regularFile(migrated)) existing.push(migrated);
     }
   } catch (error) { if (error.code !== 'ENOENT') return { file: null, custom: true }; }
   // Two independent profiles cannot be silently reconciled from process name.
@@ -111,6 +116,7 @@ function planClient(input, options = {}) {
   if (paths.custom) return result(plan, 'custom_profile', '无法确认 Claude 的实际用户配置目录，未写入其他应用的配置。');
   if (!regularFile(command) || !regularFile(entryFile)) return result(plan, 'entry_missing', 'AgentRoom 程序或长期成员入口文件不存在。');
   if (provider === 'claude-desktop') return { ...plan, status: 'planned', needs_reload: true, source: SOURCES[provider], command, args, entry_file: entryFile, installation_method: 'desktop_json', configuration: { command, args } };
+  if (!input.executable) return result(plan, 'client_cli_missing', '没有找到可执行的客户端 CLI，请先安装该客户端。');
   const executable = absoluteFile(input.executable, '客户端 CLI');
   if (!regularFile(executable)) return result(plan, 'client_cli_missing', '没有找到可执行的客户端 CLI。');
   if (process.platform === 'win32' && /\.(cmd|bat|ps1)$/i.test(executable)) return result(plan, 'native_cli_required', '需要客户端原生程序或已解析的 Node CLI，不能用 shell 脚本安装。');
