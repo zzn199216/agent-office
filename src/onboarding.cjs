@@ -41,9 +41,10 @@ class OnboardingManager{
     if(!this.db.prepare('PRAGMA table_info(onboarding_runs)').all().some(column=>column.name==='goal'))this.db.exec("ALTER TABLE onboarding_runs ADD COLUMN goal TEXT NOT NULL DEFAULT ''");
     if(!this.db.prepare('PRAGMA table_info(onboarding_runs)').all().some(column=>column.name==='verify_reply'))this.db.exec('ALTER TABLE onboarding_runs ADD COLUMN verify_reply INTEGER NOT NULL DEFAULT 0');
     if(!this.db.prepare('PRAGMA table_info(onboarding_runs)').all().some(column=>column.name==='direct_member_id'))this.db.exec('ALTER TABLE onboarding_runs ADD COLUMN direct_member_id TEXT');
-    for(const [name,type]of [['target_member_id','TEXT'],['connection_reused','INTEGER NOT NULL DEFAULT 0'],['reauthorize','INTEGER NOT NULL DEFAULT 0'],['selection_reason','TEXT'],['connection_method','TEXT'],['started_at','TEXT'],['auth_mode','TEXT'],['auth_revision','TEXT'],['new_member','INTEGER NOT NULL DEFAULT 0'],['error_code','TEXT']])if(!this.db.prepare('PRAGMA table_info(onboarding_runs)').all().some(column=>column.name===name))this.db.exec(`ALTER TABLE onboarding_runs ADD COLUMN ${name} ${type}`);
+    for(const [name,type]of [['target_member_id','TEXT'],['connection_reused','INTEGER NOT NULL DEFAULT 0'],['reauthorize','INTEGER NOT NULL DEFAULT 0'],['selection_reason','TEXT'],['connection_method','TEXT'],['started_at','TEXT'],['auth_mode','TEXT'],['auth_revision','TEXT'],['new_member','INTEGER NOT NULL DEFAULT 0'],['error_code','TEXT'],['closed_at','TEXT'],['closure_reason','TEXT']])if(!this.db.prepare('PRAGMA table_info(onboarding_runs)').all().some(column=>column.name===name))this.db.exec(`ALTER TABLE onboarding_runs ADD COLUMN ${name} ${type}`);
     this.db.prepare("UPDATE onboarding_runs SET status='interrupted',stage='interrupted',error='接入期间本机处理程序结束。请点击重试；不会重放业务问题。',updated=? WHERE status='running' AND stage<>'verifying_reply'").run(now());
     this.attempts=new (require('./onboarding-attempts.cjs').OnboardingAttempts)(this.db);
+    this.reconcileRuns();
     this.verification=options.replyVerification===false?null:new (require('./onboarding-verification.cjs').OnboardingVerification)(service,options.verification||{});
     this.verificationPulse=()=>{this.syncConnectionFailures();this.advanceVerifications();this.syncAttempts();};this.service.on?.('change',this.verificationPulse);
     this.verificationTimer=setInterval(this.verificationPulse,options.verification?.pollMs||500);this.verificationTimer.unref();
@@ -159,8 +160,9 @@ class OnboardingManager{
   row(runId){const row=this.db.prepare('SELECT * FROM onboarding_runs WHERE id=?').get(runId);if(!row)throw new RoomError('接入进度不存在。',404,'onboarding_not_found');this.service.chat.store.room(row.room_id);return row;}
   set(runId,fields){
     const current=this.db.prepare('SELECT room_id,status FROM onboarding_runs WHERE id=?').get(runId);
-    if(current?.status==='cancelled'||current&&this.service.chat.roomDeleted?.(current.room_id))return;
-    const allowed=new Set(['status','stage','launch_session_id','runtime_result','error','error_code','auth_mode','auth_revision']);
+    if(['cancelled','superseded'].includes(current?.status)||current&&this.service.chat.roomDeleted?.(current.room_id))return;
+    if(['ready','error','interrupted','cancelled','superseded'].includes(fields.status))fields={...fields,closed_at:now()};
+    const allowed=new Set(['status','stage','launch_session_id','runtime_result','error','error_code','closed_at','closure_reason','auth_mode','auth_revision']);
     const pairs=Object.entries(fields).filter(([key])=>allowed.has(key));
     if(!pairs.length)return;
     this.db.prepare(`UPDATE onboarding_runs SET ${pairs.map(([key])=>`${key}=?`).join(',')},updated=? WHERE id=?`).run(...pairs.map(([,value])=>value),now(),runId);
@@ -190,10 +192,10 @@ class OnboardingManager{
       if(snapshot.stage==='connection_repair_required')return {...snapshot,reused:true};
       rechecking=snapshot.stage==='connection_recheck_available';recheckMemberId=rechecking?snapshot.member_id:null;
       if(!rechecking){
-      if(previous.stage==='awaiting_previous_result'){this.advanceVerifications();return {...this.snapshot(this.row(previous.id)),reused:true};}
+      if(previous.stage==='awaiting_previous_result'&&!['cancelled','superseded'].includes(previous.status)){this.advanceVerifications();return {...this.snapshot(this.row(previous.id)),reused:true};}
       // Reading or repeating the same button cannot silently increase install
       // permission, recreate a native session or replay a model handshake.
-      if(['waiting','waiting_result','uncertain'].includes(snapshot.reply_verification?.status)||snapshot.status==='running'||this.jobs.has(previous.id)||snapshot.status==='ready'&&!target.blocked||input.reauthorize===true&&previous.reauthorize&&!target.blocked&&!['error','interrupted'].includes(snapshot.status)||input.reauthorize!==true&&(snapshot.status==='ready'||input.retry!==true&&!['error','interrupted'].includes(snapshot.status)))return {...snapshot,reused:true};
+      if(['waiting','waiting_result','uncertain'].includes(snapshot.reply_verification?.status)||snapshot.status==='running'||this.jobs.has(previous.id)||snapshot.status==='ready'&&!target.blocked||input.reauthorize===true&&previous.reauthorize&&!target.blocked&&!['error','interrupted','cancelled','superseded'].includes(snapshot.status)||input.reauthorize!==true&&(snapshot.status==='ready'||input.retry!==true&&!['error','interrupted','cancelled','superseded'].includes(snapshot.status)))return {...snapshot,reused:true};
       if(input.retry===true&&snapshot.member_id&&this.connectionSnapshot(previous).stage==='ready_automatic'&&this.verification?.retryFailed(snapshot.member_id,!snapshot.automatic_reply_verified)){
         this.attempts.begin(previous);this.db.prepare('UPDATE onboarding_runs SET started_at=? WHERE id=?').run(now(),previous.id);
         this.set(previous.id,{status:'needs_action',stage:'awaiting_connection',error:null});this.advanceVerifications();
@@ -202,11 +204,16 @@ class OnboardingManager{
       if(input.retry===true&&snapshot.member_id)this.verification?.retryFailed(snapshot.member_id);
       }
     }
+    for(const active of this.db.prepare("SELECT * FROM onboarding_runs WHERE room_id=? AND provider=? AND status IN ('running','needs_action')").all(room.id,selection.provider)){
+      const view=this.snapshot(active);
+      if(this.jobs.has(active.id)||['waiting','waiting_result','uncertain'].includes(view.reply_verification?.status))return {...view,reused:true};
+    }
     const fixedElsewhere=target.fixed_proxy&&target.fixed_proxy.room_id!==room.id;
     const authentication=this.authOwnership({provider:selection.provider,room_id:room.id,target_member_id:target.member_id||recheckMemberId});
     const stamp=now(),row={id:id(),room_id:room.id,...selection,status:fixedElsewhere||target.blocked&&input.reauthorize!==true?'needs_action':'running',stage:fixedElsewhere?'fixed_proxy_scope':target.blocked&&input.reauthorize!==true?'awaiting_credential':'preparing',launch_session_id:null,install_client:input.install_client===true?1:0,install_runtime:input.install_runtime===true?1:0,runtime_result:null,error:null,created:stamp,updated:stamp,started_at:stamp,goal,verify_reply:this.verification?1:0,target_member_id:target.member_id||recheckMemberId,connection_reused:target.reused_connection?1:0,reauthorize:input.reauthorize===true?1:0,new_member:input.new_member===true?1:0,selection_reason:target.reason||null,
       auth_mode:typeof authentication?.mode==='string'?authentication.mode:null,auth_revision:typeof authentication?.revision==='string'?authentication.revision:selection.provider==='codex'?SHARED_AUTH_REVISION:null};
     const protection=this.authProtection(row);if(protection)Object.assign(row,{status:'needs_action',stage:'connection_repair_required',error:CODEX_REPAIR_MESSAGE,runtime_result:JSON.stringify({status:'connection_repair_required',error_code:protection})});
+    this.retirePrevious(row);
     this.db.prepare('INSERT INTO onboarding_runs(id,room_id,requested_provider,provider,mode,status,stage,launch_session_id,install_client,install_runtime,runtime_result,error,created,updated,goal,verify_reply,target_member_id,connection_reused,reauthorize,new_member,selection_reason,connection_method,started_at,auth_mode,auth_revision) VALUES(:id,:room_id,:requested_provider,:provider,:mode,:status,:stage,:launch_session_id,:install_client,:install_runtime,:runtime_result,:error,:created,:updated,:goal,:verify_reply,:target_member_id,:connection_reused,:reauthorize,:new_member,:selection_reason,:connection_method,:started_at,:auth_mode,:auth_revision)').run(row);
     this.attempts.begin(row);
     if(protection){this.service.changed();return this.snapshot(row);}
@@ -263,6 +270,7 @@ class OnboardingManager{
       const stamp=now();row={id:id(),room_id:room.id,requested_provider:desktop.provider,provider:desktop.provider,
         mode:BRIDGE.has(desktop.provider)?'bridge':'desktop',status:'needs_action',stage:'awaiting_connection',created:stamp,updated:stamp,
         verify_reply:this.verification?1:0,direct_member_id:member.id,connection_method:'native_desktop',started_at:stamp};
+      this.retirePrevious(row);
       this.db.prepare(`INSERT INTO onboarding_runs(id,room_id,requested_provider,provider,mode,status,stage,created,updated,verify_reply,direct_member_id,connection_method,started_at)
         VALUES(:id,:room_id,:requested_provider,:provider,:mode,:status,:stage,:created,:updated,:verify_reply,:direct_member_id,:connection_method,:started_at)`).run(row);this.attempts.begin(row);
     }
@@ -360,12 +368,29 @@ class OnboardingManager{
       return credential?.status||'missing';
     }catch(error){return error?.code==='resume_revoked'?'revoked':error?.code==='ENOENT'?'missing':'invalid';}
   }
+  retirePrevious(row){
+    this.db.prepare("UPDATE onboarding_runs SET status='superseded',closed_at=?,closure_reason='retry',updated=? WHERE room_id=? AND provider=? AND id<>? AND status IN ('running','needs_action')").run(now(),now(),row.room_id,row.provider,row.id);
+  }
+  reconcileRuns(){
+    const stamp=now(),hasDeleted=!!this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='chat_room_tombstones'").get();
+    if(hasDeleted){
+      this.db.prepare("UPDATE onboarding_runs SET status='cancelled',closed_at=coalesce(closed_at,?),closure_reason='room_deleted',updated=? WHERE status IN ('running','needs_action') AND EXISTS(SELECT 1 FROM chat_room_tombstones t WHERE t.room_id=onboarding_runs.room_id)").run(stamp,stamp);
+      this.db.prepare("UPDATE onboarding_attempts SET outcome='abandoned',completed_at=? WHERE outcome='waiting' AND EXISTS(SELECT 1 FROM chat_room_tombstones t WHERE t.room_id=onboarding_attempts.room_id)").run(stamp);
+    }
+    const seen=new Set();
+    for(const row of this.db.prepare("SELECT * FROM onboarding_runs WHERE status IN ('running','needs_action') ORDER BY created DESC,rowid DESC").all()){
+      const key=row.room_id+':'+row.provider;
+      if(seen.has(key))this.db.prepare("UPDATE onboarding_runs SET status='superseded',closed_at=?,closure_reason='historical_duplicate',updated=? WHERE id=?").run(stamp,stamp,row.id);
+      seen.add(key);
+    }
+    this.db.prepare("UPDATE onboarding_attempts SET outcome='superseded',completed_at=? WHERE outcome='waiting' AND EXISTS(SELECT 1 FROM onboarding_runs r WHERE r.id=onboarding_attempts.run_id AND r.status='superseded')").run(stamp);
+  }
   syncAttempts(){
     if(this.closing||this.syncingAttempts)return;
     this.syncingAttempts=true;
     try{for(const row of this.db.prepare("SELECT r.* FROM onboarding_runs r WHERE EXISTS(SELECT 1 FROM onboarding_attempts a WHERE a.run_id=r.id AND a.outcome='waiting')").all()){
       if(this.service.chat.roomDeleted?.(row.room_id))continue;
-      try{this.attempts.observe(row,this.snapshot(row));}catch{}
+      try{const view=this.snapshot(row);this.attempts.observe(row,view);if(view.ready_for_office&&['running','needs_action'].includes(row.status))this.setIfDifferent(row,{status:'ready',stage:view.stage,error:null,error_code:null});}catch{}
     }}finally{this.syncingAttempts=false;}
   }
   syncConnectionFailures(){
@@ -381,7 +406,7 @@ class OnboardingManager{
     this.advancingVerification=true;
     try{
       this.verification.refresh();
-      const rows=this.db.prepare("SELECT * FROM onboarding_runs WHERE verify_reply=1 AND status NOT IN ('cancelled','error','interrupted') AND stage IN ('awaiting_connection','awaiting_native_desktop','awaiting_previous_result','ready_automatic','verifying_reply','verification_pending','verification_failed') ORDER BY created DESC,rowid DESC").all(),seen=new Set();
+      const rows=this.db.prepare("SELECT * FROM onboarding_runs WHERE verify_reply=1 AND status NOT IN ('cancelled','superseded','error','interrupted') AND stage IN ('awaiting_connection','awaiting_native_desktop','awaiting_previous_result','ready_automatic','verifying_reply','verification_pending','verification_failed') ORDER BY created DESC,rowid DESC").all(),seen=new Set();
       for(const row of rows){
         if(this.service.chat.roomDeleted?.(row.room_id))continue;
         const connection=this.connectionSnapshot(row);
@@ -414,7 +439,7 @@ class OnboardingManager{
     catch{return present({provider,status:'needs_action',stage:'awaiting_connection',member_id:memberId});}
   }
   snapshot(row){
-    const value=this.snapshotCore(row);
+    const value=['superseded','cancelled'].includes(row.status)?{id:row.id,run_id:row.id,room_id:row.room_id,provider:row.provider,name:NAMES[row.provider]||row.provider,status:row.status,stage:row.stage,error:row.error||'这次接入已结束，请查看当前接入记录。',error_code:row.error_code||null,ready_for_office:false,local_verified:false,can_wake:false,next_actions:[]}:this.snapshotCore(row);
     // One user-facing projection; internal stages stay for diagnostics.
     const code=value.error_code||value.connection_evidence?.last_error?.code||row.error_code||null;
     value.error_code=code;
