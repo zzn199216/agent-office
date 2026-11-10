@@ -267,3 +267,5 @@ body.pixel-theme .secretary-connection-note,body.pixel-theme .secretary-steps,bo
 body.pixel-theme .sidebar-empty{color:#4a2e1a;opacity:.8;padding:6px 12px 12px}
 .team-more{margin-top:8px;border-top:1px solid var(--line);padding-top:12px}.team-more>summary{cursor:pointer;font-size:12px;color:var(--muted);margin-bottom:12px}
 .team-more .team-mirror-entry{border-bottom:0;margin:12px 0 0;padding:16px 0 0;border-top:1px solid var(--line)}
+
+.launch-candidate-group h3{font-size:13px;color:var(--muted);margin:14px 0 8px}.connection-panel-reason{overflow-wrap:anywhere}

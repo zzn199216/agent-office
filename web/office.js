@@ -184,6 +184,7 @@
   }
   function participantPresence(member, runtime, online, now) {
     const observed = {...(runtime?.members || runtime?.presence || []).find(item => (item.id || item.member_id) === member.id), ...member.runtime_state};
+    if(member.verified_at===null||['connection_failed','failed','disabled','revoked','unavailable','awaiting_handshake'].includes(member.status))return {status:'offline',label:member.connection_presentation?.headline||'尚未接通',worker:false,lastSeen:null,needsConnection:true};
     const desktop=member.desktop_connection,nativeUnavailable=desktop&&!['manual','manual_mcp','configured_notification'].includes(member.connection_method)&&member.response_mode!=='manual_mailbox'&&desktop.configured===true&&desktop.can_wake===false&&(['offline','error','failed','reconnecting'].includes(desktop.state)||!!desktop.error);
     if(nativeUnavailable)return {status:'offline',label:online?'还没连上 · 点开查看':'服务已关闭',worker:false,lastSeen:member.last_seen||observed.last_seen||null,needsConnection:online};
     const original = member.presence || observed.presence || 'unknown';
@@ -375,15 +376,15 @@
       const name=node(document,'strong'),secretaryBadge=node(document,'span','ao-secretary-badge','秘书'),nameLine=node(document,'span','ao-name-line');secretaryBadge.hidden=true;nameLine.append(name,secretaryBadge);const status=node(document,'span','ao-seat-status');status.append(node(document,'i','ao-status-dot'),node(document,'span','ao-status-text'));label.append(nameLine,status);
       const customize=node(document,'button','ao-customize','✎');customize.type='button';customize.dataset.memberId=info.member.id;
       customize.hidden=typeof options.onCustomize!=='function';
-      root.append(bubble,furniture,character,label,customize);
-      const item={root,bubble,bubbleLabel,bubbleText,desk,furniture,character,figure,shape,custom,head,avatar,name,secretaryBadge,status:status.lastChild,label,customize,info:null,recent:0,messageId:null,entering:false,motion:null,motionToken:0,position:null,avatarSource:null};
+      const reconnect=node(document,'button','ao-reconnect','继续接入');reconnect.type='button';root.append(bubble,furniture,character,label,reconnect,customize);
+      const item={root,bubble,bubbleLabel,bubbleText,desk,furniture,character,figure,shape,custom,head,avatar,name,secretaryBadge,status:status.lastChild,label,reconnect,customize,info:null,recent:0,messageId:null,entering:false,motion:null,motionToken:0,position:null,avatarSource:null};
       watchArt(custom,loaded=>{item.root.classList.toggle('ao-character-ready',loaded);});
       avatar.addEventListener('error',()=>{
         const key=item.info?.appearance.provider, fallback=`${ASSETS}pixel-avatar-generic.png`;
         if(avatar.getAttribute('src')!==fallback)avatar.src=fallback;
       });
       function choose() {selected.clear();selected.add(info.member.id);for(const entry of items.values())entry.root.classList.toggle('ao-selected',selected.has(entry.info.member.id));callback('onSelectMember',item.info.member);}
-      character.addEventListener('click',choose);label.addEventListener('click',choose);
+      character.addEventListener('click',choose);label.addEventListener('click',choose);reconnect.addEventListener('click',choose);
       bubble.addEventListener('click',() => {const message=item.info.activity?.message||item.info.message;if(message)callback('onSelectMessage',message);});
       customize.addEventListener('click',() => callback('onCustomize',item.info.member));
       return item;
@@ -401,7 +402,7 @@
       item.root.dataset.presence=presence.status;
       if(!info.occupied&&item.entering)settleEntrance(item,false);
       item.root.classList.toggle('ao-vacant',!info.occupied);item.root.dataset.occupied=String(info.occupied);
-      item.character.hidden=!info.occupied;
+      item.character.hidden=!info.occupied;item.reconnect.hidden=!presence.needsConnection;item.root.classList.toggle('ao-unconnected',!!presence.needsConnection);
       item.root.classList.toggle('ao-working',info.occupied&&!item.entering&&info.processing&&!info.needsInput);item.root.classList.toggle('ao-waiting',info.occupied&&!item.entering&&!info.processing&&!info.needsInput&&info.waiting);
       item.root.classList.toggle('ao-offline',!current.online || ['offline','stale','unknown'].includes(presence.status));
       item.root.classList.toggle('ao-message-visible',!item.entering&&(!!info.activity||info.showMessage && !!message));
@@ -494,7 +495,8 @@
       current=next;scene.dataset.roomId=next.roomId;scene.classList.toggle('ao-offline-room',!next.online);
       config=normalizeScene(input.scene);updateWorld();
       if(!next.online)cancelEntrances();
-      count.textContent=`${next.members.length} 个工位`;
+      const occupied=next.members.filter(info=>info.occupied).length,pending=next.members.filter(info=>info.presence.needsConnection).length,offline=next.members.length-occupied-pending;
+      count.textContent=`${occupied} 位在线 · ${pending} 位未接通${offline?` · ${offline} 位离线`:''}`;
       health.textContent=next.online?'本机服务已连接':'离线历史 · 服务已关闭';
       health.classList.toggle('offline',!next.online);
       const roomName=input.room?.title||input.roomTitle;

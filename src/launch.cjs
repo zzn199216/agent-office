@@ -140,7 +140,7 @@ class LaunchManager{
   }
   mirrorRequested(roomId,session={}){
     if(session.group_name||this.db.prepare('SELECT 1 FROM launch_proxies WHERE room_id=? AND native_group_ref IS NOT NULL LIMIT 1').get(roomId))return true;
-    return this.service.chat.store.participants(roomId).some(member=>member.adapter==='grok-bridge'&&member.verified_at&&member.status==='ready');
+    return this.service.chat.store.participants(roomId).some(member=>member.adapter==='grok-bridge'&&member.verified_at&&member.status==='ready'&&(this.service.resume.credentials(member.id).some(credential=>credential.status==='active')||this.service.chat.deliveryCapability(member).can_notify===true));
   }
   setInstallation(roomId,provider,result){
     const stamp=now(),text=JSON.stringify(result);

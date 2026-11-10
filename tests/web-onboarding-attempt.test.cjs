@@ -146,7 +146,7 @@ test('current attempt readiness is mandatory and native mailbox success cannot m
 
 test('running discovery states are subordinate to actual authorization and attempt progress',()=>{
   const f=fixture();f.context.launchCandidates=[{id:'codex',name:'Codex',installed:true,running:true,capabilities:{automatic_launch:true}}];f.context.renderLaunchCandidates();
-  let html=f.$('launch-candidates').innerHTML;assert.match(html,/需要先在 Codex 里登录/);assert.match(html,/查看登录状态/);assert.doesNotMatch(html,/正在运行|本次连接已验证|后台账号需单独核对/);
+  let html=f.$('launch-candidates').innerHTML;assert.match(html,/Codex 需要登录/);assert.match(html,/继续接入/);assert.doesNotMatch(html,/正在运行|本次连接已验证|后台账号需单独核对/);
   f.context.onboardingJobs.clear();f.context.renderLaunchCandidates();html=f.$('launch-candidates').innerHTML;assert.match(html,/正在运行/);assert.doesNotMatch(html,/本次连接已验证/);
 });
 test('the explicit current attempt wins over historical jobs with newer observation timestamps',()=>{

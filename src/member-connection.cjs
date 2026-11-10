@@ -86,7 +86,7 @@ function present(snapshot = {}, context = {}) {
     return result('connected', `${name} 已连接，有人找它时去 ${name} 里看一下`, null, secondary);
   }
 
-  if (status === 'running' || BUSY_STAGES.has(stage) || actionKind === 'wait')
+  if (status === 'running' || !FAILED.has(status) && (BUSY_STAGES.has(stage) || actionKind === 'wait'))
     return result('waiting', `正在连接 ${name}…`, null, null, { busy: true });
 
   if (stage === 'awaiting_credential' || actionKind === 'reauthorize' || /revoked|reauthoriz/i.test(code || ''))
@@ -97,6 +97,8 @@ function present(snapshot = {}, context = {}) {
     return result('attention', `${name} 需要登录`, provider === 'codex' ? pick(snapshot, 'retry', '我已登录，重新检查') : offered(snapshot, 'login_client') ? pick(snapshot, 'login_client', snapshot.configuration?.api_mode ? '打开 API 配置' : `登录 ${name}`) : pick(snapshot, 'retry', '登录后重新检查'), provider !== 'codex' && offered(snapshot, 'login_client') ? button('retry', '登录后重新检查') : null);
   if (stage === 'awaiting_quota')
     return result('attention', `${name} 的额度用完了`, pick(snapshot, 'retry', '处理后重新检查'));
+  if (offered(snapshot, 'open_install_docs'))
+    return result('attention', `需要先安装 ${name}`, pick(snapshot, 'open_install_docs', `安装 ${name}`), pick(snapshot, 'retry', '安装后重新检查'));
   if (stage === 'awaiting_runtime_install')
     return result('attention', `需要先安装 ${name}`, pick(snapshot, 'install_runtime', `安装 ${name}`));
   if (stage === 'awaiting_provider_action')

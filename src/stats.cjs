@@ -36,7 +36,7 @@ function summarize(rows) {
     groups.get(key).push(row);
   }
   const result = {attempts:rows.length,first_attempts:rows.filter(row=>row.kind==='first').length,retries:rows.filter(row=>row.kind==='retry').length,
-    cohorts:groups.size,first_connected:0,retry_connected:0,abandoned:0,waiting:0,
+    connected_attempts:rows.filter(row=>row.outcome==='connected').length,cohorts:groups.size,first_connected:0,retry_connected:0,abandoned:0,waiting:0,
     mcp_connected_attempts:rows.filter(row=>row.protocol_verified).length,
     automatic_reply_verified_attempts:rows.filter(row=>row.automatic_reply_verified).length,
     median_connect_ms:median(rows.filter(row=>row.outcome==='connected').map(row=>Date.parse(row.completed_at)-Date.parse(row.started_at)))};

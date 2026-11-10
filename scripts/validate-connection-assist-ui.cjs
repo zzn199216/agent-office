@@ -157,8 +157,10 @@ const {playwright,outputDirectory}=require('./browser-validation.cjs');
     service.onboarding.options.env={CLAUDE_CONFIG_DIR:profile};service.onboardingActions.options.env={CLAUDE_CONFIG_DIR:profile};
     let opened=0;service.onboardingActions.options.launcher=async request=>{assert.equal(request.command,'notepad.exe');assert.deepEqual(request.args,[path.join(profile,'settings.json')]);opened++;};
     service.chat.options.clientFactory=member=>{const client=new Actor(member);if(member.adapter==='claude-code')client.run=async()=>{throw new (require('../src/util.cjs').RoomError)('Claude API 密钥尚未填写或仍为占位文字。打开 API 配置，保存有效密钥后继续接入。',503,'claude_login_required');};return client;};
+    candidates.push({id:'codex',provider:'codex',name:'Codex',adapter:'codex',installed:false,capabilities:{}});
     candidates.push({id:'claude-code',provider:'claude-code',name:'Claude Code',adapter:'claude-code',installed:true,executable:cli,capabilities:{automatic_launch:true}});
     await page.reload();await page.locator('#professional-toggle').click();
+    await page.locator('#secretary-connect-candidates').getByRole('button',{name:'Codex 安装 Codex',exact:true}).waitFor();proof.checks.missing_recommended_install_visible=true;
     await page.locator('#secretary-connect-candidates [data-onboarding-provider="claude-code"]').click();
     const failedPanel=page.locator('#secretary-connect-progress');
     await failedPanel.locator('.connection-panel-reason').filter({hasText:'Claude API 密钥尚未填写'}).waitFor();
@@ -168,6 +170,13 @@ const {playwright,outputDirectory}=require('./browser-validation.cjs');
     const failedRun=service.store.db.prepare("SELECT * FROM onboarding_runs WHERE provider='claude-code' ORDER BY rowid DESC LIMIT 1").get();
     assert.match(failedRun.error,/密钥尚未填写/);assert.equal(failedRun.error_code,'claude_login_required');
     await page.screenshot({path:path.join(out,'actionable-api-failure.png')});proof.checks.failure_reason_and_api_action_visible=true;
+    await page.locator('#secretary-connect-dialog .close-dialog').click();
+    await page.locator('#office-view-button').click();
+    const failedMember=service.onboarding.state({run_id:failedRun.id}).member_id,seat=page.locator('.ao-seat[data-member-id="'+failedMember+'"]');
+    await seat.getByRole('button',{name:'继续接入',exact:true}).waitFor();assert.equal(await seat.getAttribute('data-occupied'),'false');
+    assert.match(await page.locator('.ao-count').textContent(),/位未接通/);
+    await page.screenshot({path:path.join(out,'unconnected-gray-station.png')});
+    await seat.getByRole('button',{name:'继续接入',exact:true}).click();await page.locator('#member-setup-dialog').waitFor({state:'visible'});proof.checks.unconnected_station_opens_repair=true;
     assert.deepEqual(errors,[]);proof.ok=true;
   }catch(error){proof.error=error.stack;process.exitCode=1;if(page)await page.screenshot({path:path.join(out,'failure.png')}).catch(()=>{});}
   finally{releaseSetup?.();await browser?.close();await server?.close();await service?.close();proof.page_errors=errors;fs.writeFileSync(path.join(out,'result.json'),JSON.stringify(proof,null,2));const owned=path.resolve(f.root);assert.equal(path.dirname(owned),path.resolve(os.tmpdir()));assert.match(path.basename(owned),/^agentroom-test-/);fs.rmSync(owned,{recursive:true,force:true});console.log(JSON.stringify(proof));}

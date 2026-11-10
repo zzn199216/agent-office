@@ -39,7 +39,7 @@ test('the picker leads with an AI that can be the secretary, lists what is on th
   assert.ok(boundary > 0);
   assert.ok(shown.indexOf('Closed Claude') >= 0 && shown.indexOf('Closed Claude') < shown.indexOf('Running Doubao'), 'a background AI that can be the secretary comes first');
   assert.match(shown.slice(0, shown.indexOf('Running Doubao')), /推荐当秘书/);
-  assert.equal((html.match(/推荐/g) || []).length, 1, 'one recommendation');
+  assert.equal((html.match(/launch-recommend"/g) || []).length, 1, 'one recommendation');
   for (const name of ['Running Doubao','Running Qwen','Running Grok']) assert.ok(shown.includes(name));
   assert.equal(shown.includes('Uninstalled CLI'), false);assert.ok(html.slice(boundary).includes('Uninstalled CLI'));
   assert.doesNotMatch(html.slice(boundary).split('>')[0], /\bopen\b/);
@@ -80,7 +80,7 @@ test('an AI already connected in this room is marked as such and is not recommen
   state.context.onboardingJobs.set('job',{id:'job',provider:'codex',room_id:'room',status:'ready',stage:'ready_automatic',ready_for_office:true,can_wake:true});
   state.context.renderLaunchCandidates();
   const html = state.$('launch-candidates').innerHTML, codex = html.slice(0, html.indexOf('Claude Code'));
-  assert.match(codex, /已在房间里/);assert.match(codex, /disabled>已在房间里/);assert.doesNotMatch(codex, /推荐/);
+  assert.match(codex, /已在房间里/);assert.match(codex, /disabled>已在房间里/);assert.doesNotMatch(codex, /launch-recommend"/);
   assert.match(html.slice(html.indexOf('Claude Code')), /推荐/);
 });
 
@@ -89,4 +89,10 @@ test('a requirements-only button has no provider and cannot dereference an absen
   state.context.onboardingJobs.set('pending',{id:'pending',provider:'codex',room_id:'room',status:'running',stage:'verifying_reply'});
   for(const provider of [undefined,null,''])assert.equal(state.context.onboardingForProvider(provider),null);
   assert.equal(state.context.onboardingForProvider('codex').id,'pending');
+});
+
+test('missing recommended Codex stays visible with an installation entry',()=>{
+  const state=fixture([{id:'codex',name:'Codex',installed:false,capabilities:{}},{id:'qwen-code',name:'Qwen Code',installed:false,capabilities:{runtime_install:true}}]);
+  state.context.renderLaunchCandidates();const html=state.$('launch-candidates').innerHTML,shown=html.split('<details')[0];
+  assert.match(shown,/Codex/);assert.match(shown,/安装 Codex/);assert.match(html,/实验性与其他 AI/);assert.equal(state.calls.length,0);
 });

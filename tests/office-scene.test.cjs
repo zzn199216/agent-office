@@ -45,7 +45,7 @@ test('unknown and unverified members retain an empty station until current onlin
   const awaiting={id:'awaiting',name:'待接通成员',status:'awaiting_handshake'};
   const readyUnknown={id:'verified',name:'身份已验证但在线未知',status:'ready',verified_at:'2026-10-13T07:00:00Z'};
   const model=scene.describe({participants:[awaiting,readyUnknown],online:true,messages:[]},now);
-  assert.ok(model.members.every(item=>item.presence.status==='unknown'&&!item.occupied&&!item.processing));
+  assert.ok(model.members.every(item=>!item.occupied&&!item.processing));assert.equal(model.members[0].presence.status,'offline');assert.equal(model.members[0].presence.needsConnection,true);assert.equal(model.members[1].presence.status,'unknown');
   const observed=scene.describe({participants:[readyUnknown],online:true,runtime:{members:[{id:readyUnknown.id,presence:'online',lease_expires:'2026-10-13T08:01:00Z'}]}},now);
   assert.equal(observed.members[0].occupied,true);
 });

@@ -45,7 +45,7 @@ function retireUnusedProxies(db) {
     saveBackend(db,proxy.room_id,proxy,{id:proxy.backend_member_id});
     db.prepare('UPDATE launch_backends SET installation=coalesce(installation,?) WHERE room_id=? AND provider=?').run(proxy.installation,proxy.room_id,proxy.provider);
     const stamp=now();
-    if(has(db,'chat_resume_credentials'))db.prepare("UPDATE chat_resume_credentials SET status='revoked',revoked_at=? WHERE member_id=? AND status<>'revoked'").run(stamp,memberId);
+    if(has(db,'chat_resume_credentials'))db.prepare("UPDATE chat_resume_credentials SET status='revoked',revoked_at=?,revocation_reason='unused_proxy_retired' WHERE member_id=? AND status<>'revoked'").run(stamp,memberId);
     if(has(db,'chat_invitations'))db.prepare("UPDATE chat_invitations SET status='revoked' WHERE member_id=? AND status='pending'").run(memberId);
     db.prepare('UPDATE chat_participants SET joined=0,left_at=? WHERE member_id=?').run(stamp,memberId);
     db.prepare("UPDATE chat_members SET status='disabled',updated=? WHERE id=?").run(stamp,memberId);

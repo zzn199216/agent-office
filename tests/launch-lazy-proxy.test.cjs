@@ -28,3 +28,10 @@ test('cleanup revokes unused credentials and preserves message, session and used
   assert.equal(v.db.prepare('SELECT count(*) n FROM launch_proxies').get().n,3);
   for(const item of [message,session,credential])assert.equal(v.service.chat.store.joined(v.room.id,item.member.id),true);
 });
+
+test('a historic Grok verification without current access never creates new proxies',async t=>{
+  const v=setup(t),member=v.service.chat.addMember({name:'Grok',adapter:'grok-bridge'});v.service.chat.join(v.room.id,member.id);v.service.chat.store.updateMember(member.id,{status:'ready',verified_at:now()});
+  const entry=v.service.entry.issue(member.id,v.room.id);assert.equal(v.service.launch.mirrorRequested(v.room.id),false);
+  v.service.entry.accept(JSON.parse(fs.readFileSync(entry.file,'utf8')));assert.equal(v.service.launch.mirrorRequested(v.room.id),true);
+  v.service.resume.revoke(entry.credential_id);assert.equal(v.service.launch.mirrorRequested(v.room.id),false);
+});

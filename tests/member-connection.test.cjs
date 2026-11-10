@@ -153,3 +153,10 @@ for(const status of ['error','failed','interrupted','needs_action'])test(`failur
   assert.equal(present({provider:'codex',status,stage:'error',error:'找不到程序',next_actions:[{operation:'install_runtime'}]}).primary.operation,'install_runtime');
   const unknown=present({provider:'codex',status,stage:'error',error:'请点击不存在的按钮'});assert.equal(unknown.reason,'请点击不存在的按钮');assert.equal(unknown.primary.operation,'retry');
 });
+
+test('a failed status overrides stale connecting stages and wait actions',()=>{
+  for(const stage of ['connecting','preparing_connection','verifying_reply']){
+    const view=present({provider:'claude-code',status:'error',stage,action_kind:'wait',error:'需要处理账号配置'});
+    assert.equal(view.busy,false);assert.equal(view.state,'attention');assert.equal(view.reason,'需要处理账号配置');assert.doesNotMatch(view.headline,/正在连接/);
+  }
+});

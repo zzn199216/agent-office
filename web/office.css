@@ -113,3 +113,7 @@
 .ao-has-progress .ao-bubble-text{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;white-space:normal;max-height:36px;overflow-wrap:anywhere}
 @container(max-width:620px){.ao-light-switch{padding:4px 6px;font-size:10px}.ao-toolbar{flex-wrap:wrap}.ao-toolbar-right{flex-wrap:wrap}.ao-ceiling-lights{inset-inline:34% 12%}.ao-ceiling-lights i{width:42px}}
 body.view-paused *,body.view-paused *::before,body.view-paused *::after{animation-play-state:paused!important}
+
+.ao-unconnected .ao-furniture{filter:grayscale(1);opacity:.55}.ao-unconnected .ao-name{color:#727779}.ao-reconnect{position:absolute;left:50%;top:242px;bottom:auto;z-index:5;transform:translateX(-50%);white-space:nowrap;font-size:12px;padding:3px 7px;background:#f2f3f3;border:1px solid #a4a9ac;border-radius:4px;cursor:pointer}.ao-reconnect[hidden]{display:none}
+
+.ao-unconnected .ao-status-text{max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}

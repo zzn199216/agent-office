@@ -163,7 +163,7 @@ class OnboardingManager{
     const current=this.db.prepare('SELECT room_id,status FROM onboarding_runs WHERE id=?').get(runId);
     if(['cancelled','superseded'].includes(current?.status)||current&&this.service.chat.roomDeleted?.(current.room_id))return;
     if(['ready','error','interrupted','cancelled','superseded'].includes(fields.status))fields={...fields,closed_at:now()};
-    const allowed=new Set(['status','stage','launch_session_id','runtime_result','error','error_code','closed_at','closure_reason','auth_mode','auth_revision']);
+    const allowed=new Set(['status','stage','launch_session_id','runtime_result','error','error_code','target_member_id','closed_at','closure_reason','auth_mode','auth_revision']);
     const pairs=Object.entries(fields).filter(([key])=>allowed.has(key));
     if(!pairs.length)return;
     this.db.prepare(`UPDATE onboarding_runs SET ${pairs.map(([key])=>`${key}=?`).join(',')},updated=? WHERE id=?`).run(...pairs.map(([,value])=>value),now(),runId);
@@ -322,7 +322,7 @@ class OnboardingManager{
       if(error?.code==='provider_not_found'){this.set(row.id,{status:'needs_action',stage:MANAGED.has(row.provider)?'awaiting_runtime_install':'unsupported',error:'没有发现这个 agent 的可用入口。'});return;}
       throw error;
     }
-    this.set(row.id,{launch_session_id:launch.id,stage:'connecting'});
+    this.set(row.id,{launch_session_id:launch.id,stage:'connecting',target_member_id:row.target_member_id||launch.proxies?.find(route=>route.provider===row.provider)?.backend_member_id||launch.bridge_members?.find(member=>member.provider===row.provider)?.member_id||null});
     const work=this.service.launch.jobs.get(launch.id);if(work)await work;
     if(this.closing)return;
     const afterProtection=this.authProtection(row);if(afterProtection){this.pauseForAuthProtection(row,afterProtection);return;}
@@ -440,7 +440,7 @@ class OnboardingManager{
     catch{return present({provider,status:'needs_action',stage:'awaiting_connection',member_id:memberId});}
   }
   snapshot(row){
-    const value=['superseded','cancelled'].includes(row.status)?{id:row.id,run_id:row.id,room_id:row.room_id,provider:row.provider,name:NAMES[row.provider]||row.provider,status:row.status,stage:row.stage,error:row.error||'这次接入已结束，请查看当前接入记录。',error_code:row.error_code||null,ready_for_office:false,local_verified:false,can_wake:false,next_actions:[]}:this.snapshotCore(row);
+    const value=['superseded','cancelled'].includes(row.status)?{id:row.id,run_id:row.id,room_id:row.room_id,provider:row.provider,member_id:row.target_member_id||row.direct_member_id||backendRoute(this.db,row.room_id,row.provider)?.backend_member_id||null,name:NAMES[row.provider]||row.provider,status:row.status,stage:row.stage,error:row.error||'这次接入已结束，请查看当前接入记录。',error_code:row.error_code||null,ready_for_office:false,local_verified:false,can_wake:false,next_actions:[]}:this.snapshotCore(row);
     // One user-facing projection; internal stages stay for diagnostics.
     const code=value.error_code||value.connection_evidence?.last_error?.code||row.error_code||null;
     value.error_code=code;
@@ -450,7 +450,7 @@ class OnboardingManager{
         if(value.provider==='claude-code'){let config;try{config=require('./claude.cjs').configurationInfo(this.options.env||process.env);}catch{}value.configuration=config?{api_mode:config.api_mode,credential_configured:config.credential_configured}:null;}
         value.next_actions=[action('login',value.configuration?.api_mode?'打开 API 配置':`登录 ${value.name}`,{operation:'login_client'}),action('verify','处理后重新检查',{operation:'retry'})];
       }else if(MANAGED.has(value.provider)&&/^(?:codex|claude|qwen|gemini)_(?:missing|start_failed|upgrade_required)$/.test(code||''))
-        value.next_actions=[action('install',`安装 ${value.name}`,{operation:'install_runtime'}),action('verify','重新检查',{operation:'retry'})];
+        value.next_actions=[action('install',`安装 ${value.name}`,{operation:value.provider==='codex'?'open_install_docs':'install_runtime'}),action('verify','重新检查',{operation:'retry'})];
     }
     value.presentation=present(value);
     return value;
@@ -619,7 +619,7 @@ class OnboardingManager{
       base.next_actions=[...(providerStage==='awaiting_quota'?[action('login','在 Gemini CLI 检查额度和权限',{operation:'login_client'})]:[]),action('verify','处理客户端配置后继续接入',{operation:'retry'})];return base;
     }
     if(row.stage==='awaiting_runtime_install'||providerStage==='awaiting_runtime_install'||selected&&MANAGED.has(row.provider)&&(selected.installed!==true||!selected.capabilities?.automatic_launch)){
-      base.status='needs_action';base.stage='awaiting_runtime_install';base.next_actions=[action('verify',`安装 ${base.name} 后继续接入`,{operation:'install_runtime'})];return base;
+      base.status='needs_action';base.stage='awaiting_runtime_install';base.next_actions=[action('verify',`安装 ${base.name}`,{operation:row.provider==='codex'?'open_install_docs':'install_runtime'}),action('verify','安装后重新检查',{operation:'retry'})];return base;
     }
     if(row.stage==='waiting_other_setup'){
       base.status='needs_action';base.next_actions=[action('verify','等待其他成员接入后重试',{operation:'retry'})];return base;
