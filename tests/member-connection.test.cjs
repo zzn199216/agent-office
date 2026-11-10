@@ -145,3 +145,11 @@ test('Claude manual setup offers one complete copy action at each handoff stage'
     assert.equal(view.primary.operation,'copy_setup');assert.equal(view.primary.label,'复制接入内容');assert.equal(view.secondary,null);
   }
 });
+
+for(const status of ['error','failed','interrupted','needs_action'])test(`failure reason is visible and backend actions are used: ${status}`,()=>{
+  const error='API 凭据尚未配置，请打开 API 配置。';
+  const view=present({provider:'claude-code',status,stage:'error',error,error_code:'claude_login_required',configuration:{api_mode:true},next_actions:[{operation:'login_client'},{operation:'retry'}]});
+  assert.equal(view.reason,error);assert.equal(view.primary.operation,'login_client');assert.equal(view.primary.label,'打开 API 配置');assert.equal(view.secondary.operation,'retry');
+  assert.equal(present({provider:'codex',status,stage:'error',error:'找不到程序',next_actions:[{operation:'install_runtime'}]}).primary.operation,'install_runtime');
+  const unknown=present({provider:'codex',status,stage:'error',error:'请点击不存在的按钮'});assert.equal(unknown.reason,'请点击不存在的按钮');assert.equal(unknown.primary.operation,'retry');
+});

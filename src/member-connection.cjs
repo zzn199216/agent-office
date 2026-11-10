@@ -61,7 +61,7 @@ function present(snapshot = {}, context = {}) {
   const actionKind = context.action_kind || snapshot.action_kind || null;
   const ready = status === 'ready' && (snapshot.ready_for_office === true || snapshot.local_verified === true);
   const details = { stage, status, error_code: code, error: errorText || null, member_id: snapshot.member_id || snapshot.target_member_id || null };
-  const result = (state, headline, primary = null, secondary = null, extra = {}) => ({ state, headline: tidy(headline), primary: primary && { ...primary, label: tidy(primary.label) }, secondary: secondary && { ...secondary, label: tidy(secondary.label) }, busy: false, provider, name, details, ...extra });
+  const result = (state, headline, primary = null, secondary = null, extra = {}) => ({ state, headline: tidy(headline), reason: !ready && errorText ? errorText : null, primary: primary && { ...primary, label: tidy(primary.label) }, secondary: secondary && { ...secondary, label: tidy(secondary.label) }, busy: false, provider, name, details, ...extra });
   const manualDesktop = headline => provider === 'claude-desktop'
     ? result('waiting', '把接入内容发给 Claude', button('copy_setup', '复制接入内容'))
     : provider === 'doubao'
@@ -94,7 +94,7 @@ function present(snapshot = {}, context = {}) {
   if (stage === 'fixed_proxy_scope')
     return result('attention', `这个 ${name} 已在另一个房间使用`, pick(snapshot, 'open_fixed_room', '去原房间'), button('new_member', '新建一个成员'));
   if (stage === 'awaiting_auth')
-    return result('attention', `${name} 需要登录`, provider === 'codex' ? pick(snapshot, 'retry', '我已登录，重新检查') : offered(snapshot, 'login_client') ? pick(snapshot, 'login_client', `登录 ${name}`) : pick(snapshot, 'retry', '登录后重新检查'), provider !== 'codex' && offered(snapshot, 'login_client') ? button('retry', '登录后重新检查') : null);
+    return result('attention', `${name} 需要登录`, provider === 'codex' ? pick(snapshot, 'retry', '我已登录，重新检查') : offered(snapshot, 'login_client') ? pick(snapshot, 'login_client', snapshot.configuration?.api_mode ? '打开 API 配置' : `登录 ${name}`) : pick(snapshot, 'retry', '登录后重新检查'), provider !== 'codex' && offered(snapshot, 'login_client') ? button('retry', '登录后重新检查') : null);
   if (stage === 'awaiting_quota')
     return result('attention', `${name} 的额度用完了`, pick(snapshot, 'retry', '处理后重新检查'));
   if (stage === 'awaiting_runtime_install')
@@ -109,6 +109,10 @@ function present(snapshot = {}, context = {}) {
     return result('attention', `这个版本的 ${name} 暂不支持自动连接`, offered(snapshot, 'manual_mcp') ? pick(snapshot, 'manual_mcp', provider === 'doubao' ? '用提示词连接' : '改用 MCP 连接') : pick(snapshot, 'retry', '重新检查'));
   if (stage === 'requires_explicit_backend_selection')
     return result('attention', `请选择用哪个 ${name} 接入`, pick(snapshot, 'select_provider', '选择接入方式'));
+  if (errorText && offered(snapshot, 'login_client'))
+    return result('attention', `${name} 没有连上`, pick(snapshot, 'login_client', snapshot.configuration?.api_mode ? '打开 API 配置' : `登录 ${name}`), pick(snapshot, 'retry', snapshot.configuration?.api_mode ? '保存后继续接入' : '处理后重新检查'));
+  if (errorText && offered(snapshot, 'install_runtime'))
+    return result('attention', `${name} 无法启动`, pick(snapshot, 'install_runtime', `安装 ${name}`), pick(snapshot, 'retry', '重新检查'));
   if (FAILED.has(status) || FAILED.has(stage) || stage === 'verification_failed')
     return result('attention', `${name} 没有连上`, pick(snapshot, 'retry', '重试'));
 

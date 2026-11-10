@@ -41,10 +41,10 @@ class OnboardingManager{
     if(!this.db.prepare('PRAGMA table_info(onboarding_runs)').all().some(column=>column.name==='goal'))this.db.exec("ALTER TABLE onboarding_runs ADD COLUMN goal TEXT NOT NULL DEFAULT ''");
     if(!this.db.prepare('PRAGMA table_info(onboarding_runs)').all().some(column=>column.name==='verify_reply'))this.db.exec('ALTER TABLE onboarding_runs ADD COLUMN verify_reply INTEGER NOT NULL DEFAULT 0');
     if(!this.db.prepare('PRAGMA table_info(onboarding_runs)').all().some(column=>column.name==='direct_member_id'))this.db.exec('ALTER TABLE onboarding_runs ADD COLUMN direct_member_id TEXT');
-    for(const [name,type]of [['target_member_id','TEXT'],['connection_reused','INTEGER NOT NULL DEFAULT 0'],['reauthorize','INTEGER NOT NULL DEFAULT 0'],['selection_reason','TEXT'],['connection_method','TEXT'],['started_at','TEXT'],['auth_mode','TEXT'],['auth_revision','TEXT'],['new_member','INTEGER NOT NULL DEFAULT 0']])if(!this.db.prepare('PRAGMA table_info(onboarding_runs)').all().some(column=>column.name===name))this.db.exec(`ALTER TABLE onboarding_runs ADD COLUMN ${name} ${type}`);
+    for(const [name,type]of [['target_member_id','TEXT'],['connection_reused','INTEGER NOT NULL DEFAULT 0'],['reauthorize','INTEGER NOT NULL DEFAULT 0'],['selection_reason','TEXT'],['connection_method','TEXT'],['started_at','TEXT'],['auth_mode','TEXT'],['auth_revision','TEXT'],['new_member','INTEGER NOT NULL DEFAULT 0'],['error_code','TEXT']])if(!this.db.prepare('PRAGMA table_info(onboarding_runs)').all().some(column=>column.name===name))this.db.exec(`ALTER TABLE onboarding_runs ADD COLUMN ${name} ${type}`);
     this.db.prepare("UPDATE onboarding_runs SET status='interrupted',stage='interrupted',error='接入期间本机处理程序结束。请点击重试；不会重放业务问题。',updated=? WHERE status='running' AND stage<>'verifying_reply'").run(now());
     this.verification=options.replyVerification===false?null:new (require('./onboarding-verification.cjs').OnboardingVerification)(service,options.verification||{});
-    this.verificationPulse=()=>this.advanceVerifications();this.service.on?.('change',this.verificationPulse);
+    this.verificationPulse=()=>{this.syncConnectionFailures();this.advanceVerifications();};this.service.on?.('change',this.verificationPulse);
     this.verificationTimer=setInterval(this.verificationPulse,options.verification?.pollMs||500);this.verificationTimer.unref();
   }
   selection(input={}){
@@ -152,14 +152,14 @@ class OnboardingManager{
     if(this.authRecheckAvailable(row))return;
     if(this.jobs.has(row.id)||this.managedBindingBlocked(memberId))return;
     const work=Promise.resolve().then(async()=>{if(await this.prepareManagedBinding(row,memberId))this.set(row.id,{status:'needs_action',stage:'awaiting_connection',error:null});})
-      .catch(error=>{const login=AUTH.test(error.message),protection=this.authProtection(row,error);if(protection)this.pauseForAuthProtection(row,protection);else this.set(row.id,{status:'needs_action',stage:row.provider==='codex'?codexActionStage(error)||'error':login?'awaiting_auth':'error',error:safeText(error.message)});})
+      .catch(error=>{const login=AUTH.test(error.message),protection=this.authProtection(row,error);if(protection)this.pauseForAuthProtection(row,protection);else this.set(row.id,{status:'needs_action',stage:row.provider==='codex'?codexActionStage(error)||'error':login?'awaiting_auth':'error',error_code:error.code||null,error:safeText(error.message)});})
       .finally(()=>{this.jobs.delete(row.id);this.advanceVerifications();});this.jobs.set(row.id,work);
   }
   row(runId){const row=this.db.prepare('SELECT * FROM onboarding_runs WHERE id=?').get(runId);if(!row)throw new RoomError('接入进度不存在。',404,'onboarding_not_found');this.service.chat.store.room(row.room_id);return row;}
   set(runId,fields){
     const current=this.db.prepare('SELECT room_id,status FROM onboarding_runs WHERE id=?').get(runId);
     if(current?.status==='cancelled'||current&&this.service.chat.roomDeleted?.(current.room_id))return;
-    const allowed=new Set(['status','stage','launch_session_id','runtime_result','error','auth_mode','auth_revision']);
+    const allowed=new Set(['status','stage','launch_session_id','runtime_result','error','error_code','auth_mode','auth_revision']);
     const pairs=Object.entries(fields).filter(([key])=>allowed.has(key));
     if(!pairs.length)return;
     this.db.prepare(`UPDATE onboarding_runs SET ${pairs.map(([key])=>`${key}=?`).join(',')},updated=? WHERE id=?`).run(...pairs.map(([,value])=>value),now(),runId);
@@ -229,7 +229,7 @@ class OnboardingManager{
       const login=AUTH.test(error?.message||'')||/login|auth/.test(error?.code||'');
       const block=providerBlock(row.provider,error);
       const stage=row.provider==='codex'?codexActionStage(error):login?'awaiting_auth':block;
-      this.set(row.id,{status:stage?'needs_action':'error',stage:stage||'error',error:safeText(error?.message||'接入失败，请重试。')});
+      this.set(row.id,{status:stage?'needs_action':'error',stage:stage||'error',error_code:error.code||null,error:safeText(error?.message||'接入失败，请重试。')});
     }).finally(()=>{this.jobs.delete(row.id);this.advanceVerifications();});
     this.jobs.set(row.id,work);this.service.changed();return this.snapshot(row);
   }
@@ -280,7 +280,7 @@ class OnboardingManager{
         if(this.connectionMethod(row)==='native_desktop'&&!this.service.desktop.canWake(target.member_id)){
           this.set(row.id,{status:'running',stage:'restoring_native',error:null});
           try{if(!this.options.desktopConnector)throw new RoomError('已有原生对话暂不可恢复，请查看原连接。',409,'desktop_not_connected');await this.options.desktopConnector({member_id:target.member_id,room_id:row.room_id,provider:row.provider,...native?.native_session_id?{recovery:true}:{}});}
-          catch(error){this.set(row.id,{status:'needs_action',stage:'awaiting_native_desktop',error:safeText(error.message)});return;}
+          catch(error){this.set(row.id,{status:'needs_action',stage:'awaiting_native_desktop',error_code:error.code||null,error:safeText(error.message)});return;}
         }
         this.set(row.id,{status:'needs_action',stage:'awaiting_connection',error:null});return;
       }
@@ -322,7 +322,7 @@ class OnboardingManager{
       const prepared=this.snapshot(this.row(row.id));
       if(prepared.member_id){
         try{await this.options.desktopConnector({member_id:prepared.member_id,room_id:row.room_id,provider:row.provider});this.set(row.id,{status:'needs_action',stage:'awaiting_connection',error:null});this.advanceVerifications();return;}
-        catch(error){this.set(row.id,{status:'needs_action',stage:'awaiting_native_desktop',error:safeText(error.message)});return;}
+        catch(error){this.set(row.id,{status:'needs_action',stage:'awaiting_native_desktop',error_code:error.code||null,error:safeText(error.message)});return;}
       }
     }
     this.set(row.id,{status:'needs_action',stage:'awaiting_connection'});this.advanceVerifications();
@@ -358,6 +358,14 @@ class OnboardingManager{
       return credential?.status||'missing';
     }catch(error){return error?.code==='resume_revoked'?'revoked':error?.code==='ENOENT'?'missing':'invalid';}
   }
+  syncConnectionFailures(){
+    if(this.closing||this.syncingFailures)return;
+    this.syncingFailures=true;
+    try{for(const row of this.db.prepare("SELECT * FROM onboarding_runs WHERE status IN ('running','needs_action')").all()){
+      if(this.service.chat.roomDeleted?.(row.room_id))continue;
+      try{const view=this.snapshot(row);if(view.error&&view.status!=='running'&&!view.local_verified)this.setIfDifferent(row,{status:view.status,stage:view.stage,error:view.error,error_code:view.error_code||null});}catch{}
+    }}finally{this.syncingFailures=false;}
+  }
   advanceVerifications(){
     if(this.closing||!this.verification||this.advancingVerification)return;
     this.advancingVerification=true;
@@ -368,6 +376,9 @@ class OnboardingManager{
         if(this.service.chat.roomDeleted?.(row.room_id))continue;
         const connection=this.connectionSnapshot(row);
         if(['connection_repair_required','connection_recheck_available'].includes(connection.stage))continue;
+        if(connection.error&&connection.status!=='running'&&!connection.local_verified){
+          this.setIfDifferent(row,{status:connection.status,stage:connection.stage,error:connection.error,error_code:connection.error_code||connection.connection_evidence?.last_error?.code||null});
+        }
         if(connection.member_id){if(seen.has(connection.member_id))continue;seen.add(connection.member_id);}
         if(row.stage==='awaiting_previous_result'&&connection.member_id){this.resumeManagedBinding(row,connection.member_id);continue;}
         if(connection.member_id&&connection.local_verified&&connection.can_wake&&connection.stage==='ready_automatic'){
@@ -395,6 +406,16 @@ class OnboardingManager{
   snapshot(row){
     const value=this.snapshotCore(row);
     // One user-facing projection; internal stages stay for diagnostics.
+    const code=value.error_code||value.connection_evidence?.last_error?.code||row.error_code||null;
+    value.error_code=code;
+    if(value.error&&!value.ready_for_office&&value.status!=='running'){
+      const repairCodes=new Set(['claude_login_required','claude_api_auth_required','claude_auth_unknown','qwen_login_required','qwen_api_auth_required','gemini_login_required','gemini_api_auth_required']);
+      if(repairCodes.has(code)){
+        if(value.provider==='claude-code'){let config;try{config=require('./claude.cjs').configurationInfo(this.options.env||process.env);}catch{}value.configuration=config?{api_mode:config.api_mode,credential_configured:config.credential_configured}:null;}
+        value.next_actions=[action('login',value.configuration?.api_mode?'打开 API 配置':`登录 ${value.name}`,{operation:'login_client'}),action('verify','处理后重新检查',{operation:'retry'})];
+      }else if(MANAGED.has(value.provider)&&/^(?:codex|claude|qwen|gemini)_(?:missing|start_failed|upgrade_required)$/.test(code||''))
+        value.next_actions=[action('install',`安装 ${value.name}`,{operation:'install_runtime'}),action('verify','重新检查',{operation:'retry'})];
+    }
     value.presentation=present(value);
     return value;
   }
@@ -475,7 +496,7 @@ class OnboardingManager{
     if(row.direct_member_id){
       let member;try{this.service.chat.store.requireParticipant(row.room_id,row.direct_member_id);member=this.service.chat.store.member(row.direct_member_id);}catch{return {...base,status:'needs_action',stage:'awaiting_connection',detail:'原人物当前不在这个房间，已有连接保留。'};}
       const runtime=this.service.runtime.memberState(member.id),evidence=runtime.connection_evidence||null,canWake=this.service.desktop?.canWake(member.id)===true;
-      Object.assign(base,{member_id:member.id,name:member.name,local_verified:canWake,can_wake:canWake,response_mode:'managed_desktop',runner_ready:canWake,
+      Object.assign(base,{error:member.error?safeText(member.error):base.error,member_id:member.id,name:member.name,local_verified:canWake,can_wake:canWake,response_mode:'managed_desktop',runner_ready:canWake,
         connection_evidence:evidence,protocol_verified:evidence?.protocol_verified===true,model_reply_verified:evidence?.model_reply_verified===true,
         native_conversation_loaded:evidence?.native_conversation_loaded===true,automatic_reply_verified:evidence?.automatic_reply_verified===true,
         readiness:evidence?.verification_level||'unverified',error_stage:evidence?.last_error?.stage||null});
