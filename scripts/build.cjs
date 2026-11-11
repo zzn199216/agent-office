@@ -79,9 +79,7 @@ async function buildPackage({outputRoot=root,localOnly=false}={}){
   fs.mkdirSync(dist,{recursive:true});const bundle=path.join(dist,'bundle.cjs');
   buildSync({entryPoints:[path.join(root,'src/main.cjs')],bundle:true,platform:'node',target:'node22',format:'cjs',outfile:bundle,minify:false});
   const blob=path.join(dist,'sea-prep.blob');const config={main:bundle,output:blob,disableExperimentalSEAWarning:true,useSnapshot:false,useCodeCache:false,assets:{'index.html':path.join(root,'web/index.html'),'app.js':path.join(root,'web/app.js'),'desktop.js':path.join(root,'web/desktop.js'),'style.css':path.join(root,'web/style.css'),'skill/SKILL.md':path.join(root,'integrations/agentroom/SKILL.md'),'skill/GROK_SKILL.md':path.join(root,'integrations/agentroom/GROK_SKILL.md')}};
-  config.assets['workgroup.js']=path.join(root,'web/workgroup.js');config.assets['work-layout.js']=path.join(root,'web/work-layout.js');config.assets['work-layout.css']=path.join(root,'web/work-layout.css');config.assets['office.js']=path.join(root,'web/office.js');config.assets['office.css']=path.join(root,'web/office.css');config.assets['page-activity.js']=path.join(root,'web/page-activity.js');
-  for(const name of require('../src/office-assets.cjs').OFFICE_UI_FILES)config.assets[name]=path.join(root,'web',name);
-  for(const name of require('../src/office-assets.cjs').OFFICE_FILES)config.assets[name]=path.join(root,'web',name);
+  for(const name of require('../src/office-assets.cjs').PUBLIC_WEB_FILES)config.assets[name]=path.join(root,'web',name);
   const configPath=path.join(dist,'sea-config.json');fs.writeFileSync(configPath,JSON.stringify(config));run(process.execPath,['--experimental-sea-config',configPath]);
   const executable=path.join(dist,'AgentRoom.exe');let image=fs.readFileSync(process.execPath);
   const pe=image.readUInt32LE(0x3c),opt=pe+24,dir=opt+(image.readUInt16LE(opt)===0x20b?112:96)+4*8;

@@ -6,6 +6,12 @@ test('desktop package output and runtime verification accept the same complete f
   const {REQUIRED_FILES,ASSETS}=require('../scripts/build-desktop.cjs');
   assert.deepEqual([...PUBLIC_FILES].sort(),[...REQUIRED_FILES,...ASSETS].sort());
 });
+test('desktop package includes every local script and stylesheet referenced by the actual UI',()=>{
+  const {ASSETS}=require('../scripts/build-desktop.cjs'),html=fs.readFileSync(path.join(__dirname,'../web/index.html'),'utf8');
+  const references=[...html.matchAll(/<(?:script|link)\b[^>]*\b(?:src|href)="\/([^"?#]+)"/g)].map(m=>m[1]);assert.ok(references.length>10);
+  for(const file of references){assert.ok(ASSETS.includes('desktop-web/'+file),'Missing desktop UI dependency: '+file);assert.ok(fs.statSync(path.join(__dirname,'../web',file)).isFile());}
+  assert.equal(new Set(ASSETS).size,ASSETS.length);
+});
 function fixture(t){const root=fs.mkdtempSync(path.join(os.tmpdir(),'agentroom-desktop-bundle-')),source=path.join(root,'public'),data=path.join(root,'private');fs.mkdirSync(source);
   const files=[...PUBLIC_FILES].map((relative,index)=>{const file=path.join(source,...relative.split('/'));fs.mkdirSync(path.dirname(file),{recursive:true});const bytes=Buffer.from('fixture '+index);fs.writeFileSync(file,bytes);return {path:relative,sha256:crypto.createHash('sha256').update(bytes).digest('hex'),bytes:bytes.length};});
   const manifest={version:VERSION,files},write=()=>fs.writeFileSync(path.join(source,'desktop-manifest.json'),JSON.stringify(manifest));write();

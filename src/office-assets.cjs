@@ -16,4 +16,5 @@ const OFFICE_FILES = Object.freeze([
   'assets/office/AVATAR_SOURCES.json'
 ]);
 const OFFICE_UI_FILES=Object.freeze(['office-scene.js','office-director.js','office-canvas.js','office-canvas.css','office-editor.js']);
-module.exports = { PIXEL_IDS, PIXEL_VARIANTS, OFFICE_FILES,OFFICE_UI_FILES };
+const PUBLIC_WEB_FILES=Object.freeze(['index.html','app.js','desktop.js','page-activity.js','style.css','office.js','office.css','workgroup.js','work-layout.js','work-layout.css',...OFFICE_UI_FILES,...OFFICE_FILES]);
+module.exports = { PIXEL_IDS, PIXEL_VARIANTS, OFFICE_FILES,OFFICE_UI_FILES,PUBLIC_WEB_FILES };

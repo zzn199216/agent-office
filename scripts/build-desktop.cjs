@@ -8,7 +8,7 @@ const SDK_HOSTS=new Set(['api.nuget.org','globalcdn.nuget.org','nuget.azure.cn']
 const SDK_REDIRECT_STATUSES=new Set([301,302,303,307,308]),SDK_MAX_REDIRECTS=5,SDK_MAX_BYTES=16*1024*1024;
 const REQUIRED_FILES=['AgentRoom.Desktop.exe','AgentRoom.Desktop.exe.config','Microsoft.Web.WebView2.Core.dll','Microsoft.Web.WebView2.WinForms.dll','WebView2Loader.dll','WEBVIEW2_LICENSE.txt'];
 const OFFICE_ASSETS=require('../src/office-assets.cjs').OFFICE_FILES.map(name=>name.replace('assets/office/',''));
-const ASSETS=['desktop-web/index.html','desktop-web/app.js','desktop-web/style.css','desktop-web/desktop.js','desktop-web/page-activity.js','desktop-web/office.js','desktop-web/office.css',...OFFICE_ASSETS.map(name=>'desktop-web/assets/office/'+name)];
+const ASSETS=require('../src/office-assets.cjs').PUBLIC_WEB_FILES.map(name=>'desktop-web/'+name);
 function sha(file){return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');}
 function applicationIcon(file){
   // Original AO office mark, stored in the executable; no downloaded artwork.

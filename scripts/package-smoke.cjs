@@ -14,9 +14,15 @@ async function main(){
     const response=await fetch(start.url);const html=await response.text();if(!html.includes('AgentRoom'))throw new Error('Embedded UI unavailable.');
     const asset=await fetch(start.url+'/app.js');if(asset.status!==200)throw new Error('Embedded script unavailable.');
     if(await asset.text()!==fs.readFileSync(path.join(root,'web','app.js'),'utf8'))throw new Error('Embedded UI script differs from the current source.');
+    const {PUBLIC_WEB_FILES}=require('../src/office-assets.cjs');
+    for(const name of PUBLIC_WEB_FILES.filter(name=>!name.startsWith('assets/'))){
+      const response=await fetch(start.url+(name==='index.html'?'/':'/'+name));if(response.status!==200)throw new Error('Packaged UI dependency unavailable: '+name);
+      if(!Buffer.from(await response.arrayBuffer()).equals(fs.readFileSync(path.join(root,'web',name))))throw new Error('Packaged UI dependency differs: '+name);
+    }
     const installed=path.join(data,'bin','AgentRoom.exe');if(!fs.existsSync(installed))throw new Error('Stable self-install failed.');
     const sourceHash=crypto.createHash('sha256').update(fs.readFileSync(exe)).digest('hex'),installedHash=crypto.createHash('sha256').update(fs.readFileSync(installed)).digest('hex');if(sourceHash!==installedHash)throw new Error('Installed binary differs.');
     const evidence={tested_at:new Date().toISOString(),version,self_install_verified:true,embedded_ui_verified:true,no_node_or_python_child_runtime_required:true,version_command_no_side_effects:true,selftest_verified:true,offline_approvals_verified:true,projects:status.projects.length,url:start.url};
+    evidence.public_ui_dependencies_verified=PUBLIC_WEB_FILES.filter(name=>!name.startsWith('assets/')).length;
     const {OFFICE_FILES}=require('../src/office-assets.cjs');
     for(const name of OFFICE_FILES){
       const response=await fetch(start.url+'/'+name),mime={'.png':'image/png','.svg':'image/svg+xml; charset=utf-8','.json':'application/json; charset=utf-8'}[path.extname(name)];
