@@ -6,7 +6,7 @@ const plain=value=>JSON.parse(JSON.stringify(value));
 function deferred(){let resolve,reject;const promise=new Promise((yes,no)=>{resolve=yes;reject=no;});return{promise,resolve,reject};}
 function fixture(){
   const elements=new Map(),calls=[],members=[{id:'agent',name:'Alice <script>',adapter:'qwen-desktop',appearance:{color:'blue'}}],messages=[{id:'task',request_id:'native-request',sender_id:'user',to_member_id:'agent',text:'**Review** <unsafe> task'}],notices=[];
-  const $=id=>{if(!elements.has(id))elements.set(id,{innerHTML:'',value:'',options:[],querySelectorAll:()=>[],classList:{toggle(){}},focus(){this.focused=true;}});return elements.get(id);};
+  const $=id=>{if(!elements.has(id))elements.set(id,{innerHTML:'',value:'',options:[],querySelectorAll:()=>[],classList:{toggle(){},contains:()=>false},focus(){this.focused=true;}});return elements.get(id);};
   const context=vm.createContext({$,state:{approvals:[],approval_reviews:[],chat:{members}},history:{room:{id:'room'},participants:members,messages,approvals:[]},webConnected:true,roomId:'room',legacyId:null,lastApprovalSignature:'',approvalResponding:new Set(),document:{activeElement:null,body:{classList:{contains:()=>false}}},
     time:value=>String(value||''),avatar:(name,adapter,appearance,id)=>`<span data-avatar="${id||''}">${String(name).replaceAll('<','&lt;')}</span>`,memberById:id=>members.find(member=>member.id===id),updateOfficeApprovalAlert(){},
     api:async(route,body)=>{calls.push({route,body});return{};},refresh:async()=>{},action:async callback=>callback(),toast:value=>notices.push(value),openInspector(){},updateRecipientNote(){},setReply:message=>{context.replyTo=message;}
@@ -93,6 +93,8 @@ test('normal room cards are appended after chat and typing, clear the legacy top
   f.$('approval-panel').innerHTML='obsolete top card';vm.runInContext(section('function renderRoom(', 'function renderMessage('),f.context);f.context.renderRoom({name:'Project'});
   const html=f.$('messages').innerHTML;assert.ok(html.indexOf('original chat')<html.indexOf('typing'));assert.ok(html.indexOf('typing')<html.indexOf('approval-message'));assert.equal(f.$('approval-panel').innerHTML,'');assert.equal(stream.scrollTop,120,'new approvals do not scroll a reader away from older messages');
   f.context.state.approvals=[];f.context.renderRoom({name:'Project'});assert.doesNotMatch(f.$('messages').innerHTML,/approval-message/);
+  f.context.officeView=true;f.context.state.features={room:{work_layout:true}};stream.scrollTop=2500;f.context.lastTimeline='["room",older]';f.context.renderRoom({name:'Project'});assert.equal(stream.scrollTop,3000,'the concurrent layout follows the latest message even when the saved mode is office');
+  stream.scrollTop=120;f.context.lastTimeline='["room",older]';f.context.renderRoom({name:'Project'});assert.equal(stream.scrollTop,120,'the concurrent layout also preserves reading older history');
 });
 test('a pending decision sends one exact native payload across duplicate UI locations, with no rule',async()=>{
   const f=fixture(),gate=deferred(),a=approval({session_allowed:true});f.context.state.approvals=[a];f.context.api=async(route,body)=>{f.calls.push({route,body});return gate.promise;};

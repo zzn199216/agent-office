@@ -759,11 +759,17 @@ function renderRoom(project) {
   $('empty-add-member').classList.toggle('hidden', participants.length > 0); $('suggestions').classList.toggle('hidden', !participants.length);
   const approvals=roomApprovals(messages),reviews=roomApprovalReviews(messages),typing = renderTyping(messages), signature = JSON.stringify([room.id,messages,participants.map(member=>[member.id,member.name,member.appearance]),state.chat?.activeMessages || [],typing,approvals,reviews,history.connection_assists||[],history.group||null]);
   $('empty-room').classList.toggle('hidden',conversation.length>0 || approvals.length>0 || reviews.length>0);
-  if (signature !== lastTimeline) { const stream = $('chat-stream'), cached = textScroll.get(room.id), nearEnd = officeView ? cached?.atEnd !== false : stream.scrollHeight - stream.scrollTop - stream.clientHeight < 110, changedRoom = !lastTimeline.startsWith(`["${room.id}"`); setRoomTimeline(messages.filter(message=>!history.group?.hidden_message_ids?.includes(message.id)).map(message => renderMessage(message, messages)).join('') + typing + approvalTimelineMarkup(approvals,messages,reviews),approvals); lastTimeline = signature; if(!officeView){if(nearEnd||changedRoom)stream.scrollTop=messages.length||approvals.length||reviews.length?stream.scrollHeight:0;rememberTextScroll();}else if(changedRoom)textScroll.set(room.id,{top:0,atEnd:true}); }
+  let followTimeline=false;
+  if (signature !== lastTimeline) {
+    const stream=$('chat-stream'),chatVisible=!officeView||state?.features?.[room.id]?.work_layout===true,cached=textScroll.get(room.id),nearEnd=chatVisible&&!stream.classList.contains('hidden')?stream.scrollHeight-stream.scrollTop-stream.clientHeight<110:cached?.atEnd!==false,changedRoom=!lastTimeline.startsWith(`["${room.id}"`);
+    setRoomTimeline(messages.filter(message=>!history.group?.hidden_message_ids?.includes(message.id)).map(message=>renderMessage(message,messages)).join('')+typing+approvalTimelineMarkup(approvals,messages,reviews),approvals);lastTimeline=signature;
+    if(chatVisible)followTimeline=nearEnd||changedRoom;else if(changedRoom)textScroll.set(room.id,{top:0,atEnd:true});
+  }
   renderApprovals([]);updateOfficeApprovalAlert();
   renderService(); renderInspector(); renderSidebar(); applyRoomView(); updateOfficeScene();
   globalThis.AgentOfficeGroup?.update({roomId,group:history.group,api,action,refresh,resetRecipient:enabled=>roomRecipients.set(roomId,enabled?'__group__':defaultRecipient(admittedMembers(history.participants),history.messages))});
   if(globalThis.AgentOfficeLayout)updateWorkLayout();
+  if(followTimeline){$('chat-stream').scrollTop=$('chat-stream').scrollHeight;rememberTextScroll();}
 }
 function defaultRecipient(participants, messages = []) {
   const present = id => id && participants.some(member => member.id === id);
@@ -1463,7 +1469,7 @@ function selectRoomView(office) {
 // above the newest message: while they were at the end, keep them there.
 let stickToEnd=true;
 if(typeof ResizeObserver==='function'){const stick=new ResizeObserver(()=>{if(officeView||!stickToEnd)return;const stream=$('chat-stream');stream.scrollTop=stream.scrollHeight;});requestAnimationFrame(()=>{for(const id of ['messages','chat-stream','composer'])if($(id))stick.observe($(id));});}
-function rememberTextScroll(){if(!roomId||officeView||$('chat-stream').classList.contains('hidden'))return;const stream=$('chat-stream');const atEnd=stream.scrollHeight-stream.scrollTop-stream.clientHeight<110;stickToEnd=atEnd;textScroll.set(roomId,{top:stream.scrollTop,atEnd});}
+function rememberTextScroll(){if(!roomId||officeView&&!(typeof state!=='undefined'&&state?.features?.[roomId]?.work_layout)||$('chat-stream').classList.contains('hidden'))return;const stream=$('chat-stream');const atEnd=stream.scrollHeight-stream.scrollTop-stream.clientHeight<110;stickToEnd=atEnd;textScroll.set(roomId,{top:stream.scrollTop,atEnd});}
 function applyRoomView() {
   const available=professionalView && !!history?.room && !legacyId,work=available&&typeof state!=='undefined'&&state?.features?.[history.room.id]?.work_layout===true,visual=available && officeView&&!work;
   $('view-switch').classList.toggle('hidden',!available||work);$('chat-stream').classList.toggle('hidden',visual);$('officeScene').classList.toggle('hidden',!available||!officeView&&!work);
@@ -1695,8 +1701,12 @@ function updateOfficeScene() {
   if(officeScene&&officeRendererKind!==(useCanvas?'canvas':'legacy')){officeScene.destroy();officeScene=null;}
   officeRendererKind=useCanvas?'canvas':'legacy';const renderer=useCanvas?window.AgentOfficeCanvas:window.AgentOfficeScene;
   if((!officeView&&!state?.features?.[history?.room?.id]?.work_layout) || !professionalView || !history?.room || legacyId) return;
-  if(!officeScene && renderer) officeScene=renderer.mount($('officeScene'),{onAddMember:openAddAI,onMotionChange:value=>action(async()=>{await api('/api/room/features',{room_id:roomId,reduced_motion:value});await refresh();}),onCompose:()=>toggleOfficeComposer(true),onChooseSecretary:openSecretaryTutorial,onSelectMember:member=>{if(!member.verified_at||['connection_failed','failed','disabled','revoked','unavailable'].includes(member.status)||nativeConnectionUnavailable(member)){action(()=>showMemberSetup(member.id));return;}if(!submitting && [...$('recipient').options].some(option=>option.value===member.id)){$('recipient').value=member.id;updateRecipientNote();}toggleOfficeComposer(true);},onCustomize:member=>openInspector('appearance',member.id),onSceneSettings:()=>openInspector('scene'),onToggleLights:on=>action(()=>setOfficeLighting(on)),onSelectMessage:message=>{if(window.AgentOfficeLayout?.focusAttention(message.id))return;selectRoomView(false);requestAnimationFrame(()=>$('message-'+message.id)?.scrollIntoView({block:'center',behavior:'smooth'}));}});
+  if(!officeScene && renderer) officeScene=renderer.mount($('officeScene'),{onAddMember:openAddAI,onMotionChange:value=>action(async()=>{await api('/api/room/features',{room_id:roomId,reduced_motion:value});await refresh();}),onCompose:()=>toggleOfficeComposer(true),onChooseSecretary:openSecretaryTutorial,onSelectMember:member=>{if(!member.verified_at||['connection_failed','failed','disabled','revoked','unavailable'].includes(member.status)||nativeConnectionUnavailable(member)){action(()=>showMemberSetup(member.id));return;}if(!submitting && [...$('recipient').options].some(option=>option.value===member.id)){$('recipient').value=member.id;updateRecipientNote();}toggleOfficeComposer(true);},onCustomize:member=>openInspector('appearance',member.id),onSceneSettings:()=>useCanvas?action(()=>openCanvasOfficeEditor()):openInspector('scene'),onToggleLights:on=>action(()=>setOfficeLighting(on)),onSelectMessage:message=>{if(window.AgentOfficeLayout?.focusAttention(message.id))return;selectRoomView(false);requestAnimationFrame(()=>$('message-'+message.id)?.scrollIntoView({block:'center',behavior:'smooth'}));}});
   officeScene?.update({roomId:history.room.id,features:state?.features?.[history.room.id]||{},sceneData:state?.office_scenes?.[history.room.id],approvals:roomApprovals(history.messages||[]),participants:visibleMembers(history.participants).map(member=>({...member,connection_presentation:[...onboardingJobs.values()].filter(job=>job.room_id===roomId&&job.member_id===member.id).sort((a,b)=>String(b.updated||b.created).localeCompare(String(a.updated||a.created)))[0]?.presentation||member.connection_presentation})),messages:(history.messages||[]).filter(message=>!message.connection_verification),group:history.group,runtime,online:webConnected,scene:state?.office?.[history.room.id]||{},secretary:currentSecretary(),tutorialVisible:secretaryTutorialVisible()});
+}
+function openCanvasOfficeEditor(){
+  const selectedRoom=roomId;if(!selectedRoom||!webConnected||!state?.features?.[selectedRoom]?.scene_editor||!window.AgentOfficeEditor)return;
+  return window.AgentOfficeEditor.open({roomId:selectedRoom,members:history.participants||[],api,isCurrent:()=>roomId===selectedRoom,onSaved:refresh});
 }
 function updateWorkLayout(){
   if(!globalThis.AgentOfficeLayout)return;
@@ -2217,7 +2227,7 @@ $('composer').onsubmit = event => { event.preventDefault(); if (submitting) retu
   try { await api('/api/chat/messages',{room_id:submittedRoom,sender_id:'user',to_member_id:target,announcement:!groupSend&&!target,text,idempotency_key:pendingSubmission.key,reply_to:replyTo,attachments:images.map(({name,data_url})=>({name,data_url}))}); pendingSubmission = null;
     const unchanged=JSON.stringify([roomId,$('recipient').value==='__group__'?null:$('recipient').value||null,$('prompt').value.trim(),replyTo,draftImages().map(image=>image.id)])===fingerprint;
     if(unchanged){$('prompt').value = ''; imageDrafts.delete(submittedRoom);renderImageDrafts();$('mention-choices').classList.add('hidden'); setReply(null); if(document.body.classList.contains('office-view'))toggleOfficeComposer(false);}else{const sentIds=new Set(images.map(image=>image.id));imageDrafts.set(submittedRoom,(imageDrafts.get(submittedRoom)||[]).filter(image=>!sentIds.has(image.id)));renderImageDrafts();}
-    await refresh(); if(!officeView)$('chat-stream').scrollTop = $('chat-stream').scrollHeight;
+    await refresh(); if(!officeView||state?.features?.[roomId]?.work_layout)$('chat-stream').scrollTop = $('chat-stream').scrollHeight;
   }finally { submitting = false; $('send-button').disabled = !webConnected;updateOfficeComposerPresentation(); }
 }); };
 $('prompt').oninput = ()=>{secretaryNavigation=null;renderMentions();updateOfficeComposerPresentation();};

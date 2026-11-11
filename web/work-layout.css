@@ -12,6 +12,7 @@ body.work-layout .room-button small{color:#b6c2d8}body.work-layout .room-button 
 body.pixel-theme.work-layout .room-actions-button,body.work-layout .sidebar .icon-button{color:#c1c9da;min-width:36px}
 body.pixel-theme.work-layout .sidebar-footer{border-color:#29334d}
 body.pixel-theme.work-layout .topbar{background:#fff;background-image:none;border-bottom:1px solid #DDE1E7;box-shadow:none;min-height:64px;padding:4px 20px}
+body.pixel-theme.work-layout .topbar:before{display:none}body.pixel-theme.work-layout .room-actions-button,body.work-layout .sidebar .icon-button{min-width:44px}
 body.pixel-theme.work-layout .breadcrumbs>span,body.pixel-theme.work-layout .breadcrumbs .slash,body.pixel-theme.work-layout .topbar .icon-button{color:#5B6472}
 body.pixel-theme.work-layout .primary{background:#2F5FD0;color:#fff;border:1px solid #2F5FD0;box-shadow:none}
 body.pixel-theme.work-layout .secondary,body.pixel-theme.work-layout .text-button,body.pixel-theme.work-layout .icon-button{background:transparent;color:#15181E;box-shadow:none}

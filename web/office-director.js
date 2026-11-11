@@ -37,13 +37,13 @@
       else e.at=home;
     }
     update(next,scene,features={},now=this.now){
-      this.now=now;const initial=this.scene===null,ambientEnabled=features.ambient&&!this.features.ambient;this.scene=scene;this.features=features;
+      this.now=now;const initial=this.scene===null,geometryChanged=this.scene&&JSON.stringify(this.scene)!==JSON.stringify(scene),ambientEnabled=features.ambient&&!this.features.ambient;this.scene=scene;this.features=features;
       const ids=new Set(next.map(f=>f.id));for(const id of this.entities.keys())if(!ids.has(id)){this.cancel(this.entities.get(id));this.entities.delete(id);}
       next.forEach((fact,index)=>{
         const seat=model.station(scene,fact.id,index),prior=this.entities.get(fact.id),seatChanged=prior&&model.cell(prior.seat.at)!==model.cell(seat.at),changed=prior&&prior.state!==fact.state;
         const e=prior||{id:fact.id,at:[seat.at[0],seat.at[1]+1],frame:0,script:null,bubble:''};e.fact=fact;e.seat=seat;e.state=fact.state;this.entities.set(fact.id,e);
         if(!prior){this.pose(e);this.idleLater(e);if(!initial&&features.walking&&!features.reduced_motion&&e.state==='idle'){const entry=[1,1];if(!this.occupied(e.id).has(model.cell(entry)))e.at=entry;this.settle(e,true);}}
-        else if(changed||seatChanged||!features.walking&&e.script?.steps.some(s=>s.walkTo)||features.reduced_motion||!features.ambient&&e.script?.layer==='ambient'||!features.interactions&&e.eventId)this.settle(e,changed||seatChanged);
+        else if(changed||seatChanged||geometryChanged||!features.walking&&e.script?.steps.some(s=>s.walkTo)||features.reduced_motion||!features.ambient&&e.script?.layer==='ambient'||!features.interactions&&e.eventId)this.settle(e,!geometryChanged&&(changed||seatChanged));
         if(ambientEnabled)this.idleLater(e);
       });return this.entities;
     }

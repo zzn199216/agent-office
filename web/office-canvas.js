@@ -35,7 +35,23 @@
       if(!e.anim||!manifest)return;const profile=manifest.characters[e.fact.profile]||manifest.characters.generic,paths=[profile.body,profile.hair,profile.accessories[e.fact.variant]],frame=manifest.actions[e.anim][e.face][e.frame];
       for(const [index,src]of paths.entries()){const frame=manifest.layer_actions[['body','hair','accessory'][index]][e.anim][e.face][e.frame];load(src);const bitmap=bitmaps.get(src);if(bitmap){const p=point(e.at[0]+.5,e.at[1]+.15);ctx.drawImage(bitmap,frame.x,frame.y,40,40,Math.round(p.x-28),Math.round(p.y-56),56,56);}}
     }
-    function overlayPositions(){let key='';for(const e of director.entities.values()){const p=point(e.at[0]+.5,e.at[1]+.15);key+=e.id+':'+Math.round(p.x)+':'+Math.round(p.y)+':'+e.bubble+';';}if(key===positions)return;positions=key;for(const note of overlays.querySelectorAll('[data-scene-member]')){const e=director.entities.get(note.dataset.sceneMember);if(!e)continue;const p=point(e.at[0]+.5,e.at[1]+.15);note.style.left=p.x+'px';note.style.top=(p.y-64)+'px';note.hidden=e.state==='idle'&&!e.bubble;if(e.state==='idle')note.querySelector('span').textContent=e.bubble||'';}const last=[...director.entities.values()].at(-1),empty=overlays.querySelector('[data-canvas-add]');if(last&&empty){const p=point(last.seat.at[0]+4,last.seat.at[1]);empty.style.left=p.x+'px';empty.style.top=p.y+'px';}}
+    function emptyPoint(){const last=[...director.entities.values()].sort((a,b)=>(b.seat.at[0]-b.seat.at[1])-(a.seat.at[0]-a.seat.at[1]))[0];return last?point(last.seat.at[0]+4,last.seat.at[1]):point(3,3);}
+    function overlayPositions(){
+      let key='';for(const e of director.entities.values()){const p=point(e.at[0]+.5,e.at[1]+.15);key+=e.id+':'+Math.round(p.x)+':'+Math.round(p.y)+':'+e.bubble+';';}if(key===positions)return;positions=key;
+      const placed=[],priority={attention:0,working:1,unconnected:2,idle:3};
+      const notes=[...overlays.querySelectorAll('[data-scene-member]')].map(note=>({note,e:director.entities.get(note.dataset.sceneMember)})).filter(v=>v.e).sort((a,b)=>priority[a.e.state]-priority[b.e.state]);
+      for(const {note,e}of notes){
+        note.hidden=e.state==='idle'&&!e.bubble;if(e.state==='idle')note.querySelector('span').textContent=e.bubble||'';if(note.hidden)continue;
+        const p=point(e.at[0]+.5,e.at[1]+.15),w=note.offsetWidth,h=note.offsetHeight,baseY=p.y-64;let chosen=null,best=Infinity;
+        for(const [dx,dy]of [[0,0],[-180,0],[180,0],[0,-90],[-180,-90],[180,-90],[0,-180],[-180,-180],[180,-180]]){
+          const left=Math.max(w/2+4,Math.min(width-w/2-4,p.x+dx)),top=Math.max(h+6,baseY+dy),rect={x:left-w/2,y:top-h,w,h};
+          const overlap=placed.reduce((sum,r)=>sum+Math.max(0,Math.min(rect.x+w,r.x+r.w)-Math.max(rect.x,r.x)+4)*Math.max(0,Math.min(rect.y+h,r.y+r.h)-Math.max(rect.y,r.y)+4),0);
+          if(overlap<best){best=overlap;chosen={left,top,rect};}if(overlap===0)break;
+        }
+        note.style.left=chosen.left+'px';note.style.top=chosen.top+'px';note.title=e.fact.member.name+': '+(e.fact.note||e.bubble||e.fact.label);placed.push(chosen.rect);
+      }
+      const empty=overlays.querySelector('[data-canvas-add]');if(empty){const p=emptyPoint();empty.style.left=p.x+'px';empty.style.top=p.y+'px';}
+    }
     function render(stamp){raf=null;metrics.scheduled=0;if(!active())return;const moving=director.step(stamp,reduced());if(dirty||moving){if(stamp-lastFrame<95){schedule(95-(stamp-lastFrame));return;}lastFrame=stamp;ctx.setTransform(dpr,0,0,dpr,0,0);ctx.imageSmoothingEnabled=false;const night=current?.night===true;ctx.fillStyle=night?'#131929':'#EEF0F4';ctx.fillRect(0,0,width,height);const [w,h]=layout.grid;polygon([point(0,0),point(w,0),point(w,h),point(0,h)],night?'#1B2238':'#E1E5EE');ctx.strokeStyle=night?'#28344F':'#CED5E1';ctx.lineWidth=1;
         for(let x=0;x<=w;x++){const a=point(x,0),b=point(x,h);ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);ctx.stroke();}for(let y=0;y<=h;y++){const a=point(0,y),b=point(w,y);ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);ctx.stroke();}
         const draws=layout.furniture.map(f=>({depth:f.at[0]+f.at[1]+f.footprint[1],draw:()=>furniture(f)}));for(const e of director.entities.values()){draws.push({depth:e.seat.at[0]+e.seat.at[1]+1.4,draw:()=>station(e)});draws.push({depth:e.at[0]+e.at[1],draw:()=>actor(e)});}draws.sort((a,b)=>a.depth-b.depth).forEach(d=>d.draw());overlayPositions();metrics.draws++;metrics.frames++;dirty=false;

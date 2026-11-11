@@ -15,5 +15,5 @@ const OFFICE_FILES = Object.freeze([
   'assets/office/atlas-body.png',...PIXEL_IDS.map(id=>'assets/office/atlas-hair-'+id+'.png'),...PIXEL_IDS.flatMap(id=>[0,1,2,3,4].map(v=>'assets/office/atlas-accessory-'+id+'-'+v+'.png')),'assets/office/action-atlas.json',
   'assets/office/AVATAR_SOURCES.json'
 ]);
-const OFFICE_UI_FILES=Object.freeze(['office-scene.js','office-director.js','office-canvas.js','office-canvas.css']);
+const OFFICE_UI_FILES=Object.freeze(['office-scene.js','office-director.js','office-canvas.js','office-canvas.css','office-editor.js']);
 module.exports = { PIXEL_IDS, PIXEL_VARIANTS, OFFICE_FILES,OFFICE_UI_FILES };

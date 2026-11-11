@@ -3,13 +3,17 @@
   const ACTIONS=Object.freeze(['stand','walk','sit','type','talk','lie','raise']),DIRECTIONS=Object.freeze(['down','left','up','right']);
   const color=value=>typeof value==='string'&&/^#[a-f0-9]{6}$/i.test(value),point=(v,w,h)=>Array.isArray(v)&&v.length===2&&v.every(Number.isInteger)&&v[0]>=0&&v[0]<w&&v[1]>=0&&v[1]<h;
   const clone=value=>JSON.parse(JSON.stringify(value));
+  const FURNITURE=Object.freeze({
+    sofa:{label:'沙发',footprint:[3,1],parts:[{at:[0,0,0],size:[3,1,.5],color:'#3A4668',top:'#8A96BA'},{at:[0,0,.5],size:[3,.25,.6],color:'#3A4668',top:'#687799'}],slots:[{at:[0,2],face:'down',anim:'sit'},{at:[1,2],face:'left',anim:'lie'}],offers:[{action:'rest',when:'idle',weight:3,bubble:'休息一下'}]},
+    coffee:{label:'咖啡角',footprint:[2,1],parts:[{at:[0,0,0],size:[2,1,.8],color:'#3A4668',top:'#8A96BA'},{at:[.3,.1,.8],size:[.7,.6,.6],color:'#15181E',top:'#5B6472'}],slots:[{at:[0,2],face:'up',anim:'stand'}],offers:[{action:'drink',when:'idle',weight:1,bubble:'喝杯咖啡'}]},
+    table:{label:'小桌',footprint:[2,2],parts:[{at:[0,0,0],size:[2,2,.65],color:'#3A4668',top:'#8A96BA'}],slots:[{at:[0,2],face:'up',anim:'sit'},{at:[1,2],face:'up',anim:'sit'}],offers:[{action:'pause',when:'idle',weight:1,bubble:'稍作休息'}]},
+    plant:{label:'绿植',footprint:[1,1],parts:[{at:[.1,.1,0],size:[.8,.8,.5],color:'#3A4668',top:'#8A96BA'},{at:[.1,.1,.5],size:[.8,.8,.7],color:'#315D52',top:'#6B9A85'}],slots:[],offers:[]}
+  });
+  function furniture(type,id,at){const template=FURNITURE[type];if(!template)throw new TypeError('请选择一种家具。');const result={id,type,...clone(template),at:[...at]};for(const slot of result.slots)slot.at=[slot.at[0]+at[0],slot.at[1]+at[1]];return result;}
   function defaultScene(memberIds=[]){
     const columns=Math.max(3,Math.min(14,Math.ceil(Math.sqrt(memberIds.length)))),rows=Math.ceil(memberIds.length/columns),width=Math.min(64,Math.max(24,columns*4+8)),height=Math.min(64,Math.max(18,rows*4+8)),stations={};
     memberIds.forEach((id,i)=>stations[id]={at:[3+i%columns*4,3+Math.floor(i/columns)*4],face:'down'});
-    return {schema:1,revision:0,grid:[width,height],stations,furniture:[
-      {id:'sofa',type:'sofa',label:'沙发',at:[width-6,height-6],footprint:[3,1],parts:[{at:[0,0,0],size:[3,1,.5],color:'#3A4668',top:'#8A96BA'},{at:[0,0,.5],size:[3,.25,.6],color:'#3A4668',top:'#687799'}],slots:[{at:[width-6,height-4],face:'down',anim:'sit'},{at:[width-5,height-4],face:'left',anim:'lie'}],offers:[{action:'rest',when:'idle',weight:3,bubble:'休息一下'}]},
-      {id:'coffee',type:'coffee',label:'咖啡角',at:[width-5,4],footprint:[2,1],parts:[{at:[0,0,0],size:[2,1,.8],color:'#3A4668',top:'#8A96BA'},{at:[.3,.1,.8],size:[.7,.6,.6],color:'#15181E',top:'#5B6472'}],slots:[{at:[width-5,6],face:'up',anim:'stand'}],offers:[{action:'drink',when:'idle',weight:1,bubble:'喝杯咖啡'}]}
-    ]};
+    return {schema:1,revision:0,grid:[width,height],stations,furniture:[furniture('sofa','sofa',[width-6,height-6]),furniture('coffee','coffee',[width-5,4])]};
   }
   function validateScene(value){
     const bad=()=>{throw new TypeError('场景数据无效：检查网格、工位、家具位置和动作。');};
@@ -49,5 +53,29 @@
     }
     return null;
   }
-  return {ACTIONS,DIRECTIONS,defaultScene,validateScene,station,project,cell,blocked,pathfind};
+  function footprint(at,size){const keys=[];for(let x=0;x<size[0];x++)for(let y=0;y<size[1];y++)keys.push(cell([at[0]+x,at[1]+y]));return keys;}
+  function validatePlacement(input){
+    const scene=validateScene(input),used=new Set(),claim=(at,size)=>{for(const key of footprint(at,size)){if(used.has(key))throw new TypeError('家具或工位重叠，请换一个位置。');used.add(key);}};
+    for(const s of Object.values(scene.stations))claim(s.at,[2,2]);
+    for(const f of scene.furniture){claim(f.at,f.footprint);for(const p of f.parts)if(p.at[0]+p.size[0]>f.footprint[0]+.001||p.at[1]+p.size[1]>f.footprint[1]+.001)throw new TypeError('家具外形超出占地，请检查大小。');}
+    if(used.has('1,1'))throw new TypeError('请留出左上方的办公室入口。');
+    const slots=new Set();for(const f of scene.furniture)for(const slot of f.slots){const key=cell(slot.at);if(used.has(key)||slots.has(key))throw new TypeError('家具座位被挡住了，请留出空位。');slots.add(key);if(!pathfind(scene,[1,1],slot.at))throw new TypeError('有家具座位走不到，请留出通道。');}
+    for(const s of Object.values(scene.stations))if(!pathfind(scene,[1,1],[s.at[0],s.at[1]+1]))throw new TypeError('有工位走不到，请留出通道。');
+    return scene;
+  }
+  function completeScene(input,memberIds){
+    const scene=validateScene(input),ids=new Set(memberIds);for(const key of Object.keys(scene.stations))if(!ids.has(key))delete scene.stations[key];
+    const used=new Set(['1,1']);for(const s of Object.values(scene.stations))for(const key of footprint(s.at,[2,2]))used.add(key);
+    for(const f of scene.furniture){for(const key of footprint(f.at,f.footprint))used.add(key);for(const s of f.slots)used.add(cell(s.at));}
+    for(const id of memberIds)if(!scene.stations[id]){
+      let at=null;
+      for(let expand=0;!at&&expand<30;expand++){
+        for(let y=3;y<scene.grid[1]-2&&!at;y+=3)for(let x=3;x<scene.grid[0]-2;x+=3)if(footprint([x,y],[2,2]).every(k=>!used.has(k))){at=[x,y];break;}
+        if(!at){if(scene.grid[0]<64)scene.grid[0]=Math.min(64,scene.grid[0]+4);else if(scene.grid[1]<64)scene.grid[1]=Math.min(64,scene.grid[1]+4);else break;}
+      }
+      if(!at)throw new TypeError('办公室已满，请扩大布局后再加入工位。');scene.stations[id]={at,face:'down'};for(const key of footprint(at,[2,2]))used.add(key);
+    }
+    return scene;
+  }
+  return {ACTIONS,DIRECTIONS,FURNITURE,furniture,defaultScene,validateScene,validatePlacement,completeScene,station,project,cell,blocked,pathfind};
 });
