@@ -407,7 +407,7 @@
       item.root.classList.toggle('ao-offline',!current.online || ['offline','stale','unknown'].includes(presence.status));
       item.root.classList.toggle('ao-message-visible',!item.entering&&(!!info.activity||info.showMessage && !!message));
       item.root.classList.toggle('ao-has-progress',!item.entering&&!!info.activity);
-      item.root.classList.toggle('ao-selected',selected.has(member.id));
+      item.root.classList.toggle('ao-needs-input',info.needsInput);item.root.classList.toggle('ao-selected',selected.has(member.id));
       item.name.textContent=member.name || 'Agent';
       item.secretaryBadge.hidden=!info.secretary;item.root.dataset.secretary=String(info.secretary);
       item.status.textContent=presence.needsConnection?presence.label:!info.occupied?`空位 · ${presence.label}${info.waiting&&current.online?' · 有待处理消息':''}`:info.processing?'处理中':info.needsInput?'等待确认':info.waiting&&current.online?'有待处理消息':presence.label;

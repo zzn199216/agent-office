@@ -1,0 +1,35 @@
+'use strict';
+const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path');
+const {id,sleep}=require('../src/util.cjs');const {FakeCodex}=require('../tests/helpers.cjs');
+module.exports=async function({service,page,api,room,shot,members:[a,b]}){
+  await page.setViewportSize({width:1440,height:1000});
+  const fresh=await api('/api/chat/rooms',{project_id:room.project_id,title:'同屏布局验收'});
+  await page.locator('#rooms [data-room="'+fresh.id+'"]').click();await page.waitForFunction(id=>document.getElementById('room-heading').textContent==='同屏布局验收',fresh.id);
+  if(await page.locator('#secretary-look-around').isVisible())await page.locator('#secretary-look-around').click();
+  await page.locator('#room-feature-options').click();await page.locator('[data-room-feature="work_layout"]').check();await page.locator('#room-features-save').click();await page.locator('#room-features-dialog').waitFor({state:'hidden'});await page.locator('body.work-layout').waitFor();
+  await page.locator('#work-empty-station').click();await page.locator('#secretary-connect-dialog').waitFor({state:'visible'});await page.locator('#secretary-connect-dialog .close-dialog').first().click();
+  await api('/api/chat/rooms/'+fresh.id+'/join',{member_id:a.id});await api('/api/chat/rooms/'+fresh.id+'/join',{member_id:b.id});
+  const failed=service.chat.store.addMember({name:'未接通的 Claude',adapter:'claude-code'});service.chat.store.join(fresh.id,failed.id);service.chat.store.updateMember(failed.id,{status:'connection_failed',error:'Claude API 密钥尚未填写，请打开 API 配置。'});
+  const configDir=path.join(service.store.dir,'fixture-claude');fs.mkdirSync(configDir,{recursive:true});fs.writeFileSync(path.join(configDir,'settings.json'),JSON.stringify({env:{ANTHROPIC_API_KEY:'YOUR_API_KEY',ANTHROPIC_BASE_URL:'https://fixture.invalid'}}));
+  const env={USERPROFILE:configDir,HOME:configDir,CLAUDE_CONFIG_DIR:configDir};service.onboarding.options.env=env;service.onboardingActions.options.env=env;let editors=0;service.onboardingActions.options.launcher=async()=>{editors++;};
+  const run=id(),stamp=new Date().toISOString();service.store.db.prepare("INSERT INTO onboarding_runs(id,room_id,requested_provider,provider,mode,status,stage,direct_member_id,target_member_id,error,error_code,created,updated) VALUES(?,?,?,?,'managed','error','failed',?,?,?,?,?,?)").run(run,fresh.id,'claude-code','claude-code',failed.id,failed.id,'Claude API 密钥尚未填写，请打开 API 配置。','claude_api_key_missing',stamp,stamp);service.changed();
+  const waitingClient=new FakeCodex(),workingClient=new FakeCodex();let releaseApproval,releaseWork;
+  const held=(input,release)=>new Promise((resolve,reject)=>{release(resolve);input.signal.addEventListener('abort',()=>reject(Object.assign(new Error('cancelled'),{code:'cancelled'})),{once:true});});
+  waitingClient.respond=()=>releaseApproval?.();waitingClient.run=async input=>{const thread=id();input.onBinding('bound',thread);input.onTurn(id());input.onApproval({id:731,method:'item/tool/requestUserInput',params:{threadId:thread,questions:[{id:'label',header:'验收',question:'给本次验收写一个短名字',options:[]}]}},input.project.access);await held(input,resolve=>releaseApproval=resolve);return {threadId:thread,turnId:id(),answer:'布局授权回复已完成'};};
+  workingClient.run=async input=>{const thread=id();input.onBinding('bound',thread);input.onTurn(id());input.onProgress('正在核对同屏布局');await held(input,resolve=>releaseWork=resolve);return {threadId:thread,turnId:id(),answer:'布局工作已完成'};};
+  service.chat.clients.set(a.id,waitingClient);service.chat.clients.set(b.id,workingClient);
+  const attention=await api('/api/chat/messages',{room_id:fresh.id,to_member_id:a.id,text:'LAYOUT-ATTENTION: ask for the review name',idempotency_key:id()});
+  const working=await api('/api/chat/messages',{room_id:fresh.id,to_member_id:b.id,text:'LAYOUT-WORK: check visible layout',idempotency_key:id()});
+  await page.locator('#work-approvals [data-input-submit]').waitFor();await page.locator('#work-connections [data-conn-op="login_client"]').waitFor();await page.locator('.ao-working').waitFor();
+  assert.equal(await page.locator('#chat-stream').isVisible(),true);assert.equal(await page.locator('#composer').isVisible(),true);assert.equal(await page.locator('#officeScene').isVisible(),true);assert.equal(await page.locator('#view-switch').isVisible(),false);
+  assert.ok(await page.locator('#work-running').textContent());assert.match(await page.locator('#work-connections').textContent(),/密钥尚未填写/);
+  await page.locator('#work-connections [data-conn-op="login_client"]').click();await page.locator('#work-connections [data-conn-feedback]').filter({hasText:'已打开本机 Claude API 配置'}).waitFor();assert.equal(editors,1);
+  const answer=page.locator('#work-approvals [data-question]');await answer.fill('同屏验收');
+  // A live refresh cannot erase a partially written confirmation in the rail.
+  await api('/api/chat/messages',{room_id:fresh.id,sender_id:'user',announcement:true,text:'布局验收：同时到达的公告',idempotency_key:id()});await sleep(300);assert.equal(await answer.inputValue(),'同屏验收');
+  await shot('10-work-layout.png');await page.locator('#work-approvals [data-input-submit]').click();releaseWork();
+  for(let i=0;i<100&&service.chat.store.message(working.id).status!=='answered';i++)await sleep(20);assert.equal(service.chat.store.message(attention.id).status,'answered');assert.equal(service.chat.store.message(working.id).status,'answered');
+  await page.setViewportSize({width:390,height:844});await page.locator('#work-attention-toggle').click();await page.locator('#work-rail-close').waitFor();assert.equal(await page.locator('#work-connections [data-conn-op="login_client"]').isVisible(),true);assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));await shot('11-work-layout-narrow.png');await page.locator('#work-rail-close').click();
+  await page.setViewportSize({width:1440,height:1000});
+  return {ok:true,room_id:fresh.id,failed_member_id:failed.id,office_chat_composer_together:true,approval_preserved_and_submitted:true,api_config_feedback:true,narrow_attention_accessible:true};
+};

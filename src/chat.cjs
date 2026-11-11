@@ -51,7 +51,7 @@ class ChatManager {
   changed(){this.service.changed();this.exportRooms();}
   room(roomId,options={}){
     const page=this.store.messagePage(roomId,options),messages=page.messages.map(m=>({...this.deliveryMessage(m),...this.progress.has(m.id)?{progress:this.progress.get(m.id)}:{}}));
-    const participants=this.store.participants(roomId).map(m=>({...this.publicMember(m),native_thread_id:this.store.binding(roomId,m.id).thread_id,binding_state:this.store.binding(roomId,m.id).binding_state}));
+    const participants=this.store.participants(roomId).map(m=>({...this.publicMember(m),native_thread_id:this.store.binding(roomId,m.id).thread_id,binding_state:this.store.binding(roomId,m.id).binding_state,connection_presentation:this.service.onboarding?.memberPresentation(m.id,roomId)}));
     const approvals=[...this.service.approvals.values()].filter(a=>this.store.db.prepare('SELECT 1 FROM chat_messages WHERE room_id=? AND id=?').get(roomId,a.public.request_id)||participants.some(m=>a.public.request_id===`connect:${m.id}`&&this.active.get(m.id)?.roomId===roomId)).map(a=>a.public);
     const reconciliations=this.store.db.prepare('SELECT id,record,created FROM chat_reconciliations WHERE room_id=? ORDER BY rowid DESC LIMIT 200').all(roomId).map(row=>({id:row.id,...JSON.parse(row.record),created:row.created}));
     return {room:this.store.room(roomId),participants,messages,approvals,pagination:page.pagination,reconciliations,connection_assists:this.service.connectionAssist?.listRoom(roomId)||[],group:this.service.group?.state(roomId)};

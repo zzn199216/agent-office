@@ -763,6 +763,7 @@ function renderRoom(project) {
   renderApprovals([]);updateOfficeApprovalAlert();
   renderService(); renderInspector(); renderSidebar(); applyRoomView(); updateOfficeScene();
   globalThis.AgentOfficeGroup?.update({roomId,group:history.group,api,action,refresh,resetRecipient:enabled=>roomRecipients.set(roomId,enabled?'__group__':defaultRecipient(admittedMembers(history.participants),history.messages))});
+  if(globalThis.AgentOfficeLayout)updateWorkLayout();
 }
 function defaultRecipient(participants, messages = []) {
   const present = id => id && participants.some(member => member.id === id);
@@ -831,7 +832,7 @@ async function connectionContext(source,id) {
     const member=memberById(id)||setupData?.member,provider=setupData?.client?.provider||member?.provider;
     let job=typeof nativeSetupJob==='function'?nativeSetupJob(id,provider):null;
     if(!job){const assist=[...(history?.connection_assists||[])].reverse().find(item=>item.target_member_id===id&&item.room_id===roomId&&item.run_id);if(assist){job=onboardingView(await api(`/api/onboarding/jobs/${encodeURIComponent(assist.run_id)}`));if(job?.id)onboardingJobs.set(job.id,job);}}
-    return {roomId,provider,memberId:id,job,view:setupData?.presentation};
+    return {roomId,provider,memberId:id,job,view:setupData?.member?.id===id?setupData.presentation:history?.participants?.find(m=>m.id===id)?.connection_presentation};
   }
   throw Error('无法识别这个连接操作。');
 }
@@ -1030,7 +1031,7 @@ function approvalTimelineMarkup(approvals,messages,reviews=[]) {
 }
 function setRoomTimeline(markup,approvals) {const saved=globalThis.AgentOfficeGroup?.capture($('messages'));setApprovalMarkup($('messages'),markup,approvals);if(saved)globalThis.AgentOfficeGroup?.restore($('messages'),saved);}
 function setApprovalMarkup(host,markup,approvals) {
-  const active=document.activeElement,retained=new Map([...host.querySelectorAll('[data-approval]')].map(card=>[card.dataset.approval,card]));
+  const active=document.activeElement,retained=new Map([...host.querySelectorAll('[data-approval]'),...(globalThis.AgentOfficeLayout?.retainedApprovals()||[])].map(card=>[card.dataset.approval,card]));
   host.innerHTML=markup;
   for(const card of host.querySelectorAll('[data-approval]')){
     const signature=JSON.stringify(approvals.find(approval=>approval.id===card.dataset.approval)),previous=retained.get(card.dataset.approval);
@@ -1464,8 +1465,8 @@ let stickToEnd=true;
 if(typeof ResizeObserver==='function'){const stick=new ResizeObserver(()=>{if(officeView||!stickToEnd)return;const stream=$('chat-stream');stream.scrollTop=stream.scrollHeight;});requestAnimationFrame(()=>{for(const id of ['messages','chat-stream','composer'])if($(id))stick.observe($(id));});}
 function rememberTextScroll(){if(!roomId||officeView||$('chat-stream').classList.contains('hidden'))return;const stream=$('chat-stream');const atEnd=stream.scrollHeight-stream.scrollTop-stream.clientHeight<110;stickToEnd=atEnd;textScroll.set(roomId,{top:stream.scrollTop,atEnd});}
 function applyRoomView() {
-  const available=professionalView && !!history?.room && !legacyId, visual=available && officeView;
-  $('view-switch').classList.toggle('hidden',!available);$('chat-stream').classList.toggle('hidden',visual);$('officeScene').classList.toggle('hidden',!visual);
+  const available=professionalView && !!history?.room && !legacyId,work=available&&typeof state!=='undefined'&&state?.features?.[history.room.id]?.work_layout===true,visual=available && officeView&&!work;
+  $('view-switch').classList.toggle('hidden',!available||work);$('chat-stream').classList.toggle('hidden',visual);$('officeScene').classList.toggle('hidden',!available||!officeView&&!work);
   $('chat-view-button').classList.toggle('active',!visual);$('office-view-button').classList.toggle('active',visual);
   $('chat-view-button').setAttribute('aria-pressed',String(!visual));$('office-view-button').setAttribute('aria-pressed',String(visual));
   $('room').classList.toggle('office-view',visual);document.body.classList.toggle('office-view',visual);
@@ -1689,9 +1690,16 @@ function openSecretaryConnect() {
   void scanLaunch({quiet:true});
 }
 function updateOfficeScene() {
-  if(!officeView || !professionalView || !history?.room || legacyId) return;
+  if((!officeView&&!state?.features?.[history?.room?.id]?.work_layout) || !professionalView || !history?.room || legacyId) return;
   if(!officeScene && window.AgentOfficeScene) officeScene=window.AgentOfficeScene.mount($('officeScene'),{onCompose:()=>toggleOfficeComposer(true),onChooseSecretary:openSecretaryTutorial,onSelectMember:member=>{if(!member.verified_at||['connection_failed','failed','disabled','revoked','unavailable'].includes(member.status)||nativeConnectionUnavailable(member)){action(()=>showMemberSetup(member.id));return;}if(!submitting && [...$('recipient').options].some(option=>option.value===member.id)){$('recipient').value=member.id;updateRecipientNote();}toggleOfficeComposer(true);},onCustomize:member=>openInspector('appearance',member.id),onSceneSettings:()=>openInspector('scene'),onToggleLights:on=>action(()=>setOfficeLighting(on)),onSelectMessage:message=>{selectRoomView(false);requestAnimationFrame(()=>$('message-'+message.id)?.scrollIntoView({block:'center',behavior:'smooth'}));}});
-  officeScene?.update({roomId:history.room.id,participants:visibleMembers(history.participants).map(member=>({...member,connection_presentation:[...onboardingJobs.values()].filter(job=>job.room_id===roomId&&job.member_id===member.id).sort((a,b)=>String(b.updated||b.created).localeCompare(String(a.updated||a.created)))[0]?.presentation})),messages:(history.messages||[]).filter(message=>!message.connection_verification),runtime,online:webConnected,scene:state?.office?.[history.room.id]||{},secretary:currentSecretary(),tutorialVisible:secretaryTutorialVisible()});
+  officeScene?.update({roomId:history.room.id,participants:visibleMembers(history.participants).map(member=>({...member,connection_presentation:[...onboardingJobs.values()].filter(job=>job.room_id===roomId&&job.member_id===member.id).sort((a,b)=>String(b.updated||b.created).localeCompare(String(a.updated||a.created)))[0]?.presentation||member.connection_presentation})),messages:(history.messages||[]).filter(message=>!message.connection_verification),runtime,online:webConnected,scene:state?.office?.[history.room.id]||{},secretary:currentSecretary(),tutorialVisible:secretaryTutorialVisible()});
+}
+function updateWorkLayout(){
+  if(!globalThis.AgentOfficeLayout)return;
+  const enabled=!!(professionalView&&!legacyId&&history?.room&&state?.features?.[history.room.id]?.work_layout),members=history?.participants||[],messages=history?.messages||[];
+  const connections=members.filter(m=>(!m.verified_at||['connection_failed','failed','disabled','revoked'].includes(m.status))&&m.connection_presentation&&!m.connection_presentation.busy).map(m=>({id:m.id,name:m.name,markup:connectionPanelMarkup(m.connection_presentation,{source:'member',id:m.id})}));
+  const approvals=roomApprovals(messages),reviews=roomApprovalReviews(messages).filter(r=>approvalReviewActive(messages.find(m=>m.id===r.request_id||m.request_id===r.request_id)));
+  globalThis.AgentOfficeLayout.update({enabled,roomId,history:history||{},members,messages,connections,approvalIds:[...approvals,...reviews].map(a=>a.id),openMember:id=>action(()=>showMemberSetup(id)),openResume:id=>action(()=>showResume(id)),openSettings:()=>openInspector('members'),addAI:openAddAI,onMessageClick:event=>$('messages').onclick?.(event)});
 }
 function detailRows(values) {return values.map(([label,value])=>`<dt>${escape(label)}</dt><dd>${escape(value || '—')}</dd>`).join('');}
 function doctorTarget() { return $('connection-doctor-old-member').value.trim() || $('connection-doctor-member').value || null; }

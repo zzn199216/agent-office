@@ -24,5 +24,6 @@ module.exports=async function({service,page,api,room,shot}){
   await page.locator('#group-call-count').filter({hasText:'1'}).waitFor();await shot('07-workgroup-routing.png');
   await page.locator('#group-enabled').uncheck();const before=prompts.length;await api('/api/chat/messages',{room_id:room.id,sender_id:'user',text:'GROUP-OFF',idempotency_key:id()});await sleep(50);assert.equal(prompts.length,before);
   const claims=await require('./core-group-claims.cjs')({service,page,api,room,shot,members:[a,b],prompts});
-  return {ok:true,extra_calls:1,direct_rules:1,catchup:true,off_extra_calls:0,claims};
+  const layout=await require('./core-work-layout.cjs')({service,page,api,room,shot,members:[a,b]});
+  return {ok:true,layout,extra_calls:1,direct_rules:1,catchup:true,off_extra_calls:0,claims};
 };

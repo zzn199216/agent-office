@@ -45,7 +45,7 @@ function createServer(service,{token,port=47831,onShutdown}={}) {
       const type=pathname.endsWith('.png')?'image/png':pathname.endsWith('.webp')?'image/webp':pathname.endsWith('.json')?'application/json; charset=utf-8':'image/svg+xml; charset=utf-8';
       res.setHeader('Content-Type',type);res.setHeader('Content-Security-Policy',"default-src 'none'; style-src 'unsafe-inline'; sandbox");res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Cache-Control','no-store');return res.end(content);
     }
-    const staticFiles={'/':'index.html','/app.js':'app.js','/workgroup.js':'workgroup.js','/desktop.js':'desktop.js','/page-activity.js':'page-activity.js','/office.js':'office.js','/office.css':'office.css','/style.css':'style.css'};
+    const staticFiles={'/':'index.html','/app.js':'app.js','/workgroup.js':'workgroup.js','/desktop.js':'desktop.js','/page-activity.js':'page-activity.js','/office.js':'office.js','/work-layout.js':'work-layout.js','/work-layout.css':'work-layout.css','/office.css':'office.css','/style.css':'style.css'};
     if(req.method==='GET' && staticFiles[pathname]) {
       if(pathname==='/')res.setHeader('Set-Cookie',`agentroom_session=${token}; HttpOnly; SameSite=Strict; Path=/`);
       res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");

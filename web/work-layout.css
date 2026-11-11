@@ -1,0 +1,87 @@
+body.pixel-theme.work-layout{--bg:#EEF0F4;--surface:#fff;--panel:#fff;--ink:#15181E;--muted:#5B6472;--line:#DDE1E7;--border:#DDE1E7;--accent:#2F5FD0;--accent-dark:#254ba5;--soft:#eef3fe;--rose:#8A3A06;background:#EEF0F4;color:#15181E;font-family:"Segoe UI","Microsoft YaHei",system-ui,sans-serif;font-size:14px}
+body.work-layout .shell,body.work-layout.inspector-open .shell{grid-template-columns:232px minmax(0,1fr)}
+body.work-layout.has-work-rail .shell,body.work-layout.has-work-rail.inspector-open .shell{grid-template-columns:232px minmax(0,1fr) 300px}
+body.pixel-theme.work-layout button,body.pixel-theme.work-layout input,body.pixel-theme.work-layout select,body.pixel-theme.work-layout textarea,body.pixel-theme.work-layout dialog,body.pixel-theme.work-layout .connection-panel,body.pixel-theme.work-layout .chat-message .message-body,body.pixel-theme.work-layout .composer{border-radius:0;box-shadow:none;border-width:1px;font-family:inherit}
+body.pixel-theme.work-layout button,body.work-layout summary,body.work-layout select{min-height:44px}
+body.pixel-theme.work-layout .sidebar{width:232px;background:#131929;background-image:none;color:#f3f5fa;border-right:1px solid #29334d;padding:24px 14px 0}
+body.pixel-theme.work-layout .brand,body.pixel-theme.work-layout .sidebar-section,body.pixel-theme.work-layout .sidebar-empty,body.pixel-theme.work-layout .sidebar-footer{color:#c1c9da}
+body.work-layout .brand{font-size:18px;margin-bottom:24px}
+body.pixel-theme.work-layout .project-button,body.pixel-theme.work-layout .room-button{color:#c1c9da;background:transparent;border:1px solid transparent;box-shadow:none}
+body.pixel-theme.work-layout .project-button.active,body.pixel-theme.work-layout .room-button.active{background:#233354;color:#fff;border-color:#49618f}
+body.work-layout .room-button small{color:#b6c2d8}body.work-layout .room-button .work-room-badge{margin-left:auto;background:#FDEBDD;color:#8A3A06;padding:2px 6px;font-size:12px;font-family:monospace}
+body.pixel-theme.work-layout .room-actions-button,body.work-layout .sidebar .icon-button{color:#c1c9da;min-width:36px}
+body.pixel-theme.work-layout .sidebar-footer{border-color:#29334d}
+body.pixel-theme.work-layout .topbar{background:#fff;background-image:none;border-bottom:1px solid #DDE1E7;box-shadow:none;min-height:64px;padding:4px 20px}
+body.pixel-theme.work-layout .breadcrumbs>span,body.pixel-theme.work-layout .breadcrumbs .slash,body.pixel-theme.work-layout .topbar .icon-button{color:#5B6472}
+body.pixel-theme.work-layout .primary{background:#2F5FD0;color:#fff;border:1px solid #2F5FD0;box-shadow:none}
+body.pixel-theme.work-layout .secondary,body.pixel-theme.work-layout .text-button,body.pixel-theme.work-layout .icon-button{background:transparent;color:#15181E;box-shadow:none}
+body.pixel-theme.work-layout .secondary{border:1px solid #DDE1E7}
+body.work-layout .local-dot,body.work-layout .local-indicator i,body.work-layout .service-dot.online{background:#2F5FD0}
+body.pixel-theme.work-layout .content{width:100%;max-width:none;padding:12px 20px;display:flex;flex:1;min-height:0}
+body.work-layout #professional-workspace{display:flex;flex:1;min-height:0;min-width:0;width:100%}
+body.work-layout #room{display:flex;flex-direction:column;min-height:0;min-width:0;flex:1;height:100%;gap:0}
+body.work-layout .room-title,body.work-layout #room-members-bar,body.work-layout #room-runtime,body.work-layout #secretary-room-entry,body.work-layout #office-compose-launch,body.work-layout #office-approval-alert,body.work-layout #view-switch{display:none!important}
+body.work-layout .group-controls{flex:none;margin:0 0 4px;gap:10px;min-width:0}
+body.work-layout #work-office-expand{align-self:flex-end;flex:none;margin-top:-44px;z-index:1}
+body.work-layout #officeScene{display:block!important;flex:0 0 260px;height:260px;min-height:0;max-height:45vh;position:relative;border:1px solid #DDE1E7;border-bottom:0;overflow:hidden}
+body.work-layout.work-office-expanded #officeScene{flex-basis:420px;height:420px;max-height:55vh}
+body.work-layout .ao-scene{min-height:0;height:100%;--ao-wall-color:#DDE1E7!important;--ao-floor-color:#EEF0F4!important;--ao-ink:#3A4668;background:#DDE1E7}
+body.work-layout .ao-scene[data-phase=night]{--ao-wall-color:#131929!important;--ao-floor-color:#1B2238!important;background:#131929}
+body.work-layout .ao-floor{background:repeating-linear-gradient(0deg,transparent 0 30px,#64718d24 30px 31px),var(--ao-floor-color);border:1px solid #3A4668}
+body.work-layout .ao-wall{background:var(--ao-wall-color);border-bottom:2px solid #3A4668;box-shadow:none}
+body.work-layout .ao-desk{filter:grayscale(1) sepia(.2) saturate(2) hue-rotate(175deg)}
+body.work-layout .ao-heading,body.work-layout .ao-scene-settings,body.work-layout .ao-compose-button,body.work-layout .ao-secretary-button{background:#fff!important;color:#15181E!important;border:1px solid #DDE1E7!important;box-shadow:none!important}
+body.work-layout .ao-health{display:none}body.work-layout .ao-seat-status{background:#fff;color:#15181E;border:1px solid #DDE1E7;padding:2px 4px}
+body.work-layout .ao-has-progress .ao-bubble{background:#fff;color:#15181E;border-color:#2F5FD0}
+body.work-layout .ao-needs-input .ao-bubble{background:#FDEBDD;color:#8A3A06;border-color:#F08A3C}
+body.work-layout #chat-stream{display:block!important;min-height:100px;flex:1;overflow:auto;padding:16px 4px;background:#EEF0F4}
+body.pixel-theme.work-layout .chat-message .message-body{background:#fff;border:1px solid #DDE1E7;box-shadow:none;color:#15181E;max-width:100%}
+body.pixel-theme.work-layout .chat-message.own-message .message-body{background:#f6f8fd;border-color:#d5def2}
+body.work-layout .message-content,body.work-layout .message-body{font-size:14px;line-height:1.65}
+body.work-layout .message-header time,body.work-layout time,body.work-layout code,body.work-layout .group-controls>span{font-family:Consolas,"Cascadia Mono",monospace}
+body.work-layout .chat-message{margin-bottom:20px}
+body.pixel-theme.work-layout #composer{position:relative;inset:auto;width:auto;flex:none;padding:10px 14px;margin:0;border:1px solid #DDE1E7;background:#fff;box-shadow:none;max-height:38vh}
+body.work-layout .composer-bottom>span{color:#5B6472}body.work-layout .composer textarea{background:#fff;min-height:44px;max-height:16vh}
+body.work-layout .footer{background:#EEF0F4;border-top:0;color:#5B6472;height:26px;min-height:26px}
+body.work-layout .work-rail{width:300px;min-width:0;padding:20px 14px;background:#fff;border-left:1px solid #DDE1E7;height:100dvh;overflow:auto}
+body.work-layout .work-rail h2{font-size:15px;margin:0 0 12px;display:flex;gap:8px;align-items:center}
+body.work-layout #work-attention-count{color:#8A3A06;background:#FDEBDD;padding:2px 6px;font:12px Consolas,monospace}
+body.work-layout #work-running-section{margin-top:22px}
+body.work-layout .work-attention-card,body.work-layout #work-approvals>.chat-message{border:1px solid #F08A3C;background:#FDEBDD;padding:10px;margin:0 0 12px}
+body.work-layout .work-attention-card h3{font-size:14px;margin:0 0 8px;color:#8A3A06}
+body.work-layout .work-attention-card p,body.work-layout .work-progress-card p{font-size:13px;line-height:1.6;margin:4px 0 8px;overflow-wrap:anywhere}
+body.work-layout .work-progress-card{border:1px solid #DDE1E7;padding:10px;margin-bottom:10px;background:#f7f9fe}
+body.work-layout #work-approvals .message-header{font-size:12px;gap:6px;flex-wrap:wrap}
+body.work-layout #work-approvals .message-body{border:0!important;background:transparent!important;padding:0}
+body.work-layout #work-approvals .message-header .agent-avatar,body.work-layout #work-approvals .message-header time{display:none}
+body.work-layout #work-approvals .quoted-message{display:none}
+body.work-layout #work-connections .connection-panel{padding:0;border:0;background:transparent}
+body.work-layout .connection-panel[data-conn-state=attention],body.work-layout .error-note,body.work-layout .danger{color:#8A3A06}
+body.work-layout #messages .ao-system-card:has(.connection-panel[data-conn-state=attention]),body.work-layout #messages .ao-system-card:has(.connection-panel[data-conn-state=not_connected]),body.work-layout #messages .ao-system-card:has(.connection-panel[data-conn-state=waiting]){display:none}
+body.work-layout .room-inspector{position:fixed!important;right:12px;top:72px;bottom:12px;width:min(720px,calc(100vw - 24px));z-index:80;background:#fff!important;border:1px solid #DDE1E7!important;box-shadow:0 8px 32px #15181E30}
+body:not(.work-layout) #work-rail,body:not(.work-layout) #work-office-expand,body:not(.work-layout) #work-room-settings{display:none}
+@media(max-width:1100px){body.work-layout.has-work-rail .shell,body.work-layout.has-work-rail.inspector-open .shell{grid-template-columns:200px minmax(0,1fr) 280px}body.pixel-theme.work-layout .sidebar{width:200px}body.work-layout .work-rail{width:280px}body.work-layout .content{padding:8px 12px}body.work-layout #work-office-expand{margin:0;align-self:flex-start}}
+@media(max-width:850px){body.work-layout .shell,body.work-layout.has-work-rail .shell,body.work-layout.inspector-open .shell,body.work-layout.has-work-rail.inspector-open .shell{display:block}body.pixel-theme.work-layout .sidebar{width:232px}body.work-layout .work-rail{position:relative;width:auto;height:auto;max-height:42vh;border:1px solid #DDE1E7;padding:12px;margin:8px 12px}body.work-layout main{height:100dvh}body.work-layout #officeScene{flex-basis:200px;height:200px}body.work-layout .topbar-actions{gap:4px}body.work-layout .topbar{padding:4px 12px}}
+
+body.work-layout #team-open,body.work-layout #native-thread,body.work-layout #inspector-toggle{display:none}
+body.work-layout .topbar{flex-wrap:wrap}
+body.work-layout #work-attention-toggle,body.work-layout #work-rail-close{display:none}
+body.work-layout .work-empty-station{position:absolute;right:12px;bottom:10px;z-index:25;display:flex;flex-direction:column;align-items:center;justify-content:center;width:100px;height:88px;border:1px dashed #7b869a;background:#ffffffed;color:#343c49;font-size:12px}
+body.work-layout .work-empty-station span{font-size:24px}
+body:not(.work-layout) #work-empty-station,body:not(.work-layout) #work-attention-toggle{display:none}
+body.work-layout .ao-seat:not(.ao-has-progress) .ao-bubble{display:none}
+body.work-layout .ao-seat[data-furniture=desk] .ao-furniture:not(.ao-custom-furniture)::before{content:'';position:absolute;left:119px;top:10px;width:44px;height:28px;background:#131929;z-index:8;pointer-events:none}
+body.work-layout .ao-seat.ao-working .ao-furniture:not(.ao-custom-furniture)::before{background:#6EA0FF;box-shadow:0 0 12px #6EA0FF40}
+@media(max-width:850px){body.work-layout.has-work-rail #work-attention-toggle{display:inline-flex}body.work-layout #work-rail-close{display:block;margin-left:auto}body.work-layout .work-rail{position:fixed;right:0;top:64px;bottom:0;width:min(340px,100vw);height:auto;max-height:none;z-index:70;margin:0;transform:translateX(102%)}body.work-layout.work-rail-open .work-rail{transform:none}body.work-layout #officeScene{flex-basis:180px;height:180px}body.work-layout .content{padding:6px 10px}}
+
+body.work-layout{overflow-x:clip}body.work-layout .shell{width:100%;min-width:0}
+body.pixel-theme.work-layout .room-actions-button,body.work-layout .sidebar .icon-button{min-width:44px;width:44px;height:44px}
+@media(max-width:850px){body.pixel-theme.work-layout .sidebar{position:fixed;left:0;top:0;bottom:0;z-index:75;transform:translateX(-100%)}body.pixel-theme.work-layout.sidebar-open .sidebar{transform:none}body.work-layout #sidebar-toggle,body.work-layout .sidebar-close{display:inline-flex!important;align-items:center;justify-content:center}}
+
+html[data-phase] body.pixel-theme.work-layout .topbar .breadcrumbs,html[data-phase] body.pixel-theme.work-layout .topbar .breadcrumbs *,html[data-phase] body.pixel-theme.work-layout .topbar .icon-button,body.work-layout .app-version{color:#15181E!important}
+body.pixel-theme.work-layout .brand small{color:#b6c2d8}
+body.pixel-theme.work-layout .room-list-icon{background:#233354!important;color:#c1c9da!important;border:1px solid #49618f}
+body.work-layout #officeScene{height:380px;flex-basis:380px}
+body.work-layout.work-office-expanded #officeScene{height:540px;flex-basis:540px}
+body.work-layout .ao-clock-meta{background:#fff!important;color:#15181E;border:1px solid #DDE1E7!important}
+@media(max-width:850px){body.work-layout #officeScene{height:180px;flex-basis:180px}body.work-layout.work-office-expanded #officeScene{height:380px;flex-basis:380px}}
