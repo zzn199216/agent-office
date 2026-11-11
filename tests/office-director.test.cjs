@@ -24,3 +24,11 @@ test('declarative scripts finish and stop ticking; disabling movement settles th
   director.startScript('a',[{walkTo:[1,1]}]);director.update([a],scene,{walking:false});assert.equal(entity.script,null);assert.deepEqual(entity.at,[3,4]);
   assert.equal(director.startScript('a',[{eval:'bad'}]),false);assert.equal(director.startScript('a',[{wait:Infinity}]),false);assert.doesNotThrow(()=>model.validateScene(model.defaultScene(Array.from({length:200},(_,i)=>'member-'+i))));
 });
+test('an unfamiliar furniture offer runs without a type branch, reserves its slot, and yields to real work',()=>{
+  const director=new Director({random:()=>0}),scene=model.defaultScene(['a','b']);scene.furniture=[{id:'custom',type:'unseen-lounger',label:'新休息处',at:[1,10],footprint:[2,1],parts:[],slots:[{at:[1,11],face:'left',anim:'lie'}],offers:[{action:'unseen-rest',when:'idle',weight:3,bubble:'在休息处放松'}]}];
+  const a=fact('a'),b=fact('b');director.update([a,b],scene,{walking:true,ambient:true});director.step(0);assert.equal(director.nextWake(),12000);
+  for(let now=12000;now<=16000;now+=100)director.step(now);
+  const entity=director.entities.get('a');assert.equal(entity.script.layer,'ambient');assert.equal(entity.anim,'lie');assert.equal(entity.bubble,'在休息处放松');assert.equal(director.reservations.size,1);assert.equal(director.entities.get('b').script,null);assert.equal(director.step(16100),false,'A static rest should not request redraws');assert.ok(director.nextWake()>0);
+  director.update([{...a,state:'working',note:'real task'},b],scene,{walking:true,ambient:true});assert.equal(director.reservations.size,0);assert.notEqual(entity.script?.layer,'ambient');assert.equal(entity.fact.note,'real task');assert.equal(a.state,'idle');
+  director.update([a,b],scene,{walking:true,ambient:true,reduced_motion:true});director.step(30000,true);assert.equal(director.reservations.size,0);assert.equal(director.nextWake(true),null);
+});

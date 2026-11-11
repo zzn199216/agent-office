@@ -16,25 +16,27 @@
     });
   }
   class Director{
-    constructor(){this.reset();}
-    reset(){this.entities=new Map();this.scene=null;this.features={};this.now=0;this.lastStep=null;}
+    constructor(options={}){this.random=options.random||Math.random;this.reset();}
+    reset(){this.entities=new Map();this.reservations=new Map();this.scene=null;this.features={};this.now=0;this.lastStep=null;}
     home(e){return [e.seat.at[0],e.seat.at[1]+1];}
     pose(e){e.anim=e.state==='working'?'type':e.state==='attention'?'raise':e.state==='unconnected'?null:'sit';e.face=e.seat.face;e.frame=0;}
-    occupied(except){const cells=new Set();for(const e of this.entities.values())if(e.id!==except){cells.add(model.cell(e.at));if(e.script?.target)cells.add(model.cell(e.script.target));}return cells;}
-    cancel(e){e.script=null;e.bubble='';}
+    occupied(except){const cells=new Set();for(const e of this.entities.values())if(e.id!==except){cells.add(model.cell(e.at));if(e.script?.target)cells.add(model.cell(e.script.target));}for(const [key,owner]of this.reservations)if(owner!==except)cells.add(key);return cells;}
+    idleLater(e){e.idleDue=this.now+12000+Math.floor(this.random()*8000);}
+    cancel(e){if(e.reservation&&this.reservations.get(e.reservation)===e.id)this.reservations.delete(e.reservation);e.reservation=null;e.script=null;e.bubble='';this.idleLater(e);}
     settle(e,walk=false){
       this.cancel(e);this.pose(e);const home=this.home(e);
       if(walk&&this.features.walking&&!this.features.reduced_motion&&e.state!=='unconnected'&&e.state!=='attention'&&model.cell(e.at)!==model.cell(home))this.startScript(e.id,[{walkTo:home}],'reaction');
       else e.at=home;
     }
-    update(next,scene,features={}){
-      const initial=this.scene===null;this.scene=scene;this.features=features;
-      const ids=new Set(next.map(f=>f.id));for(const id of this.entities.keys())if(!ids.has(id))this.entities.delete(id);
+    update(next,scene,features={},now=this.now){
+      this.now=now;const initial=this.scene===null,ambientEnabled=features.ambient&&!this.features.ambient;this.scene=scene;this.features=features;
+      const ids=new Set(next.map(f=>f.id));for(const id of this.entities.keys())if(!ids.has(id)){this.cancel(this.entities.get(id));this.entities.delete(id);}
       next.forEach((fact,index)=>{
         const seat=model.station(scene,fact.id,index),prior=this.entities.get(fact.id),seatChanged=prior&&model.cell(prior.seat.at)!==model.cell(seat.at),changed=prior&&prior.state!==fact.state;
         const e=prior||{id:fact.id,at:[seat.at[0],seat.at[1]+1],frame:0,script:null,bubble:''};e.fact=fact;e.seat=seat;e.state=fact.state;this.entities.set(fact.id,e);
-        if(!prior){this.pose(e);if(!initial&&features.walking&&!features.reduced_motion&&e.state==='idle'){const entry=[1,1];if(!this.occupied(e.id).has(model.cell(entry)))e.at=entry;this.settle(e,true);}}
-        else if(changed||seatChanged||!features.walking||features.reduced_motion)this.settle(e,changed||seatChanged);
+        if(!prior){this.pose(e);this.idleLater(e);if(!initial&&features.walking&&!features.reduced_motion&&e.state==='idle'){const entry=[1,1];if(!this.occupied(e.id).has(model.cell(entry)))e.at=entry;this.settle(e,true);}}
+        else if(changed||seatChanged||!features.walking||features.reduced_motion||!features.ambient&&e.script?.layer==='ambient')this.settle(e,changed||seatChanged);
+        if(ambientEnabled)this.idleLater(e);
       });return this.entities;
     }
     startScript(id,steps,layer='reaction'){
@@ -42,10 +44,33 @@
       if(steps.some(s=>!s||Object.keys(s).some(k=>!['walkTo','face','animate','bubble','wait'].includes(k))||s.walkTo&&(!Array.isArray(s.walkTo)||s.walkTo.length!==2||s.walkTo.some(v=>!Number.isInteger(v)))||s.face&&!model.DIRECTIONS.includes(s.face)||s.animate&&!model.ACTIONS.includes(s.animate)||s.wait!==undefined&&(!Number.isFinite(s.wait)||s.wait<0||s.wait>60000)||s.bubble!==undefined&&(typeof s.bubble!=='string'||s.bubble.length>140)))return false;
       this.cancel(e);e.script={steps:steps.map(s=>({...s})),index:0,layer,path:null,target:null,until:null};return true;
     }
+    ambient(e){
+      if(!this.features.ambient||!this.features.walking||e.state!=='idle'||e.script)return false;
+      if([...this.entities.values()].filter(v=>v.script?.layer==='ambient').length>=3){e.idleDue=this.now+2000;return false;}
+      const choices=[];for(const furniture of this.scene.furniture)for(const offer of furniture.offers){
+        const slots=furniture.slots.filter(s=>!this.occupied(e.id).has(model.cell(s.at)));
+        if(offer.when==='idle'&&offer.weight>0&&slots.length)choices.push({offer,slots});
+      }
+      // A furniture type and its action name are data, never branches in the director.
+      while(choices.length){
+        const total=choices.reduce((sum,c)=>sum+c.offer.weight,0);let pick=this.random()*total,index=choices.length-1;
+        for(let i=0;i<choices.length;i++){pick-=choices[i].offer.weight;if(pick<0){index=i;break;}}
+        const {offer,slots}=choices.splice(index,1)[0],slot=slots.find(s=>model.pathfind(this.scene,e.at,s.at,this.occupied(e.id)));
+        if(!slot)continue;
+        if(this.startScript(e.id,[{walkTo:[...slot.at]},{face:slot.face},{animate:slot.anim},{bubble:offer.bubble||''},{wait:2500+Math.floor(this.random()*2500)},{bubble:''},{walkTo:this.home(e)}],'ambient')){e.reservation=model.cell(slot.at);this.reservations.set(e.reservation,e.id);return true;}
+      }
+      this.idleLater(e);return false;
+    }
+    nextWake(reduced=false){
+      if(reduced||this.features.reduced_motion)return null;
+      const entities=[...this.entities.values()],due=entities.filter(e=>e.script?.until>this.now).map(e=>e.script.until);
+      if(this.features.ambient&&this.features.walking)due.push(...entities.filter(e=>e.state==='idle'&&!e.script).map(e=>e.idleDue));
+      return due.length?Math.max(1,Math.min(60000,Math.min(...due)-this.now)):null;
+    }
     advance(e,now,dt){
       const script=e.script;if(!script)return false;
       for(let guard=0;guard<40&&e.script;guard++){
-        const instruction=script.steps[script.index];if(!instruction){e.script=null;e.bubble='';this.pose(e);return true;}
+        const instruction=script.steps[script.index];if(!instruction){this.cancel(e);this.pose(e);return true;}
         if(instruction.walkTo){
           if(!this.features.walking){e.at=[...instruction.walkTo];script.index++;continue;}
           if(!script.path){const path=model.pathfind(this.scene,e.at,instruction.walkTo,this.occupied(e.id));if(!path){this.cancel(e);this.pose(e);return true;}script.path=path.slice(1);script.target=null;}
@@ -56,7 +81,7 @@
           if(distance<=travel+.001){e.at=[...target];script.path.shift();script.target=null;}else e.at=[e.at[0]+dx/distance*travel,e.at[1]+dy/distance*travel];return true;
         }
         if(instruction.face)e.face=instruction.face;if(instruction.animate)e.anim=instruction.animate;if(instruction.bubble!==undefined)e.bubble=instruction.bubble;
-        if(instruction.wait!==undefined){if(script.until===null)script.until=now+instruction.wait;if(now<script.until)return true;script.until=null;}
+        if(instruction.wait!==undefined){const fresh=script.until===null;if(fresh)script.until=now+instruction.wait;if(now<script.until)return fresh;script.until=null;}
         script.index++;
       }
       return true;
@@ -65,6 +90,7 @@
       const dt=this.lastStep===null?100:Math.max(0,Math.min(180,now-this.lastStep));this.lastStep=now;this.now=now;let moving=false;
       for(const e of this.entities.values()){
         if(reduced){if(e.script){this.settle(e);moving=true;}e.frame=0;continue;}
+        if(e.state==='idle'&&!e.script&&e.idleDue<=now)this.ambient(e);
         if(e.script)moving=this.advance(e,now,dt)||moving;
         const animated=['working','attention'].includes(e.state)||e.script&&['walk','talk','type','raise'].includes(e.anim);e.frame=animated?Math.floor(now/100)%2:0;if(animated)moving=true;
       }

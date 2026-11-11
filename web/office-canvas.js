@@ -13,7 +13,8 @@
     function error(message){const p=scene.querySelector('.canvas-error');p.hidden=!message;p.textContent=message||'';}
     function cancel(){if(raf!==null)view.cancelAnimationFrame(raf);if(timer!==null)view.clearTimeout(timer);raf=timer=null;metrics.scheduled=0;}
     function release(){epoch++;bitmapAbort?.abort();bitmapAbort=null;for(const bitmap of bitmaps.values())bitmap.close();bitmaps.clear();loading.clear();metrics.bitmap_bytes=0;metrics.loaded_assets=[];if(canvas){canvas.width=1;canvas.height=1;metrics.canvas_bytes=4;}}
-    function schedule(delay=0){if(!active()||raf!==null||timer!==null)return;metrics.scheduled=1;timer=view.setTimeout(()=>{timer=null;if(active())raf=view.requestAnimationFrame(render);else metrics.scheduled=0;},delay);}
+    let timerAt=Infinity;
+    function schedule(delay=0){if(!active()||raf!==null)return;const due=view.performance.now()+delay;if(timer!==null){if(due>=timerAt-2)return;view.clearTimeout(timer);timer=null;}timerAt=due;metrics.scheduled=1;timer=view.setTimeout(()=>{timer=null;timerAt=Infinity;if(active())raf=view.requestAnimationFrame(render);else metrics.scheduled=0;},delay);}
     async function atlas(){if(manifest)return manifest;if(!manifestPromise)manifestPromise=fetch(asset+'action-atlas.json',{credentials:'same-origin'}).then(r=>{if(!r.ok)throw Error();return r.json();}).then(m=>{if(m.schema!=='agentoffice.action-atlas.v1'||m.frame.width!==40||m.frame.height!==40)throw Error();for(const p of Object.keys(m.assets))if(!/^atlas-[a-z0-9-]+\.png$/.test(p))throw Error();manifest=m;return m;}).catch(()=>{manifestPromise=null;throw Error('人物素材没有加载完成，请重新展开办公室。');});return manifestPromise;}
     function load(src){
       if(bitmaps.has(src)||loading.has(src)||!active())return;
@@ -38,7 +39,7 @@
     function render(stamp){raf=null;metrics.scheduled=0;if(!active())return;const moving=director.step(stamp,reduced());if(dirty||moving){if(stamp-lastFrame<95){schedule(95-(stamp-lastFrame));return;}lastFrame=stamp;ctx.setTransform(dpr,0,0,dpr,0,0);ctx.imageSmoothingEnabled=false;const night=current?.night===true;ctx.fillStyle=night?'#131929':'#EEF0F4';ctx.fillRect(0,0,width,height);const [w,h]=layout.grid;polygon([point(0,0),point(w,0),point(w,h),point(0,h)],night?'#1B2238':'#E1E5EE');ctx.strokeStyle=night?'#28344F':'#CED5E1';ctx.lineWidth=1;
         for(let x=0;x<=w;x++){const a=point(x,0),b=point(x,h);ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);ctx.stroke();}for(let y=0;y<=h;y++){const a=point(0,y),b=point(w,y);ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);ctx.stroke();}
         const draws=layout.furniture.map(f=>({depth:f.at[0]+f.at[1]+f.footprint[1],draw:()=>furniture(f)}));for(const e of director.entities.values()){draws.push({depth:e.seat.at[0]+e.seat.at[1]+1.4,draw:()=>station(e)});draws.push({depth:e.at[0]+e.at[1],draw:()=>actor(e)});}draws.sort((a,b)=>a.depth-b.depth).forEach(d=>d.draw());overlayPositions();metrics.draws++;metrics.frames++;dirty=false;
-      }if(moving)schedule(95);
+      }if(moving)schedule(95);else{const delay=director.nextWake(reduced());if(delay!==null)schedule(delay);}
     }
     function markup(){
       const button=f=>'<button type="button" class="canvas-member state-'+f.state+'" data-scene-member="'+esc(f.id)+'"><span class="canvas-state-dot" aria-hidden="true"></span><strong>'+esc(f.member.name)+'</strong><span>'+esc(f.label)+'</span>'+(f.note?'<small>'+esc(f.note)+'</small>':'')+'</button>';
@@ -53,7 +54,7 @@
     function update(input){
       const nextFacts=drama.facts(input),nextLayout=model.validateScene(input.sceneData||model.defaultScene(nextFacts.map(f=>f.id))),phase=root.AgentOfficeScene.clockState(input.scene?.time_zone,input.scene?.time_mode).phase,next={...input,night:phase==='night'||phase==='dusk'},key=JSON.stringify([input.roomId,nextFacts.map(f=>[f.id,f.profile,f.variant,f.state,f.label,f.note,f.message_id]),nextLayout,next.night,input.features]);
       if(current?.roomId&&current.roomId!==input.roomId){cancel();release();director.reset();expanded=false;scene.classList.remove('expanded');world.hidden=true;expand.setAttribute('aria-expanded','false');expand.textContent='展开办公室';signature='';}
-      current=next;facts=nextFacts;layout=nextLayout;director.update(facts,layout,input.features||{});if(key!==signature){signature=key;dirty=true;markup();if(active()){dimensions();schedule();}}return metrics;
+      current=next;facts=nextFacts;layout=nextLayout;director.update(facts,layout,input.features||{},view.performance.now());if(key!==signature){signature=key;dirty=true;markup();if(active()){dimensions();schedule();}}return metrics;
     }
     function visibility(){cancel();if(active()){dimensions();dirty=true;schedule();}else if(document.hidden||!visible||!intersecting)release();}
     const nativeVisibility=event=>{if(typeof event.detail?.visible==='boolean'&&visible!==event.detail.visible){visible=event.detail.visible;visibility();}};
