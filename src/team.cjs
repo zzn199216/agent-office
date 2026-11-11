@@ -152,6 +152,7 @@ class TeamManager {
   }
   createTask(input) {
     const actor = this.coordinate(input), goal = this.record(input.goal_id, 'goal', input.room_id);
+    if(goal.group_managed)throw new RoomError('这个目标已由房间分工，请更新已有任务的进度，或向负责人补充资料。',409,'group_assignment_managed');
     if (goal.status !== 'active') throw new RoomError('该目标已结束。', 409, 'goal_closed');
     const assignee = text(input.assignee_id, 200); this.service.chat.store.requireParticipant(goal.room_id, assignee);
     const dependencies = list(input.depends_on, 30);
@@ -373,7 +374,7 @@ class TeamManager {
           }
           const schedule = this.keyed(room.id, 'schedule', 'current');
           if (schedule?.enabled && this.clock() >= Date.parse(schedule.next_run_at)) {
-            const tasks = this.rows(room.id, 'task'), goals = this.rows(room.id, 'goal'), cards = this.rows(room.id, 'card');
+            const tasks = this.rows(room.id, 'task').filter(t=>!t.group_managed), goals = this.rows(room.id, 'goal').filter(g=>!g.group_managed), cards = this.rows(room.id, 'card');
             const signature = hash([goals.map(g => [g.id, g.version]), tasks.map(t => [t.id, t.version]), cards.map(c => [c.id, c.information, c.sources])]);
             let outcome = 'no_active_goal';
             if (goals.some(g => g.status === 'active') && signature !== schedule.last_signature) {
