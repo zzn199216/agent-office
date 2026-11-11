@@ -22,6 +22,7 @@ class RoomService extends EventEmitter {
     const {RuntimeState}=require('./runtime-state.cjs');this.runtime=new RuntimeState(this.chat.store,{wakeAdapters:['codex','claude-code','qwen-code','gemini-cli'],wakeMember:member=>this.desktop?.canWake(member.id)===true});
     const {SecretaryManager}=require('./secretary.cjs');this.secretary=new SecretaryManager(this);
     const {TeamManager}=require('./team.cjs');this.team=new TeamManager(this,options.team||{});
+    const {RoomFeatures}=require('./room-features.cjs');this.features=new RoomFeatures(this);
     const {ResumeAccess}=require('./resume.cjs');this.resume=new ResumeAccess(this.chat.store,{instanceId:this.runtime.instanceId,dataDirectory:dir});this.chat.store.reviveAllCredentials();
     const {RoomEntry}=require('./entry.cjs');this.entry=new RoomEntry(this);this.runtimeRef=`service:${process.pid}`;
     const {DesktopSessions}=require('./desktop-sessions.cjs');this.desktop=new DesktopSessions(this,options.desktop||{});
@@ -31,12 +32,13 @@ class RoomService extends EventEmitter {
     const {OnboardingManager}=require('./onboarding.cjs');this.onboarding=new OnboardingManager(this,{runtimeInstaller:input=>this.runtimeInstaller.install(input),desktopConnector:input=>this.desktop.connect(input),...options.onboarding});
     const {OnboardingActions}=require('./onboarding-actions.cjs');this.onboardingActions=new OnboardingActions(this,options.onboardingActions||{});
     const {ConnectionAssist}=require('./connection-assist.cjs');this.connectionAssist=new ConnectionAssist(this,options.connectionAssist||{});
+    const {GroupDiscussion}=require('./group-discussion.cjs');this.group=new GroupDiscussion(this,options.group||{});
     this.exportTimer = setInterval(() => this.flushExports(), 2000); this.exportTimer.unref();
   }
   changed() { this.revision++; this.emit('change', this.revision); }
   flushExports() { try { this.store.exportPending(); this.exportError = null; } catch { this.exportError = '部分 Markdown 记录暂未写入，后台会继续补写。'; } }
   snapshot() {
-    return { version: require('./util.cjs').VERSION, instance_id:this.runtime.instanceId,service_closing:this.closing,runtime:this.runtime.offlineSnapshot(),chat:this.chat.snapshot(),office:this.office.snapshot(),secretaries:this.secretary.snapshot(),activeSetup:{onboarding:this.onboarding.jobs.size,runtime_installs:this.runtimeInstaller.jobs.size,launch:this.launch.jobs.size,connection_assists:this.connectionAssist?.jobs.size||0}, projects: this.store.projects(), discussions: this.store.discussions(), activeRequest: this.active?.requestId || null, approvals: [...this.approvals.values()].map(a => a.public), approval_reviews:this.liveApprovalReviews(), grok: this.vault.status(), codex: this.codexHealth || { connected: false, executable: this.codex.executable || null }, revision: this.revision, exportError: this.exportError, dataDirectory: this.store.dir };
+    return { version: require('./util.cjs').VERSION, instance_id:this.runtime.instanceId,service_closing:this.closing,runtime:this.runtime.offlineSnapshot(),chat:this.chat.snapshot(),office:this.office.snapshot(),features:this.features.snapshot(),secretaries:this.secretary.snapshot(),activeSetup:{onboarding:this.onboarding.jobs.size,runtime_installs:this.runtimeInstaller.jobs.size,launch:this.launch.jobs.size,connection_assists:this.connectionAssist?.jobs.size||0}, projects: this.store.projects(), discussions: this.store.discussions(), activeRequest: this.active?.requestId || null, approvals: [...this.approvals.values()].map(a => a.public), approval_reviews:this.liveApprovalReviews(), grok: this.vault.status(), codex: this.codexHealth || { connected: false, executable: this.codex.executable || null }, revision: this.revision, exportError: this.exportError, dataDirectory: this.store.dir };
   }
   history(discussionId) { return { discussion: this.store.discussion(discussionId), requests: this.store.history(discussionId).map(r => ({ ...publicRequest(r), delivery: this.store.deliveryFor(r.id) })) }; }
   async health() {
@@ -297,7 +299,7 @@ class RoomService extends EventEmitter {
   }
   close(){if(!this.closePromise)this.closePromise=this.closeWork();return this.closePromise;}
   async closeWork() {
-    this.closing = true; this.team.close();this.connectionAssist?.stop?.(); clearInterval(this.exportTimer);clearInterval(this.runtimeTimer);this.runtime.releaseWorker(this.runtimeRef); this.active?.abort.abort();
+    this.closing = true; await this.group.close(); this.team.close();this.connectionAssist?.stop?.(); clearInterval(this.exportTimer);clearInterval(this.runtimeTimer);this.runtime.releaseWorker(this.runtimeRef); this.active?.abort.abort();
     // Abort owned work before waiting for setup managers that may themselves be
     // waiting on a native handshake or installer. Their durable records stay open
     // until every manager has finished cleanup.

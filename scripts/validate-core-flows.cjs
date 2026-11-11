@@ -297,6 +297,8 @@ async function main() {
       await shot('06-narrow-replied.png');
     });
     assert.deepEqual(errors,[]);assert.deepEqual(external,[]);assert.equal(codex.calls.length,0);
+    proof.workgroup=await require('./core-workgroup.cjs')({service,page,api,room:firstRoom,shot});
+    assert.deepEqual(errors,[]);assert.deepEqual(external,[]);
     proof.ok=true;
   } catch(error) {
     proof.error=error.stack;process.exitCode=1;

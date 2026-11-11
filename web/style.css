@@ -269,3 +269,5 @@ body.pixel-theme .sidebar-empty{color:#4a2e1a;opacity:.8;padding:6px 12px 12px}
 .team-more .team-mirror-entry{border-bottom:0;margin:12px 0 0;padding:16px 0 0;border-top:1px solid var(--line)}
 
 .launch-candidate-group h3{font-size:13px;color:var(--muted);margin:14px 0 8px}.connection-panel-reason{overflow-wrap:anywhere}
+
+.group-controls{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:8px;font-size:12px}.group-controls label,.room-feature-row{display:flex;gap:8px;align-items:center;min-height:44px}.group-controls input,.room-feature-row input{width:18px;height:18px}.group-task-line{display:flex;align-items:center;flex-wrap:wrap;gap:8px;padding:8px 12px;margin-bottom:10px;border:1px solid #DDE1E7;background:#f2f6ff;font-size:12px}.group-task-line select{max-width:160px;min-height:44px}#room-features-dialog{max-height:90vh;overflow:auto}.room-feature-row{margin:4px 0}

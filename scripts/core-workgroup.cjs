@@ -1,0 +1,27 @@
+'use strict';
+const assert=require('node:assert/strict');
+const {id,sleep}=require('../src/util.cjs');
+const {FakeCodex}=require('../tests/helpers.cjs');
+module.exports=async function({service,page,api,room,shot}){
+  await page.setViewportSize({width:1280,height:900});
+  await page.locator('#chat-view-button').click();
+  const clients=[],prompts=[];
+  service.chat.options.clientFactory=member=>{const client=new FakeCodex(),run=client.run.bind(client);client.run=async input=>{prompts.push({member:member.id,prompt:input.request.prompt});return run(input);};clients.push(client);return client;};
+  const add=name=>{const m=service.chat.store.addMember({name,adapter:'codex'});service.chat.store.join(room.id,m.id);service.chat.store.updateMember(m.id,{status:'ready',verified_at:new Date().toISOString()});service.changed();return m;};
+  const a=add('Fixture Group A');
+  const enabled=page.waitForResponse(r=>r.url().endsWith('/api/room/features')&&r.request().method()==='POST');await page.locator('#group-enabled').check();assert.equal((await(await enabled).json()).discussion,true);assert.equal(service.features.get(room.id).discussion,true);
+  await page.waitForFunction(()=>document.querySelector('#recipient')?.value==='__group__');
+  await page.locator('#prompt').fill('GROUP-ONE: please answer');
+  const sent=page.waitForResponse(r=>r.url().endsWith('/api/chat/messages')&&r.request().method()==='POST');await page.locator('#send-button').click();const first=await(await sent).json();
+  await page.waitForFunction(mid=>document.querySelector('[data-group-card="'+mid+'"]')?.textContent.includes('Fixture Group A'),first.id);
+  for(let i=0;i<100&&service.group.get(first.id).status!=='review';i++)await sleep(20);
+  assert.equal(service.group.get(first.id).status,'review');assert.equal(prompts.length,1);assert.equal(service.group.today(room.id),0);
+  assert.equal(await page.locator('#message-'+first.id).count(),1);assert.equal(await page.locator('#message-'+service.group.get(first.id).delivery_id).count(),0);
+  const b=add('Fixture Group B');service.group.options.triage=async()=>({owner_id:b.id,reason:'由第二位继续检查'});
+  await page.locator('#prompt').fill('GROUP-TWO: continue the discussion');await page.locator('#recipient').selectOption('__group__');const sent2=page.waitForResponse(r=>r.url().endsWith('/api/chat/messages')&&r.request().method()==='POST');await page.locator('#send-button').click();const second=await(await sent2).json();
+  for(let i=0;i<100&&service.group.get(second.id)?.status!=='review';i++)await sleep(20);
+  assert.equal(service.group.get(second.id).owner_id,b.id);assert.ok(prompts.find(p=>p.member===b.id).prompt.includes('GROUP-ONE'));assert.equal(service.group.today(room.id),1);
+  await page.locator('#group-call-count').filter({hasText:'1'}).waitFor();await shot('07-workgroup-routing.png');
+  await page.locator('#group-enabled').uncheck();const before=prompts.length;await api('/api/chat/messages',{room_id:room.id,sender_id:'user',text:'GROUP-OFF',idempotency_key:id()});await sleep(50);assert.equal(prompts.length,before);
+  return {ok:true,extra_calls:1,direct_rules:1,catchup:true,off_extra_calls:0};
+};

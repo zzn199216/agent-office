@@ -29,7 +29,7 @@ if(mode==='requires-upfront'&&config.mcpServers.agentroom.alwaysLoad!==true){con
 if(mode==='no-init'){console.log('not a protocol event');process.exit(0);}
 if(mode==='hang-before-init'){setInterval(()=>{},1000);return;}
 const session=mode==='wrong-session'?'34e8a2f4-2535-495b-b60a-6fdf334bb01a':(at('--resume')||'4ca2b4d5-8a9f-4f54-a9aa-ec5ad0b44d43');
-console.log(JSON.stringify({type:'system',subtype:'init',session_id:session,cwd:mode==='wrong-cwd'?env.FAKE_CLAUDE_OTHER_PATH:process.cwd(),mcp_servers:[{name:'agentroom',status:mode==='mcp-failed'?'failed':'connected'}],mcp_server_errors:mode==='mcp-failed'?[{name:'agentroom',message:'private details'}]:[]}));
+console.log(JSON.stringify({type:'system',subtype:'init',session_id:session,cwd:mode==='wrong-cwd'?env.FAKE_CLAUDE_OTHER_PATH:process.cwd(),tools:[],mcp_servers:config.mcpServers.agentroom?[{name:'agentroom',status:mode==='mcp-failed'?'failed':'connected'}]:[],mcp_server_errors:mode==='mcp-failed'?[{name:'agentroom',message:'private details'}]:[]}));
 if(mode==='no-result'){process.exit(0);}
 if(mode==='hang'){setInterval(()=>{},1000);return;}
 if(mode==='api-auth'){console.log(JSON.stringify({type:'system',subtype:'api_error',error:{status:401,message:'private upstream secret'}}));setInterval(()=>{},1000);return;}
@@ -200,4 +200,11 @@ test('Claude serializes concurrent preparations and shutdown prevents a late mod
   await assert.rejects(v.run(), error => error.code === 'claude_busy'); await first; assert.equal(v.calls().length, 1);
   const closing = clientFixture(t), preparing = closing.run(); await closing.client.close();
   await assert.rejects(preparing, error => error.code === 'connection_lost'); assert.equal(closing.calls().length, 0); assert.deepEqual(closing.states, []);
+});
+
+test('Claude lightweight routing uses an isolated reusable session with no tools or project context',async t=>{
+  const v=clientFixture(t),directory=path.join(v.f.root,'routing');fs.mkdirSync(directory);let session={};
+  const input={directory,session,prompt:'short routing cards',instructions:'Return only the selected owner',onSession:value=>session=value,signal:new AbortController().signal};
+  await v.client.lightweight(input);await v.client.lightweight({...input,session});
+  const calls=v.calls();assert.equal(calls.length,2);assert.equal(calls[0].cwd,directory);assert.deepEqual(calls[0].config,{mcpServers:{}});assert.equal(calls[0].args[calls[0].args.indexOf('--tools')+1],'');assert.ok(!calls[0].args.includes('--allowedTools'));assert.equal(calls[0].args[calls[0].args.indexOf('--system-prompt')+1],input.instructions);assert.ok(calls[1].args.includes('--resume'));assert.ok(!calls[0].input.includes('TEAM_INSTRUCTIONS'));assert.ok(!calls[0].input.includes(v.project.path));
 });

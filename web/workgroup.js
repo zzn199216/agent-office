@@ -1,0 +1,23 @@
+(function(){
+  'use strict';
+  const esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  let context=null,controls=null,dialog=null;const modes=new Map();
+  const flags=[['claims','认领与成员分工'],['trial','试用两位成员（调用量增加）'],['work_layout','办公室与对话同屏'],['canvas','新办公室画布'],['walking','人物走动'],['ambient','空闲活动'],['interactions','成员互动'],['scene_editor','场景布置'],['reduced_motion','减少动画']];
+  function install(){
+    controls=document.createElement('div');controls.id='group-controls';controls.className='group-controls';
+    controls.innerHTML='<label><input type="checkbox" id="group-enabled">群内讨论</label><span id="group-call-count"></span><button type="button" id="room-feature-options" class="text-button">房间选项</button><span id="group-notice" role="status"></span>';
+    document.querySelector('#room-members-bar').before(controls);
+    dialog=document.createElement('dialog');dialog.id='room-features-dialog';
+    dialog.innerHTML='<div class="dialog-heading"><h2>房间选项</h2><button type="button" class="icon-button" data-features-close aria-label="关闭">×</button></div><p>新功能可分别开启，关闭后沿用原来的界面和发送方式。</p><label>群内讨论每日调用上限<input id="group-daily-limit" type="number" min="1" placeholder="不限"></label><p>只统计额外的分派、认领及试用调用。正常任务处理另计。</p>'+flags.map(([key,label])=>'<label class="room-feature-row"><input type="checkbox" data-room-feature="'+key+'">'+label+'</label>').join('')+'<p id="room-feature-error" role="alert"></p><div class="dialog-actions"><button type="button" class="primary" id="room-features-save">保存</button></div>';
+    document.body.append(dialog);
+    controls.querySelector('#group-enabled').onchange=event=>{const enabled=event.target.checked,room=context.roomId;context.action(async()=>{await context.api('/api/room/features',{room_id:room,discussion:enabled});context.resetRecipient(enabled);await context.refresh();});};
+    controls.querySelector('#room-feature-options').onclick=()=>{const settings=context.group.settings;for(const input of dialog.querySelectorAll('[data-room-feature]'))input.checked=!!settings[input.dataset.roomFeature];dialog.querySelector('#group-daily-limit').value=settings.daily_limit??'';dialog.showModal();};
+    dialog.querySelector('[data-features-close]').onclick=()=>dialog.close();
+    dialog.querySelector('#room-features-save').onclick=()=>context.action(async()=>{const patch={room_id:context.roomId};for(const input of dialog.querySelectorAll('[data-room-feature]'))patch[input.dataset.roomFeature]=input.checked;const limit=dialog.querySelector('#group-daily-limit').value;patch.daily_limit=limit===''?null:Number(limit);await context.api('/api/room/features',patch);dialog.close();await context.refresh();});
+    document.addEventListener('click',event=>{const button=event.target.closest('[data-group-reassign]');if(!button)return;const card=button.closest('[data-group-card]'),member=card.querySelector('[data-group-owner]').value;context.action(async()=>{button.disabled=true;try{await context.api('/api/group/reassign',{room_id:context.roomId,message_id:button.dataset.groupReassign,member_id:member});await context.refresh();}finally{button.disabled=false;}});});
+  }
+  function update(value){context=value;if(!context.group)return;if(!controls)install();const {group}=context;controls.querySelector('#group-enabled').checked=group.settings.discussion;controls.querySelector('#group-call-count').textContent='今日 '+group.today_calls+' 次';const notice=group.routes.find(r=>r.status==='needs_user');controls.querySelector('#group-notice').textContent=group.settings.discussion&&notice?notice.reason:'';}
+  function card(message,group,members){const route=group?.routes.find(r=>r.message_id===message.id);if(!route)return '';const member=members.find(m=>m.id===route.owner_id),status={triaging:'秘书在看交给谁',assigned:'处理中',review:'等待确认',needs_user:'需要你选择'}[route.status]||route.status;return '<section class="group-task-line" data-group-card="'+esc(message.id)+'" aria-label="任务单"><strong>'+esc(member?member.name+' 负责':status)+'</strong><span>'+esc(route.reason)+'</span>'+(route.status!=='triaging'?'<label>负责人<select data-group-owner aria-label="改派负责人">'+members.map(m=>'<option value="'+esc(m.id)+'"'+(m.id===route.owner_id?' selected':'')+'>'+esc(m.name)+'</option>').join('')+'</select></label><button type="button" class="text-button" data-group-reassign="'+esc(message.id)+'">改派</button>':'')+'</section>';}
+  function recipient(room,enabled,current){const was=modes.get(room);modes.set(room,enabled);return enabled&&was!==true?'__group__':current;}
+  window.AgentOfficeGroup={update,card,recipient};
+})();

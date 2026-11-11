@@ -286,6 +286,7 @@ class CodexClient extends EventEmitter {
     if(result.isError||result.structuredContent?.ok!==true||result.structuredContent?.room_id!==discussion.id||result.structuredContent?.member?.id!==this.mcpEnvironment.AGENTROOM_MEMBER_ID)throw new RoomError('Codex 本机 MCP 握手失败，请检查接入配置。',503,'codex_mcp_setup');
     return {threadId,local_protocol_verified:true};
   }
+  async lightweight(input){return require('./routing-codex.cjs').lightweight(this,input);}
   async run({ project, discussion, request, onBinding, onTurn, onProgress, onApproval, onReview=()=>{}, onApprovalResolved=()=>{}, signal, timeout = 300000 }) {
     if(signal?.aborted||this.closed)throw new RoomError('请求已取消。',409,'cancelled');
     if(this.workspace){await this.ready();const account=await this.call('account/read',{refreshToken:false});if(account.requiresOpenaiAuth===true&&!account.account)throw new RoomError('Codex 当前没有可用登录。请在原 Codex 中恢复登录后检查连接，AO 会继续原会话。',503,'codex_login_required');}

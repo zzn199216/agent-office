@@ -326,11 +326,12 @@ class TeamManager {
     try {
       for (const room of this.service.chat.store.rooms()) {
         try {
-          for(const goal of this.rows(room.id,'goal').filter(g=>g.status==='active')) {
+          for(const goal of this.rows(room.id,'goal').filter(g=>g.status==='active'&&!g.group_managed)) {
             if(goal.initial_message_key){const initial=this.db.prepare("SELECT id,to_member_id FROM chat_messages WHERE room_id=? AND sender_id='user' AND idempotency_key=?").get(room.id,goal.initial_message_key);if(initial&&this.service.chat.store.joined(room.id,initial.to_member_id))this.linkTutorialGoal(goal,initial.to_member_id,initial.id);}
             if(!this.rows(room.id,'task').some(t=>t.goal_id===goal.id)) this.notifySecretary(goal,'goal:'+goal.id,'请读取信息卡并分解这个目标，创建有交付物和验收条件的任务后结束当前轮。\n'+JSON.stringify(goal));
           }
           for (let task of this.rows(room.id, 'task')) {
+            if(task.group_managed)continue;
             if(!task.message_id){const accepted=this.db.prepare('SELECT message_id FROM team_outbox WHERE event_key=?').get(`task:${task.id}:${task.attempt}`);if(accepted?.message_id) task=this.save(task,{message_id:accepted.message_id},null,'task_dispatched');}
             if (task.status === 'queued' && !task.message_id && this.service.chat.store.joined(room.id,task.assignee_id) && task.depends_on.every(d => this.record(d, 'task', room.id).status === 'completed')) {
               const eventKey = `task:${task.id}:${task.attempt}`;
@@ -348,6 +349,7 @@ class TeamManager {
             if (this.record(task.goal_id,'goal',room.id).status==='active' && this.service.chat.active.get(task.assignee_id)?.messageId !== task.message_id && ['review', 'blocked', 'uncertain', 'failed', 'cancelled'].includes(task.status)) this.notifySecretary(task, `task-event:${task.id}:${task.version}`, `任务有新状态：${task.status}。请读取 team_state 中的完整目标、任务交付和证据再推进；有阻塞时安排澄清或补充资料，待验收时核实交付。不要仅确认收到。\ntask_id=${task.id}\ngoal_id=${task.goal_id}\n任务：${task.title}`);
           }
           for (const m of this.rows(room.id, 'meeting')) {
+            if(m.group_managed)continue;
             const expected = m.expected_member_ids || m.participant_ids;
             if (m.status === 'collecting' && (this.clock() >= Date.parse(m.deadline_at) || expected.every(member => m.reports.some(r => r.member_id === member && r.round === m.round)))) {
               const updated = this.save(m, { status: 'review' }, null, 'meeting_collected');

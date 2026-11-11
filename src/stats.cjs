@@ -83,6 +83,10 @@ function connectionStats(dir, {sinceVersion = BASELINE} = {}) {
       historical:{excluded_tracked_attempts:all.length-rows.length,
         unversioned_onboarding_records:has('onboarding_runs')?db.prepare('SELECT count(*) n FROM onboarding_runs r '+(has('onboarding_attempts')?'WHERE NOT EXISTS(SELECT 1 FROM onboarding_attempts a WHERE a.run_id=r.id)':'')).get().n:0,
         unversioned_messages:has('chat_messages')?db.prepare('SELECT count(*) n FROM chat_messages m '+(has('stats_versions')?"WHERE NOT EXISTS(SELECT 1 FROM stats_versions v WHERE v.kind='message' AND v.entity_id=m.id)":'')).get().n:0}};
+    if(has('group_calls')){
+      const calls=db.prepare('SELECT purpose,input_chars,status,version FROM group_calls ORDER BY started_at,id').all().filter(c=>since(c.version,sinceVersion));
+      result.group_discussion={calls:calls.length,completed:calls.filter(c=>c.status==='completed').length,uncertain:calls.filter(c=>c.status==='uncertain').length,total_input_chars:calls.reduce((sum,c)=>sum+c.input_chars,0),median_input_chars:median(calls.map(c=>c.input_chars)),by_purpose:[...new Set(calls.map(c=>c.purpose))].sort().map(purpose=>({purpose,calls:calls.filter(c=>c.purpose===purpose).length}))};
+    }
     db.exec('COMMIT;'); return result;
   } finally {db.close();}
 }
