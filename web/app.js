@@ -767,7 +767,7 @@ function renderRoom(project) {
   }
   renderApprovals([]);updateOfficeApprovalAlert();
   renderService(); renderInspector(); renderSidebar(); applyRoomView(); updateOfficeScene();
-  globalThis.AgentOfficeGroup?.update({roomId,group:history.group,api,action,refresh,resetRecipient:enabled=>roomRecipients.set(roomId,enabled?'__group__':defaultRecipient(admittedMembers(history.participants),history.messages))});
+  globalThis.AgentOfficeGroup?.update({roomId,group:history.group,api,action,refresh:refreshAfterMutation,resetRecipient:enabled=>roomRecipients.set(roomId,enabled?'__group__':defaultRecipient(admittedMembers(history.participants),history.messages))});
   if(globalThis.AgentOfficeLayout)updateWorkLayout();
   if(followTimeline){$('chat-stream').scrollTop=$('chat-stream').scrollHeight;rememberTextScroll();}
 }
@@ -1640,12 +1640,13 @@ function secretaryResponse(value, selectedRoom) {
 function sameSecretaryAssignment(left,right) {
   return left?.room_id === right?.room_id && left?.member_id === right?.member_id && (left?.assignment_id || null) === (right?.assignment_id || null);
 }
-async function refreshSecretaryState() {
+async function refreshAfterMutation() {
   // If an older refresh was already in flight before this mutation, wait for
   // it, then request a new authoritative state after the mutation completed.
   while(refreshing) await new Promise(resolve=>refreshWaiters.push(resolve));
   await refresh();
 }
+async function refreshSecretaryState(){await refreshAfterMutation();}
 async function chooseSecretary(memberId) {
   if (secretaryBusy || secretaryStartBusy || !roomId || legacyId) return;
   const selectedRoom = roomId,flow=beginSecretaryNavigation('selection');flow.memberId=memberId;secretaryBusy = true; secretaryError = ''; renderSecretary();
@@ -1706,7 +1707,7 @@ function updateOfficeScene() {
 }
 function openCanvasOfficeEditor(){
   const selectedRoom=roomId;if(!selectedRoom||!webConnected||!state?.features?.[selectedRoom]?.scene_editor||!window.AgentOfficeEditor)return;
-  return window.AgentOfficeEditor.open({roomId:selectedRoom,members:history.participants||[],api,isCurrent:()=>roomId===selectedRoom,onSaved:refresh});
+  return window.AgentOfficeEditor.open({roomId:selectedRoom,members:history.participants||[],api,isCurrent:()=>roomId===selectedRoom,onSaved:refreshAfterMutation});
 }
 function updateWorkLayout(){
   if(!globalThis.AgentOfficeLayout)return;
