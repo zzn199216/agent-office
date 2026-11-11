@@ -142,7 +142,7 @@ class ClaudeClient extends EventEmitter {
     // Read it again next turn so key rotation does not require a service restart.
     const environment = runtimeEnvironment(this.environment);
     const health = await this.status(environment);
-    if (!health.signedIn) throw new RoomError(health.authType==='unconfigured_api'?'Claude API 密钥尚未填写或仍为占位文字。打开 API 配置，保存有效密钥后继续接入。':'Claude Code 尚未配置认证。请登录账号或在用户 settings.json 中配置 API 凭据后重试。', 503, 'claude_login_required');
+    if (!health.signedIn) throw new RoomError(health.authType==='unconfigured_api'?'Claude API 密钥尚未填写或仍为占位文字。打开 API 配置，保存有效密钥后继续接入。':'Claude Code 尚未配置认证。请登录账号或在用户 settings.json 中配置 API 凭据后重试。', 503, health.authType==='unconfigured_api'?'claude_api_key_missing':'claude_login_required');
     if (this.closed) throw new RoomError('Claude Code 协作入口已关闭。', 503, 'connection_lost');
     if (signal?.aborted) throw new RoomError('请求已取消。', 409, 'cancelled');
     const own = ownCommand(), configDir = path.join(this.dataDir || dataDirectory(), 'claude-runtime');

@@ -19,11 +19,11 @@ function fixture(){
     navigator:{clipboard:{writeText:async text=>calls.copy.push(text)}},toast:text=>calls.toast.push(text),confirm:text=>{calls.confirm.push(text);return context.__confirm!==false;},
     refresh:async()=>{calls.refresh++;},refreshOnboarding:async()=>{},action:work=>Promise.resolve().then(work).catch(error=>calls.toast.push(`error:${error.message}`)),
     api:async(url,body)=>{calls.api.push([url,body]);if(url.startsWith('/api/onboarding/jobs/'))return jobs.get(decodeURIComponent(url.split('/').pop()))||null;if(url.includes('/setup'))return context.__setup;return {};},
-    onboardingJobs:jobs,onboardingView:value=>value?.job||value,onboardingActions:job=>job?.next_actions||[],
+    onboardingFeedbackFor:()=>null,onboardingJobs:jobs,onboardingView:value=>value?.job||value,onboardingActions:job=>job?.next_actions||[],
     runOnboardingOperation:async(job,operation)=>{calls.operations.push([job.id,operation]);return job;},connectOnboardingNative:async job=>{calls.native.push(job.id);},
     openInspector:(tab,id)=>calls.inspector.push([tab,id]),openSecretaryTutorial:()=>{calls.tutorial++;},
     showMemberSetup:async()=>{},nativeSetupJob:()=>null,setupData:null,selectedSetupMember:null,lastSetupSignature:'',
-    $:()=>({open:false}),document:{addEventListener:(type,fn)=>calls.listeners.push([type,fn])}
+    $:()=>({open:false}),document:{querySelectorAll:()=>[],addEventListener:(type,fn)=>calls.listeners.push([type,fn])}
   });
   vm.runInContext(section('const escape =','const time =')+section('function renderMessage(','function renderTyping('),context);
   const view=(state,extra={})=>({state,headline:'豆包还没连上',primary:{operation:'copy_config',label:'复制配置'},secondary:{operation:'copy_handshake_prompt',label:'复制那句话'},busy:false,provider:'doubao',name:'豆包',details:{error:null,member_id:'target'},...extra});

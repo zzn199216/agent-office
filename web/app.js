@@ -790,7 +790,10 @@ function renderConnectionAssists(message,messages=history.messages||[]) {
   return `<section class="ao-system-card" aria-label="Agent Office 接入进度"><div class="ao-system-label">Agent Office · 当前连接状态</div>${items.map(item=>connectionPanelMarkup(item.presentation,{source:'assist',id:item.id})).join('')}</section>`;
 }
 // ---- Unified connection panel: one status, one primary action, details. ----
-const connectionOperationsPending=new Set();
+const connectionOperationsPending=new Set(),connectionOperationFeedback=new Map();
+function renderConnectionOperationFeedback(){
+  document.querySelectorAll('[data-conn-feedback]').forEach(node=>{const value=connectionOperationFeedback.get(node.dataset.connFeedback);node.hidden=!value;node.textContent=value?.message||'';node.className=value?.error?'error-note':'onboarding-job-detail';node.setAttribute('role',value?.error?'alert':'status');});
+}
 function connectionPanelMarkup(view,scope,{extraDetails='',pending:external=false}={}) {
   if(!view)return '';
   const key=`${scope.source}:${scope.id}`,pending=connectionOperationsPending.has(key)||external===true,busy=view.busy===true||pending;
@@ -799,8 +802,10 @@ function connectionPanelMarkup(view,scope,{extraDetails='',pending:external=fals
   const stepList=Array.isArray(view.steps)?`<ol class="connection-panel-steps">${view.steps.map(step=>`<li>${escape(step)}</li>`).join('')}</ol>`:'';
   const steps=stepList&&view.steps_title?`<details class="connection-panel-details connection-panel-manual"><summary>${escape(view.steps_title)}</summary>${stepList}${actionButton(view.steps_action,'secondary')}</details>`:stepList;
   const error=!view.reason&&view.details?.error?`<p class="small-note">${escape(view.details.error)}</p>`:'';
+  const feedbackKey=`${scope.source}:${scope.id}`,feedback=connectionOperationFeedback.get(feedbackKey);
+  const feedbackMarkup=scope.source==='job'?'':`<p data-conn-feedback="${escape(feedbackKey)}" role="${feedback?.error?'alert':'status'}" class="${feedback?.error?'error-note':'onboarding-job-detail'}"${feedback?'':' hidden'}>${escape(feedback?.message||'')}</p>`;
   const details=error||extraDetails?`<details class="connection-panel-details"><summary>详情</summary>${error}${extraDetails}</details>`:'';
-  return `<div class="connection-panel" data-conn-state="${escape(view.state)}"><div class="connection-panel-status"><span class="connection-dot ${escape(view.state)}${busy?' busy':''}" aria-hidden="true"></span><strong>${escape(view.headline)}</strong></div>${view.reason?`<p class="connection-panel-reason">${escape(view.reason)}</p>`:''}${buttons?`<div class="actions">${buttons}</div>`:''}${steps}${details}</div>`;
+  return `<div class="connection-panel" data-conn-state="${escape(view.state)}"><div class="connection-panel-status"><span class="connection-dot ${escape(view.state)}${busy?' busy':''}" aria-hidden="true"></span><strong>${escape(view.headline)}</strong></div>${view.reason?`<p class="connection-panel-reason">${escape(view.reason)}</p>`:''}${buttons?`<div class="actions">${buttons}</div>`:''}${feedbackMarkup}${steps}${details}</div>`;
 }
 // Keep spaces around Latin names only ("连接 Qwen", but "连接豆包").
 const tidyText=text=>String(text).replace(/([\u3000-\u303f\u4e00-\u9fff\uff00-\uffef]) (?=[\u3000-\u303f\u4e00-\u9fff\uff00-\uffef])/g,'$1');
@@ -881,8 +886,9 @@ document.addEventListener('click',event=>{
   if(connectionOperationsPending.has(key))return;
   action(async()=>{
     connectionOperationsPending.add(key);button.disabled=true;
-    try{const ctx=await connectionContext(source,id);await runConnectionOperation(button.dataset.connOp,ctx,button.dataset.connTarget||null);}
-    finally{connectionOperationsPending.delete(key);button.disabled=false;}
+    try{connectionOperationFeedback.set(key,{message:'正在处理…'});renderConnectionOperationFeedback();const ctx=await connectionContext(source,id);await runConnectionOperation(button.dataset.connOp,ctx,button.dataset.connTarget||null);const feedback=ctx.job&&onboardingFeedbackFor(ctx.job);connectionOperationFeedback.set(key,{message:feedback?.message||'已提交操作，请查看当前连接状态。',error:feedback?.error===true});}
+    catch(error){connectionOperationFeedback.set(key,{message:error.message||'这一步未完成，请重试。',error:true});throw error;}
+    finally{connectionOperationsPending.delete(key);button.disabled=false;renderConnectionOperationFeedback();}
   });
 });
 function renderTyping(messages) {
@@ -1498,7 +1504,7 @@ function currentSecretary(selectedRoom = roomId) {
 function secretaryMember(selected = currentSecretary()) { return (history?.room?.id === roomId ? history.participants || [] : []).find(member => member.id === selected.member_id); }
 function secretaryTutorialVisible() {
   if (!roomId || legacyId || !history?.room || !professionalView || $('secretary-connect-dialog').open) return false;
-  return secretaryOpenRoom === roomId || (!admittedMembers(history.participants).length && !secretaryDismissed.has(roomId));
+  return secretaryOpenRoom === roomId || (!visibleMembers(history.participants).length && !secretaryDismissed.has(roomId));
 }
 function secretaryHasReply(selected) {
   // A processing status or a handshaken member is not a secretary response.

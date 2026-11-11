@@ -22,12 +22,12 @@ class OnboardingAttempts {
       .run(id(),row.id,row.room_id,row.provider,VERSION,prior?'retry':'first',stamp);
   }
   observe(row, view) {
-    const complete = view.ready_for_office === true;
-    this.db.prepare(`UPDATE onboarding_attempts SET outcome=CASE WHEN ? THEN 'connected' ELSE outcome END,
+    const complete = view.ready_for_office === true, failed=!complete&&['error','failed','interrupted'].includes(view.status);
+    this.db.prepare(`UPDATE onboarding_attempts SET outcome=CASE WHEN ? THEN 'connected' WHEN ? THEN 'failed' ELSE outcome END,
       completed_at=CASE WHEN ? THEN ? ELSE completed_at END,
       protocol_verified=max(protocol_verified,?),automatic_reply_verified=max(automatic_reply_verified,?),
       error_code=coalesce(?,error_code) WHERE run_id=? AND outcome='waiting'`)
-      .run(complete?1:0,complete?1:0,now(),view.protocol_verified||view.handshake_verified?1:0,view.automatic_reply_verified?1:0,view.error?view.error_code||'unknown':null,row.id);
+      .run(complete?1:0,failed?1:0,complete||failed?1:0,now(),view.protocol_verified||view.handshake_verified?1:0,view.automatic_reply_verified?1:0,view.error?view.error_code||'unknown':null,row.id);
   }
   abandon(roomId, provider = null) {
     this.db.prepare("UPDATE onboarding_attempts SET outcome='abandoned',completed_at=? WHERE room_id=? AND outcome='waiting'"+(provider?' AND provider=?':''))

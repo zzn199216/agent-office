@@ -69,7 +69,7 @@ function userSettings(v, settings) {
 }
 test('placeholder API credentials never start a Claude model and saving a key unlocks the same client',async t=>{
   const v=clientFixture(t);userSettings(v,{env:{ANTHROPIC_BASE_URL:'https://fixture.invalid',ANTHROPIC_AUTH_TOKEN:'PASTE_YOUR_API_KEY_HERE'}});
-  await assert.rejects(v.run(),error=>error.code==='claude_login_required');assert.equal(v.calls().length,0);
+  await assert.rejects(v.run(),error=>error.code==='claude_api_key_missing');assert.equal(v.calls().length,0);
   userSettings(v,{env:{ANTHROPIC_BASE_URL:'https://fixture.invalid',ANTHROPIC_AUTH_TOKEN:'saved-fixture-key'}});const original=fs.readFileSync(path.join(v.environment.CLAUDE_CONFIG_DIR,'settings.json'),'utf8');await v.run();assert.equal(v.calls().length,1);assert.equal(fs.readFileSync(path.join(v.environment.CLAUDE_CONFIG_DIR,'settings.json'),'utf8'),original);
 });
 test('Claude API rejection stops the owned child promptly with actionable redacted status',async t=>{

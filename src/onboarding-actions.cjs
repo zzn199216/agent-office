@@ -54,6 +54,7 @@ class OnboardingActions{
     if(job.provider==='claude-code'){
       const config=configurationInfo(this.options.env||process.env);
       if(config.api_mode){
+        if((this.options.platform||process.platform)!=='win32'&&!this.options.launcher)throw new RoomError('当前系统不能自动打开配置编辑器。请在 Claude Code 中打开 API 配置，保存后点「保存后继续接入」。',501,'client_config_editor_unavailable');
         if(!fs.existsSync(config.file))throw new RoomError('Claude API 配置文件尚未建立，请在用户目录创建 settings.json 后重试。',409,'claude_config_missing');
         const request={command:'notepad.exe',args:[config.file],options:{cwd:path.dirname(config.file),windowsHide:false,detached:true,shell:false,stdio:'ignore'}};
         if(this.options.launcher)await this.options.launcher(request);else await new Promise((resolve,reject)=>{const child=spawn(request.command,request.args,request.options);child.once('error',()=>reject(new RoomError('无法打开 API 配置编辑器，请从本机配置文件入口打开 settings.json。',503,'claude_config_open_failed')));child.once('spawn',()=>{child.unref();resolve();});});

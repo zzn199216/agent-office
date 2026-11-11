@@ -24,7 +24,7 @@ test('versioned attempts distinguish retry success and preserve historical rows 
   assert.equal(result.connections.attempts,2);assert.equal(result.connections.retries,1);assert.equal(result.connections.first_connected,0);assert.equal(result.connections.retry_connected,1);
   assert.equal(result.connections.mcp_connected_attempts,1);assert.equal(result.connections.automatic_reply_verified_attempts,1);
   assert.deepEqual(result.failure_reasons,[{code:'codex_login_required',count:1}]);
-  assert.equal(connectionStats(v.files.data,{sinceVersion:'0.15.0-preview.22'}).connections.attempts,0);
+  assert.equal(connectionStats(v.files.data,{sinceVersion:'0.15.0-preview.99'}).connections.attempts,0);
   assert.equal(since('0.15.0','0.15.0-preview.99'),true);
   assert.equal(since('0.15.0-preview.9','0.15.0-preview.21'),false);
 });
@@ -50,4 +50,10 @@ test('message ratios require a correlated reply from the recipient and exclude c
   assert.equal(report.messages[0].requests,2);assert.equal(report.messages[0].reply_ratio,0.5);
   assert.doesNotMatch(JSON.stringify(report),/private|no reply/);
   assert.equal(report.rooms.created,1);assert.ok(b.id);
+});
+
+test('terminal failures are separate from waiting and can later become retry success',async t=>{
+  const v=setup(t),first=v.run();v.service.onboarding.attempts.observe(first,{status:'error',error:'fixture',error_code:'claude_api_key_missing'});
+  const before=connectionStats(v.files.data);assert.equal(before.connections.failed,1);assert.equal(before.connections.waiting,0);
+  const retry=v.run();v.service.onboarding.attempts.observe(retry,{ready_for_office:true,protocol_verified:true});const after=connectionStats(v.files.data);assert.equal(after.connections.retry_connected,1);assert.equal(after.connections.failed,0);assert.equal(after.failure_reasons[0].code,'claude_api_key_missing');
 });

@@ -445,7 +445,7 @@ class OnboardingManager{
     const code=value.error_code||value.connection_evidence?.last_error?.code||row.error_code||null;
     value.error_code=code;
     if(value.error&&!value.ready_for_office&&value.status!=='running'){
-      const repairCodes=new Set(['claude_login_required','claude_api_auth_required','claude_auth_unknown','qwen_login_required','qwen_api_auth_required','gemini_login_required','gemini_api_auth_required']);
+      const repairCodes=new Set(['claude_api_key_missing','claude_login_required','claude_api_auth_required','claude_auth_unknown','qwen_login_required','qwen_api_auth_required','gemini_login_required','gemini_api_auth_required']);
       if(repairCodes.has(code)){
         if(value.provider==='claude-code'){let config;try{config=require('./claude.cjs').configurationInfo(this.options.env||process.env);}catch{}value.configuration=config?{api_mode:config.api_mode,credential_configured:config.credential_configured}:null;}
         value.next_actions=[action('login',value.configuration?.api_mode?'打开 API 配置':`登录 ${value.name}`,{operation:'login_client'}),action('verify','处理后重新检查',{operation:'retry'})];

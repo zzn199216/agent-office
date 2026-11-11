@@ -117,3 +117,5 @@ body.view-paused *,body.view-paused *::before,body.view-paused *::after{animatio
 .ao-unconnected .ao-furniture{filter:grayscale(1);opacity:.55}.ao-unconnected .ao-name{color:#727779}.ao-reconnect{position:absolute;left:50%;top:242px;bottom:auto;z-index:5;transform:translateX(-50%);white-space:nowrap;font-size:12px;padding:3px 7px;background:#f2f3f3;border:1px solid #a4a9ac;border-radius:4px;cursor:pointer}.ao-reconnect[hidden]{display:none}
 
 .ao-unconnected .ao-status-text{max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+.ao-unconnected .ao-seat-status{color:#343c49;background:#fff;padding:2px 5px;border:1px solid #b8bfc9}.ao-unconnected .ao-status-dot{background:#5b6472}
