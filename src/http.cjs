@@ -180,6 +180,9 @@ function createServer(service,{token,port=47831,onShutdown}={}) {
       if(pathname==='/api/chat/rooms')return json(res,service.chat.addRoom(input),201);
       if(pathname==='/api/room/features'){const settings=service.features.set(input);if(input.discussion===false)service.group.disable(input.room_id);return json(res,settings);}
       if(pathname==='/api/group/reassign')return json(res,await service.group.reassign(input));
+      if(pathname==='/api/group/claim')return json(res,await service.group.claims.listen(input));
+      if(pathname==='/api/group/decision')return json(res,await service.group.ownership.decide(input));
+      if(pathname==='/api/group/card')return json(res,service.group.ownership.cardDecision(input));
       if(pathname==='/api/chat/members/cleanup')return json(res,service.chat.cleanupStale());
       if(pathname==='/api/chat/members')return json(res,service.chat.addMember(input),201);
       if(pathname==='/api/chat/messages')return json(res,service.chat.post(input,{human:true}),202);

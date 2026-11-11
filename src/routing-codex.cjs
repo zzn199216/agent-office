@@ -10,7 +10,7 @@ async function lightweight(client,{directory,session={},prompt,instructions,sign
   if(signal?.aborted)throw new RoomError('分派已停止。',409,'cancelled');
   await client.ready();const current=(await client.call('config/read',{includeLayers:false})).config||{};
   const config=routingConfig(current);let threadId=session.thread_id;
-  if(threadId){const thread=await client.read(threadId);if(normalizePath(thread.cwd)!==normalizePath(directory))throw new RoomError('分派会话目录不匹配，请检查房间分派设置。',409,'group_session_mismatch');await client.call('thread/resume',{threadId,cwd:directory,config,approvalPolicy:'never',sandbox:'read-only',excludeTurns:true});}
+  if(threadId){const thread=await client.read(threadId);if(normalizePath(thread.cwd)!==normalizePath(directory))throw new RoomError('分派会话目录不匹配，请检查房间分派设置。',409,'group_session_mismatch');await client.call('thread/resume',{threadId,cwd:directory,config,approvalPolicy:'never',sandbox:'read-only',excludeTurns:true,baseInstructions:instructions,developerInstructions:''});}
   else{const result=await client.call('thread/start',{cwd:directory,config,approvalPolicy:'never',sandbox:'read-only',baseInstructions:instructions,developerInstructions:'',dynamicTools:[],environments:[],selectedCapabilityRoots:[],runtimeWorkspaceRoots:[]});threadId=result.thread.id;onSession({thread_id:threadId});}
   client.transport?.registerThread(threadId);
   let turnId,settled=false,timer;const answers=new Map();let resolve,reject;

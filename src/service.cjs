@@ -72,6 +72,7 @@ class RoomService extends EventEmitter {
     this.chat.start();
     this.desktop.start();
     this.team.start();
+    this.group.start();
     this.health().catch(() => {});
     this.pump().catch(() => {});
     for (const r of this.store.db.prepare("SELECT * FROM requests WHERE status='queued' AND recipient='grok'").all()) this.dispatchGrok(r).catch(() => {});

@@ -56,6 +56,7 @@ class TeamManager {
   secretary(roomId) { const role=this.service.secretary.get(roomId);return role.member_id&&this.service.chat.store.joined(roomId,role.member_id)?role.member_id:null; }
   coordinate(input) {
     const actor = this.actor(input);
+    if(actor&&this.service.group?.claims.item(this.service.chat.active.get(actor)?.messageId)?.role==='trial')throw new RoomError('只读试用期间不能派工或改变其他任务。',409,'group_trial_read_only');
     if (actor && actor !== this.secretary(input.room_id)) throw new RoomError('只有本房间当前秘书可以协调任务与会议。', 403, 'team_role_forbidden');
     return actor;
   }
@@ -95,6 +96,16 @@ class TeamManager {
     if (actor && actor !== memberId) throw new RoomError('成员只能维护自己的窗口信息卡。', 403, 'team_identity_mismatch');
     const payload = { member_id: memberId, role: optional(input.role, 300), skills: list(input.skills), information: optional(input.information, 10000), sources: sources(input.sources,this.clock()), session_ref: optional(input.session_ref, 1000), reported_by: actor || 'controller' };
     const old = this.keyed(input.room_id, 'card', memberId);
+    if(this.service.features?.get(input.room_id).claims||old?.pins?.length){
+      payload.stance=input.stance===undefined?old?.stance||'':optional(input.stance,500);payload.pins=old?.pins||[];payload.proposals=old?.proposals||[];
+      for(const field of ['information','sources','session_ref'])if(input[field]===undefined&&old)payload[field]=old[field];
+      if(actor){
+        for(const field of ['role','skills','stance'])if(JSON.stringify(payload[field])!==JSON.stringify(old?.[field]||(field==='skills'?[]:''))){
+          const value=payload[field];if(value?.length&&!payload.proposals.some(p=>p.field===field&&JSON.stringify(p.value)===JSON.stringify(value)))payload.proposals=[...payload.proposals,{id:id(),field,value,reason:'成员提出的名片更新，等待用户确认',created_at:this.date()}];
+          payload[field]=old?.[field]||(field==='skills'?[]:'');
+        }
+      }
+    }
     const value = old ? this.save(old, payload, actor, 'card_update', input.expected_version) : this.create('card', input.room_id, memberId, { ...payload, ack_version: 0 }, actor);
     this.changed(); return value;
   }
@@ -117,6 +128,7 @@ class TeamManager {
     this.db.prepare('INSERT OR IGNORE INTO team_outbox(id,room_id,recipient_id,record_id,event_key,body) VALUES(?,?,?,?,?,?)').run(id(), roomId, memberId, recordId, key, body);
   }
   notifySecretary(record, key, message) {
+    if(record.group_managed)return;
     const secretary = this.secretary(record.room_id);
     if (secretary) this.enqueue(record.room_id, secretary, record.id, key + ':secretary:' + secretary, INSTRUCTIONS + '\n\n' + message + '\nroom_id=' + record.room_id + '\nrecord_id=' + record.id);
   }
@@ -190,6 +202,7 @@ class TeamManager {
       patch.evidence = sources(input.evidence,this.clock()); if (!patch.evidence.length) throw new RoomError('核验需要证据。');
       patch.result = optional(input.result, 15000); patch.status = patch.result ? 'review' : 'cancelled';
     } else throw new RoomError('任务操作无效。');
+    if(task.group_managed&&['accept','progress'].includes(action))patch.lease_until=new Date(this.clock()+300000).toISOString();
     const result = this.save(task, patch, actor, action, input.expected_version); this.changed(); return result;
   }
   completeGoal(goalId, input) {
