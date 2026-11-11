@@ -25,5 +25,6 @@ module.exports=async function({service,page,api,room,shot}){
   await page.locator('#group-enabled').uncheck();const before=prompts.length;await api('/api/chat/messages',{room_id:room.id,sender_id:'user',text:'GROUP-OFF',idempotency_key:id()});await sleep(50);assert.equal(prompts.length,before);
   const claims=await require('./core-group-claims.cjs')({service,page,api,room,shot,members:[a,b],prompts});
   const layout=await require('./core-work-layout.cjs')({service,page,api,room,shot,members:[a,b]});
-  return {ok:true,layout,extra_calls:1,direct_rules:1,catchup:true,off_extra_calls:0,claims};
+  const canvas=await require('./core-office-canvas.cjs')({service,page,api,roomId:layout.room_id,members:[a,b],shot});
+  return {ok:true,canvas,layout,extra_calls:1,direct_rules:1,catchup:true,off_extra_calls:0,claims};
 };

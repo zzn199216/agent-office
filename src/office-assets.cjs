@@ -12,6 +12,8 @@ const OFFICE_FILES = Object.freeze([
   ...PIXEL_IDS.flatMap(id => VARIANT_NUMBERS.flatMap(v => [`assets/office/pixel-${id}-v${v}.png`, `assets/office/pixel-avatar-${id}-v${v}.png`])),
   'assets/office/pixel-desk.png',
   ...['furniture-desk', 'furniture-beanbag', 'character-robot', 'prop-plant'].map(name => `assets/office/${name}.png`),
+  'assets/office/atlas-body.png',...PIXEL_IDS.map(id=>'assets/office/atlas-hair-'+id+'.png'),...PIXEL_IDS.flatMap(id=>[0,1,2,3,4].map(v=>'assets/office/atlas-accessory-'+id+'-'+v+'.png')),'assets/office/action-atlas.json',
   'assets/office/AVATAR_SOURCES.json'
 ]);
-module.exports = { PIXEL_IDS, PIXEL_VARIANTS, OFFICE_FILES };
+const OFFICE_UI_FILES=Object.freeze(['office-scene.js','office-director.js','office-canvas.js','office-canvas.css']);
+module.exports = { PIXEL_IDS, PIXEL_VARIANTS, OFFICE_FILES,OFFICE_UI_FILES };

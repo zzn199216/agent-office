@@ -23,6 +23,7 @@ class RoomService extends EventEmitter {
     const {SecretaryManager}=require('./secretary.cjs');this.secretary=new SecretaryManager(this);
     const {TeamManager}=require('./team.cjs');this.team=new TeamManager(this,options.team||{});
     const {RoomFeatures}=require('./room-features.cjs');this.features=new RoomFeatures(this);
+    const {OfficeScenes}=require('./office-scenes.cjs');this.officeScenes=new OfficeScenes(this);
     const {ResumeAccess}=require('./resume.cjs');this.resume=new ResumeAccess(this.chat.store,{instanceId:this.runtime.instanceId,dataDirectory:dir});this.chat.store.reviveAllCredentials();
     const {RoomEntry}=require('./entry.cjs');this.entry=new RoomEntry(this);this.runtimeRef=`service:${process.pid}`;
     const {DesktopSessions}=require('./desktop-sessions.cjs');this.desktop=new DesktopSessions(this,options.desktop||{});
@@ -38,7 +39,7 @@ class RoomService extends EventEmitter {
   changed() { this.revision++; this.emit('change', this.revision); }
   flushExports() { try { this.store.exportPending(); this.exportError = null; } catch { this.exportError = '部分 Markdown 记录暂未写入，后台会继续补写。'; } }
   snapshot() {
-    return { version: require('./util.cjs').VERSION, instance_id:this.runtime.instanceId,service_closing:this.closing,runtime:this.runtime.offlineSnapshot(),chat:this.chat.snapshot(),office:this.office.snapshot(),features:this.features.snapshot(),secretaries:this.secretary.snapshot(),activeSetup:{onboarding:this.onboarding.jobs.size,runtime_installs:this.runtimeInstaller.jobs.size,launch:this.launch.jobs.size,connection_assists:this.connectionAssist?.jobs.size||0}, projects: this.store.projects(), discussions: this.store.discussions(), activeRequest: this.active?.requestId || null, approvals: [...this.approvals.values()].map(a => a.public), approval_reviews:this.liveApprovalReviews(), grok: this.vault.status(), codex: this.codexHealth || { connected: false, executable: this.codex.executable || null }, revision: this.revision, exportError: this.exportError, dataDirectory: this.store.dir };
+    return { version: require('./util.cjs').VERSION, instance_id:this.runtime.instanceId,service_closing:this.closing,runtime:this.runtime.offlineSnapshot(),chat:this.chat.snapshot(),office:this.office.snapshot(),features:this.features.snapshot(),office_scenes:this.officeScenes.snapshot(),secretaries:this.secretary.snapshot(),activeSetup:{onboarding:this.onboarding.jobs.size,runtime_installs:this.runtimeInstaller.jobs.size,launch:this.launch.jobs.size,connection_assists:this.connectionAssist?.jobs.size||0}, projects: this.store.projects(), discussions: this.store.discussions(), activeRequest: this.active?.requestId || null, approvals: [...this.approvals.values()].map(a => a.public), approval_reviews:this.liveApprovalReviews(), grok: this.vault.status(), codex: this.codexHealth || { connected: false, executable: this.codex.executable || null }, revision: this.revision, exportError: this.exportError, dataDirectory: this.store.dir };
   }
   history(discussionId) { return { discussion: this.store.discussion(discussionId), requests: this.store.history(discussionId).map(r => ({ ...publicRequest(r), delivery: this.store.deliveryFor(r.id) })) }; }
   async health() {

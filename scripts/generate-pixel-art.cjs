@@ -25,6 +25,7 @@ function png(grid, scale) {
 }
 function record(name, bytes) { return { asset: `/assets/office/${name}`, sha256: crypto.createHash('sha256').update(bytes).digest('hex'), bytes: bytes.length, width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20) }; }
 function write(name, grid) { const bytes = png(grid, SCALE); fs.writeFileSync(path.join(OUT, name), bytes); return record(name, bytes); }
+if(!process.argv.includes('--atlas-only')){
 const avatarGrid = (id, variant) => art.characterGrid(id, variant).slice(0, 19).map(line => line.slice(1, 23));
 const characters = {}, avatars = {};
 for (const id of PIXEL_IDS) {
@@ -55,3 +56,6 @@ const manifest = {
 };
 fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
 console.log(`Wrote ${PIXEL_IDS.length * 2 * (art.VARIANTS + 1) + 1} pixel assets.`);
+
+}
+if(process.argv.includes('--atlas-only'))require('../web/action-art.cjs').generateAtlas({png,dir:OUT});

@@ -40,12 +40,13 @@ function createServer(service,{token,port=47831,onShutdown}={}) {
     const cookie=cookies?cookies.slice('agentroom_session='.length):'';
     const authorized=safeEqual(auth,token)||safeEqual(cookie,token);
     if(req.method==='GET' && pathname==='/favicon.ico'){res.writeHead(204);res.end();return;}
-    if(req.method==='GET'&&(/^\/assets\/office\/[a-z0-9_-]+\.(?:svg|png|webp)$/.test(pathname)||pathname==='/assets/office/AVATAR_SOURCES.json')){
+    if(req.method==='GET'&&(/^\/assets\/office\/[a-z0-9_-]+\.(?:svg|png|webp)$/.test(pathname)||pathname==='/assets/office/AVATAR_SOURCES.json'||pathname==='/assets/office/action-atlas.json')){
       let content;try{content=assetBytes(pathname.slice(1));}catch{return json(res,{error:'没有这个公开形象资源。'},404);}
       const type=pathname.endsWith('.png')?'image/png':pathname.endsWith('.webp')?'image/webp':pathname.endsWith('.json')?'application/json; charset=utf-8':'image/svg+xml; charset=utf-8';
       res.setHeader('Content-Type',type);res.setHeader('Content-Security-Policy',"default-src 'none'; style-src 'unsafe-inline'; sandbox");res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Cache-Control','no-store');return res.end(content);
     }
     const staticFiles={'/':'index.html','/app.js':'app.js','/workgroup.js':'workgroup.js','/desktop.js':'desktop.js','/page-activity.js':'page-activity.js','/office.js':'office.js','/work-layout.js':'work-layout.js','/work-layout.css':'work-layout.css','/office.css':'office.css','/style.css':'style.css'};
+    for(const name of require('./office-assets.cjs').OFFICE_UI_FILES)staticFiles['/'+name]=name;
     if(req.method==='GET' && staticFiles[pathname]) {
       if(pathname==='/')res.setHeader('Set-Cookie',`agentroom_session=${token}; HttpOnly; SameSite=Strict; Path=/`);
       res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
@@ -56,6 +57,7 @@ function createServer(service,{token,port=47831,onShutdown}={}) {
       if(req.method==='POST'&&pathname!=='/api/shutdown')require('./desktop-lifecycle.cjs').assertBackgroundAllowed(service.store.dir);
       if(service.closing&&req.method==='POST'&&pathname!=='/api/shutdown')throw new RoomError('服务正在停止，新的操作尚未开始。',503,'service_stopping');
       if(req.method==='GET' && pathname==='/api/state')return json(res,service.snapshot());
+      if(req.method==='GET' && pathname==='/api/office/scene')return json(res,service.officeScenes.get(new URL(req.url,'http://localhost').searchParams.get('room_id')));
       const assistDocument=pathname.match(/^\/api\/connection-assists\/([a-f0-9-]{36})\/document$/i);
       if(req.method==='GET'&&assistDocument){const q=new URL(req.url,'http://127.0.0.1').searchParams;return json(res,service.connectionAssist.document(assistDocument[1],q.get('room_id')));}
       if(req.method==='GET'&&pathname==='/api/work-record'){const q=new URL(req.url,'http://127.0.0.1').searchParams;if([...q.keys()].some(k=>!['room_id','member_id','discussion_id'].includes(k)))throw new RoomError('工作记录查询范围无效。');const input={room_id:q.get('room_id'),member_id:q.get('member_id'),discussion_id:q.get('discussion_id')};let client=service.codex;if(input.member_id){service.chat.store.requireParticipant(input.room_id,input.member_id);const member=service.chat.store.member(input.member_id);if(member.adapter==='codex')client=service.chat.nativeClient(member);}return json(res,await require('./work-records.cjs').exportWorkRecord(service.store,service.chat.store,input,{client}));}
@@ -179,6 +181,7 @@ function createServer(service,{token,port=47831,onShutdown}={}) {
       if(bridgeEntry?.[2]==='confirm-return')return json(res,service.bridge.confirmReturn(bridgeEntry[1],input.verification_code));
       if(pathname==='/api/chat/rooms')return json(res,service.chat.addRoom(input),201);
       if(pathname==='/api/room/features'){const settings=service.features.set(input);if(input.discussion===false)service.group.disable(input.room_id);return json(res,settings);}
+      if(pathname==='/api/office/scene')return json(res,service.officeScenes.set(input));
       if(pathname==='/api/group/reassign')return json(res,await service.group.reassign(input));
       if(pathname==='/api/group/claim')return json(res,await service.group.claims.listen(input));
       if(pathname==='/api/group/decision')return json(res,await service.group.ownership.decide(input));

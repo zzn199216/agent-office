@@ -22,7 +22,7 @@ let onboardingTimer = null, onboardingFetching = false, onboardingSignature = ''
 const desktop = window.AgentRoomDesktop || null;
 let desktopState = null, desktopBusy = false, desktopReady = false, desktopProbe = null;
 let desktopOperation = null, desktopError = '', desktopErrorSource = null;
-let inspectorOpen = false, inspectorTab = 'members', inspectorMemberId = null, officeView = (()=>{try{return localStorage.getItem('agentoffice-room-view') !== 'chat';}catch{return true;}})(), officeScene = null, appearanceDraft = null, appearanceDirty = false, appearanceBusy = false, appearanceUploading = false, appearanceUploadVersion = 0;
+let inspectorOpen = false, inspectorTab = 'members', inspectorMemberId = null, officeView = (()=>{try{return localStorage.getItem('agentoffice-room-view') !== 'chat';}catch{return true;}})(), officeScene = null, officeRendererKind='legacy', appearanceDraft = null, appearanceDirty = false, appearanceBusy = false, appearanceUploading = false, appearanceUploadVersion = 0;
 let officeComposerOpen = false;
 let connectionDoctor = null, connectionDoctorBusy = false, connectionDoctorError = '', connectionDoctorRoom = null, connectionDoctorSequence = 0;
 let nativeSetupPending = null, nativeSetupFailure = null;
@@ -1470,6 +1470,7 @@ function applyRoomView() {
   $('chat-view-button').classList.toggle('active',!visual);$('office-view-button').classList.toggle('active',visual);
   $('chat-view-button').setAttribute('aria-pressed',String(!visual));$('office-view-button').setAttribute('aria-pressed',String(visual));
   $('room').classList.toggle('office-view',visual);document.body.classList.toggle('office-view',visual);
+  if(typeof officeScene!=='undefined')officeScene?.setSuspended?.(!available||!officeView&&!work||typeof viewTimers!=='undefined'&&!viewTimers.active);
   updateOfficeComposerPresentation();updateOfficeApprovalAlert();renderSecretary();
 }
 function updateOfficeComposerPresentation() {
@@ -1690,9 +1691,12 @@ function openSecretaryConnect() {
   void scanLaunch({quiet:true});
 }
 function updateOfficeScene() {
+  const useCanvas=!!state?.features?.[history?.room?.id]?.canvas;document.body.classList.toggle('canvas-office',useCanvas);
+  if(officeScene&&officeRendererKind!==(useCanvas?'canvas':'legacy')){officeScene.destroy();officeScene=null;}
+  officeRendererKind=useCanvas?'canvas':'legacy';const renderer=useCanvas?window.AgentOfficeCanvas:window.AgentOfficeScene;
   if((!officeView&&!state?.features?.[history?.room?.id]?.work_layout) || !professionalView || !history?.room || legacyId) return;
-  if(!officeScene && window.AgentOfficeScene) officeScene=window.AgentOfficeScene.mount($('officeScene'),{onCompose:()=>toggleOfficeComposer(true),onChooseSecretary:openSecretaryTutorial,onSelectMember:member=>{if(!member.verified_at||['connection_failed','failed','disabled','revoked','unavailable'].includes(member.status)||nativeConnectionUnavailable(member)){action(()=>showMemberSetup(member.id));return;}if(!submitting && [...$('recipient').options].some(option=>option.value===member.id)){$('recipient').value=member.id;updateRecipientNote();}toggleOfficeComposer(true);},onCustomize:member=>openInspector('appearance',member.id),onSceneSettings:()=>openInspector('scene'),onToggleLights:on=>action(()=>setOfficeLighting(on)),onSelectMessage:message=>{selectRoomView(false);requestAnimationFrame(()=>$('message-'+message.id)?.scrollIntoView({block:'center',behavior:'smooth'}));}});
-  officeScene?.update({roomId:history.room.id,participants:visibleMembers(history.participants).map(member=>({...member,connection_presentation:[...onboardingJobs.values()].filter(job=>job.room_id===roomId&&job.member_id===member.id).sort((a,b)=>String(b.updated||b.created).localeCompare(String(a.updated||a.created)))[0]?.presentation||member.connection_presentation})),messages:(history.messages||[]).filter(message=>!message.connection_verification),runtime,online:webConnected,scene:state?.office?.[history.room.id]||{},secretary:currentSecretary(),tutorialVisible:secretaryTutorialVisible()});
+  if(!officeScene && renderer) officeScene=renderer.mount($('officeScene'),{onAddMember:openAddAI,onMotionChange:value=>action(async()=>{await api('/api/room/features',{room_id:roomId,reduced_motion:value});await refresh();}),onCompose:()=>toggleOfficeComposer(true),onChooseSecretary:openSecretaryTutorial,onSelectMember:member=>{if(!member.verified_at||['connection_failed','failed','disabled','revoked','unavailable'].includes(member.status)||nativeConnectionUnavailable(member)){action(()=>showMemberSetup(member.id));return;}if(!submitting && [...$('recipient').options].some(option=>option.value===member.id)){$('recipient').value=member.id;updateRecipientNote();}toggleOfficeComposer(true);},onCustomize:member=>openInspector('appearance',member.id),onSceneSettings:()=>openInspector('scene'),onToggleLights:on=>action(()=>setOfficeLighting(on)),onSelectMessage:message=>{if(window.AgentOfficeLayout?.focusAttention(message.id))return;selectRoomView(false);requestAnimationFrame(()=>$('message-'+message.id)?.scrollIntoView({block:'center',behavior:'smooth'}));}});
+  officeScene?.update({roomId:history.room.id,features:state?.features?.[history.room.id]||{},sceneData:state?.office_scenes?.[history.room.id],approvals:roomApprovals(history.messages||[]),participants:visibleMembers(history.participants).map(member=>({...member,connection_presentation:[...onboardingJobs.values()].filter(job=>job.room_id===roomId&&job.member_id===member.id).sort((a,b)=>String(b.updated||b.created).localeCompare(String(a.updated||a.created)))[0]?.presentation||member.connection_presentation})),messages:(history.messages||[]).filter(message=>!message.connection_verification),runtime,online:webConnected,scene:state?.office?.[history.room.id]||{},secretary:currentSecretary(),tutorialVisible:secretaryTutorialVisible()});
 }
 function updateWorkLayout(){
   if(!globalThis.AgentOfficeLayout)return;

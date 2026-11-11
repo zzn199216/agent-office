@@ -1,0 +1,66 @@
+(function(root){
+  'use strict';
+  const model=root.AgentOfficeModel,drama=root.AgentOfficeDirector,asset='/assets/office/';
+  const esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  function mount(container,options={}){
+    const document=container.ownerDocument,view=document.defaultView,scene=document.createElement('section');scene.className='canvas-office';scene.setAttribute('aria-label','办公室状态与场景');
+    scene.innerHTML='<div class="canvas-toolbar"><strong class="canvas-count"></strong><button type="button" data-canvas-expand aria-expanded="false">展开办公室</button><label><input type="checkbox" data-canvas-motion>减少动画</label><button type="button" data-canvas-edit>布置办公室</button></div><div class="canvas-strip" aria-label="成员工位状态"></div><div class="canvas-world" hidden><div class="canvas-plane"><div class="canvas-overlays"></div></div></div><p class="canvas-error" hidden role="status"></p>';
+    container.append(scene);const toolbar=scene.querySelector('.canvas-toolbar'),strip=scene.querySelector('.canvas-strip'),world=scene.querySelector('.canvas-world'),plane=scene.querySelector('.canvas-plane'),overlays=scene.querySelector('.canvas-overlays'),expand=scene.querySelector('[data-canvas-expand]'),motion=scene.querySelector('[data-canvas-motion]'),edit=scene.querySelector('[data-canvas-edit]');
+    const director=new drama.Director(),bitmaps=new Map(),loading=new Map(),media=view.matchMedia?.('(prefers-reduced-motion: reduce)');
+    let current=null,facts=[],layout=null,manifest=null,manifestPromise=null,canvas=null,ctx=null,raf=null,timer=null,expanded=false,suspended=false,destroyed=false,visible=true,intersecting=true,epoch=0,signature='',positions='',width=0,height=0,dpr=1,origin={x:0,y:80},dirty=true,lastFrame=0,bitmapAbort=null;
+    const metrics={draws:0,scheduled:0,bitmap_bytes:0,canvas_bytes:0,loaded_assets:[],frames:0};
+    const reduced=()=>current?.features?.reduced_motion===true||media?.matches===true,active=()=>expanded&&!suspended&&!document.hidden&&visible&&intersecting&&!destroyed;
+    function error(message){const p=scene.querySelector('.canvas-error');p.hidden=!message;p.textContent=message||'';}
+    function cancel(){if(raf!==null)view.cancelAnimationFrame(raf);if(timer!==null)view.clearTimeout(timer);raf=timer=null;metrics.scheduled=0;}
+    function release(){epoch++;bitmapAbort?.abort();bitmapAbort=null;for(const bitmap of bitmaps.values())bitmap.close();bitmaps.clear();loading.clear();metrics.bitmap_bytes=0;metrics.loaded_assets=[];if(canvas){canvas.width=1;canvas.height=1;metrics.canvas_bytes=4;}}
+    function schedule(delay=0){if(!active()||raf!==null||timer!==null)return;metrics.scheduled=1;timer=view.setTimeout(()=>{timer=null;if(active())raf=view.requestAnimationFrame(render);else metrics.scheduled=0;},delay);}
+    async function atlas(){if(manifest)return manifest;if(!manifestPromise)manifestPromise=fetch(asset+'action-atlas.json',{credentials:'same-origin'}).then(r=>{if(!r.ok)throw Error();return r.json();}).then(m=>{if(m.schema!=='agentoffice.action-atlas.v1'||m.frame.width!==40||m.frame.height!==40)throw Error();for(const p of Object.keys(m.assets))if(!/^atlas-[a-z0-9-]+\.png$/.test(p))throw Error();manifest=m;return m;}).catch(()=>{manifestPromise=null;throw Error('人物素材没有加载完成，请重新展开办公室。');});return manifestPromise;}
+    function load(src){
+      if(bitmaps.has(src)||loading.has(src)||!active())return;
+      if(!/^\/assets\/office\/atlas-[a-z0-9-]+\.png$/.test(src)||!manifest?.assets[src.slice(asset.length)]){error('人物素材目录无效。');return;}
+      const token=epoch;if(!bitmapAbort)bitmapAbort=new AbortController();const promise=fetch(src,{signal:bitmapAbort.signal,credentials:'same-origin'}).then(r=>{if(!r.ok)throw Error();return r.blob();}).then(blob=>view.createImageBitmap(blob)).then(bitmap=>{if(token!==epoch||!active()){bitmap.close();return;}bitmaps.set(src,bitmap);metrics.bitmap_bytes+=bitmap.width*bitmap.height*4;metrics.loaded_assets=[...bitmaps.keys()];dirty=true;schedule();}).catch(e=>{if(e.name!=='AbortError'&&token===epoch)error('人物素材暂不可用；工位状态和按钮仍可使用。');}).finally(()=>{if(token===epoch)loading.delete(src);});loading.set(src,promise);
+    }
+    function dimensions(){
+      if(!layout)return;const [w,h]=layout.grid;origin={x:h*18+60,y:70};width=(w+h)*18+120;height=(w+h)*9+130;plane.style.width=width+'px';plane.style.height=height+'px';
+      if(!canvas){canvas=document.createElement('canvas');canvas.setAttribute('aria-hidden','true');canvas.style.imageRendering='pixelated';plane.prepend(canvas);ctx=canvas.getContext('2d',{alpha:false});}
+      dpr=Math.min(view.devicePixelRatio||1,1.25,Math.sqrt(2000000/(width*height)));const pw=Math.ceil(width*dpr),ph=Math.ceil(height*dpr);if(canvas.width!==pw||canvas.height!==ph){canvas.width=pw;canvas.height=ph;canvas.style.width=width+'px';canvas.style.height=height+'px';dirty=true;}metrics.canvas_bytes=pw*ph*4;
+    }
+    function point(x,y,z=0){const p=model.project(x,y,z);return {x:origin.x+p.x,y:origin.y+p.y};}
+    function polygon(points,color){ctx.beginPath();points.forEach((p,i)=>{if(i)ctx.lineTo(p.x,p.y);else ctx.moveTo(p.x,p.y);});ctx.closePath();ctx.fillStyle=color;ctx.fill();}
+    function prism(x,y,z,w,h,d,color,top){const a=point(x,y,z),b=point(x+w,y,z),c=point(x+w,y+h,z),q=point(x,y+h,z),up=[a,b,c,q].map(p=>({x:p.x,y:p.y-d*18}));polygon([q,c,up[2],up[3]],color);polygon([b,c,up[2],up[1]],color);polygon(up,top);}
+    function furniture(value){for(const p of value.parts)prism(value.at[0]+p.at[0],value.at[1]+p.at[1],p.at[2],p.size[0],p.size[1],p.size[2],p.color,p.top);}
+    function station(e){const [x,y]=e.seat.at,grey=e.state==='unconnected';prism(x,y,0,2,1,.8,grey?'#565E6C':'#3A4668',grey?'#9BA1AC':'#8A96BA');prism(x+.7,y+.25,.8,.75,.12,.6,e.state==='working'?'#6EA0FF':'#15181E','#3A4668');prism(x-.1,y+1,0,.7,.7,.35,grey?'#565E6C':'#3A4668',grey?'#9BA1AC':'#687799');}
+    function actor(e){
+      if(!e.anim||!manifest)return;const profile=manifest.characters[e.fact.profile]||manifest.characters.generic,paths=[profile.body,profile.hair,profile.accessories[e.fact.variant]],frame=manifest.actions[e.anim][e.face][e.frame];
+      for(const [index,src]of paths.entries()){const frame=manifest.layer_actions[['body','hair','accessory'][index]][e.anim][e.face][e.frame];load(src);const bitmap=bitmaps.get(src);if(bitmap){const p=point(e.at[0]+.5,e.at[1]+.15);ctx.drawImage(bitmap,frame.x,frame.y,40,40,Math.round(p.x-28),Math.round(p.y-56),56,56);}}
+    }
+    function overlayPositions(){let key='';for(const e of director.entities.values()){const p=point(e.at[0]+.5,e.at[1]+.15);key+=e.id+':'+Math.round(p.x)+':'+Math.round(p.y)+';';}if(key===positions)return;positions=key;for(const note of overlays.querySelectorAll('[data-scene-member]')){const e=director.entities.get(note.dataset.sceneMember);if(!e)continue;const p=point(e.at[0]+.5,e.at[1]+.15);note.style.left=p.x+'px';note.style.top=(p.y-64)+'px';}const last=[...director.entities.values()].at(-1),empty=overlays.querySelector('[data-canvas-add]');if(last&&empty){const p=point(last.seat.at[0]+4,last.seat.at[1]);empty.style.left=p.x+'px';empty.style.top=p.y+'px';}}
+    function render(stamp){raf=null;metrics.scheduled=0;if(!active())return;const moving=director.step(stamp,reduced());if(dirty||moving){if(stamp-lastFrame<95){schedule(95-(stamp-lastFrame));return;}lastFrame=stamp;ctx.setTransform(dpr,0,0,dpr,0,0);ctx.imageSmoothingEnabled=false;const night=current?.night===true;ctx.fillStyle=night?'#131929':'#EEF0F4';ctx.fillRect(0,0,width,height);const [w,h]=layout.grid;polygon([point(0,0),point(w,0),point(w,h),point(0,h)],night?'#1B2238':'#E1E5EE');ctx.strokeStyle=night?'#28344F':'#CED5E1';ctx.lineWidth=1;
+        for(let x=0;x<=w;x++){const a=point(x,0),b=point(x,h);ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);ctx.stroke();}for(let y=0;y<=h;y++){const a=point(0,y),b=point(w,y);ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);ctx.stroke();}
+        const draws=layout.furniture.map(f=>({depth:f.at[0]+f.at[1]+f.footprint[1],draw:()=>furniture(f)}));for(const e of director.entities.values()){draws.push({depth:e.seat.at[0]+e.seat.at[1]+1.4,draw:()=>station(e)});draws.push({depth:e.at[0]+e.at[1],draw:()=>actor(e)});}draws.sort((a,b)=>a.depth-b.depth).forEach(d=>d.draw());overlayPositions();metrics.draws++;metrics.frames++;dirty=false;
+      }if(moving)schedule(95);
+    }
+    function markup(){
+      const button=f=>'<button type="button" class="canvas-member state-'+f.state+'" data-scene-member="'+esc(f.id)+'"><span class="canvas-state-dot" aria-hidden="true"></span><strong>'+esc(f.member.name)+'</strong><span>'+esc(f.label)+'</span>'+(f.note?'<small>'+esc(f.note)+'</small>':'')+'</button>';
+      strip.innerHTML=facts.map(button).join('')+'<button type="button" class="canvas-empty" data-canvas-add>＋ 接入 AI</button>';
+      overlays.innerHTML=facts.map(f=>'<button type="button" class="canvas-note state-'+f.state+'" data-scene-member="'+esc(f.id)+'"><strong>'+esc(f.member.name)+'</strong><span>'+esc(f.state==='working'||f.state==='attention'||f.state==='unconnected'?f.note:f.label)+'</span></button>').join('');const last=[...director.entities.values()].at(-1);if(last){const p=point(last.seat.at[0]+4,last.seat.at[1]);const empty=document.createElement('button');empty.type='button';empty.className='canvas-note canvas-empty-world';empty.dataset.canvasAdd='';empty.style.left=p.x+'px';empty.style.top=p.y+'px';empty.textContent='＋ 接入 AI';overlays.append(empty);}positions='';
+      scene.querySelector('.canvas-count').textContent=facts.filter(f=>f.state!=='unconnected').length+' 位已接通 · '+facts.filter(f=>f.state==='working').length+' 位工作中 · '+facts.filter(f=>f.state==='attention').length+' 位等你';motion.checked=current?.features?.reduced_motion===true;edit.hidden=current?.features?.scene_editor!==true;
+    }
+    function choose(memberId){const fact=facts.find(f=>f.id===memberId);if(!fact)return;if(fact.state==='attention'&&fact.message_id)options.onSelectMessage?.({id:fact.message_id});else options.onSelectMember?.(fact.member);}
+    scene.addEventListener('click',event=>{const member=event.target.closest('[data-scene-member]');if(member)choose(member.dataset.sceneMember);if(event.target.closest('[data-canvas-add]'))options.onAddMember?.();});
+    async function expandScene(on){expanded=on;scene.classList.toggle('expanded',on);world.hidden=!on;expand.textContent=on?'收起办公室':'展开办公室';expand.setAttribute('aria-expanded',String(on));options.onExpanded?.(on);cancel();if(!on){release();return;}dimensions();dirty=true;schedule();try{await atlas();if(active()){dirty=true;schedule();}}catch(e){error(e.message);}}
+    expand.onclick=()=>expandScene(!expanded);motion.onchange=()=>options.onMotionChange?.(motion.checked);edit.onclick=()=>options.onSceneSettings?.();
+    function update(input){
+      const nextFacts=drama.facts(input),nextLayout=model.validateScene(input.sceneData||model.defaultScene(nextFacts.map(f=>f.id))),phase=root.AgentOfficeScene.clockState(input.scene?.time_zone,input.scene?.time_mode).phase,next={...input,night:phase==='night'||phase==='dusk'},key=JSON.stringify([input.roomId,nextFacts.map(f=>[f.id,f.profile,f.variant,f.state,f.label,f.note,f.message_id]),nextLayout,next.night,input.features]);
+      if(current?.roomId&&current.roomId!==input.roomId){cancel();release();expanded=false;scene.classList.remove('expanded');world.hidden=true;expand.setAttribute('aria-expanded','false');expand.textContent='展开办公室';signature='';}
+      current=next;facts=nextFacts;layout=nextLayout;director.update(facts,layout,input.features||{});if(key!==signature){signature=key;dirty=true;markup();if(active()){dimensions();schedule();}}return metrics;
+    }
+    function visibility(){cancel();if(active()){dimensions();dirty=true;schedule();}else if(document.hidden||!visible||!intersecting)release();}
+    const nativeVisibility=event=>{if(typeof event.detail?.visible==='boolean'&&visible!==event.detail.visible){visible=event.detail.visible;visibility();}};
+    const intersection=typeof view.IntersectionObserver==='function'?new view.IntersectionObserver(entries=>{const next=entries.some(e=>e.isIntersecting);if(next!==intersecting){intersecting=next;visibility();}}):null;intersection?.observe(scene);
+    document.addEventListener('visibilitychange',visibility);view.addEventListener('agentoffice-visibility',nativeVisibility);media?.addEventListener?.('change',visibility);
+    const resize=typeof view.ResizeObserver==='function'?new view.ResizeObserver(()=>{if(active()){dirty=true;schedule();}}):null;resize?.observe(world);
+    return Object.freeze({update,setSuspended(value){if(suspended===!!value)return;suspended=!!value;visibility();},getMetrics(){return {...metrics,expanded,active:active(),entities:director.entities.size,bitmap_count:bitmaps.size};},expand:expandScene,director,destroy(){if(destroyed)return;destroyed=true;cancel();release();document.removeEventListener('visibilitychange',visibility);view.removeEventListener('agentoffice-visibility',nativeVisibility);media?.removeEventListener?.('change',visibility);resize?.disconnect();intersection?.disconnect();scene.remove();}});
+  }
+  root.AgentOfficeCanvas=Object.freeze({mount});
+})(window);

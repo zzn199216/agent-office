@@ -1,0 +1,2131 @@
+{
+  "schema": "agentoffice.action-atlas.v1",
+  "frame": {
+    "width": 40,
+    "height": 40
+  },
+  "sheet": {
+    "width": 320,
+    "height": 280
+  },
+  "layers": [
+    "body",
+    "hair",
+    "accessory"
+  ],
+  "actions": {
+    "stand": {
+      "down": [
+        {
+          "x": 0,
+          "y": 0,
+          "width": 40,
+          "height": 40
+        },
+        {
+          "x": 40,
+          "y": 0,
+          "width": 40,
+          "height": 40
+        }
+      ],
+      "left": [
+        {
+          "x": 80,
+          "y": 0,
+          "width": 40,
+          "height": 40
+        },
+        {
+          "x": 120,
+          "y": 0,
+          "width": 40,
+          "height": 40
+        }
+      ],
+      "up": [
+        {
+          "x": 160,
+          "y": 0,
+          "width": 40,
+          "height": 40
+        },
+        {
+          "x": 200,
+          "y": 0,
+          "width": 40,
+          "height": 40
+        }
+      ],
+      "right": [
+        {
+          "x": 240,
+          "y": 0,
+          "width": 40,
+          "height": 40
+        },
+        {
+          "x": 280,
+          "y": 0,
+          "width": 40,
+          "height": 40
+        }
+      ]
+    },
+    "walk": {
+      "down": [
+        {
+          "x": 0,
+          "y": 40,
+          "width": 40,
+          "height": 40
+        },
+        {
+          "x": 40,
+          "y": 40,
+          "width": 40,
+          "height": 40
+        }
+      ],
+      "left": [
+        {
+          "x": 80,
+          "y": 40,
+          "width": 40,
+          "height": 40
+        },
+        {
+          "x": 120,
+          "y": 40,
+          "width": 40,
+          "height": 40
+        }
+      ],
+      "up": [
+        {
+          "x": 160,
+          "y": 40,
+          "width": 40,
+          "height": 40
+        },
+        {
+          "x": 200,
+          "y": 40,
+          "width": 40,
+          "height": 40
+        }
+      ],
+      "right": [
+        {
+          "x": 240,
+          "y": 40,
+          "width": 40,
+          "height": 40
+        },
+        {
+          "x": 280,
+          "y": 40,
+          "width": 40,
+          "height": 40
+        }
+      ]
+    },
+    "sit": {
+      "down": [
+        {
+          "x": 0,
+          "y": 80,
+          "width": 40,
+          "height": 40
+        },
+        {
+          "x": 40,
+          "y": 80,
+          "width": 40,
+          "height": 40
+        }
+      ],
+      "left": [
+        {
+          "x": 80,
+          "y": 80,
+          "width": 40,
+          "height": 40
+        },
+        {
+          "x": 120,
+          "y": 80,
+          "width": 40,
+          "height": 40
+        }
+      ],
+      "up": [
+        {
+          "x": 160,
+          "y": 80,
+          "width": 40,
+          "height": 40
+        },
+        {
+          "x": 200,
+          "y": 80,
+          "width": 40,
+          "height": 40
+        }
+      ],
+      "right": [
+        {
+          "x": 240,
+          "y": 80,
+          "width": 40,
+          "height": 40
+        },
+        {
+          "x": 280,
+          "y": 80,
+          "width": 40,
+          "height": 40
+        }
+      ]
+    },
+    "type": {
+      "down": [
+        {
+          "x": 0,
+          "y": 120,
+          "width": 40,
+          "height": 40
+        },
+        {
+          "x": 40,
+          "y": 120,
+          "width": 40,
+          "height": 40
+        }
+      ],
+      "left": [
+        {
+          "x": 80,
+          "y": 120,
+          "width": 40,
+          "height": 40
+        },
+        {
+          "x": 120,
+          "y": 120,
+          "width": 40,
+          "height": 40
+        }
+      ],
+      "up": [
+        {
+          "x": 160,
+          "y": 120,
+          "width": 40,
+          "height": 40
+        },
+        {
+          "x": 200,
+          "y": 120,
+          "width": 40,
+          "height": 40
+        }
+      ],
+      "right": [
+        {
+          "x": 240,
+          "y": 120,
+          "width": 40,
+          "height": 40
+        },
+        {
+          "x": 280,
+          "y": 120,
+          "width": 40,
+          "height": 40
+        }
+      ]
+    },
+    "talk": {
+      "down": [
+        {
+          "x": 0,
+          "y": 160,
+          "width": 40,
+          "height": 40
+        },
+        {
+          "x": 40,
+          "y": 160,
+          "width": 40,
+          "height": 40
+        }
+      ],
+      "left": [
+        {
+          "x": 80,
+          "y": 160,
+          "width": 40,
+          "height": 40
+        },
+        {
+          "x": 120,
+          "y": 160,
+          "width": 40,
+          "height": 40
+        }
+      ],
+      "up": [
+        {
+          "x": 160,
+          "y": 160,
+          "width": 40,
+          "height": 40
+        },
+        {
+          "x": 200,
+          "y": 160,
+          "width": 40,
+          "height": 40
+        }
+      ],
+      "right": [
+        {
+          "x": 240,
+          "y": 160,
+          "width": 40,
+          "height": 40
+        },
+        {
+          "x": 280,
+          "y": 160,
+          "width": 40,
+          "height": 40
+        }
+      ]
+    },
+    "lie": {
+      "down": [
+        {
+          "x": 0,
+          "y": 200,
+          "width": 40,
+          "height": 40
+        },
+        {
+          "x": 40,
+          "y": 200,
+          "width": 40,
+          "height": 40
+        }
+      ],
+      "left": [
+        {
+          "x": 80,
+          "y": 200,
+          "width": 40,
+          "height": 40
+        },
+        {
+          "x": 120,
+          "y": 200,
+          "width": 40,
+          "height": 40
+        }
+      ],
+      "up": [
+        {
+          "x": 160,
+          "y": 200,
+          "width": 40,
+          "height": 40
+        },
+        {
+          "x": 200,
+          "y": 200,
+          "width": 40,
+          "height": 40
+        }
+      ],
+      "right": [
+        {
+          "x": 240,
+          "y": 200,
+          "width": 40,
+          "height": 40
+        },
+        {
+          "x": 280,
+          "y": 200,
+          "width": 40,
+          "height": 40
+        }
+      ]
+    },
+    "raise": {
+      "down": [
+        {
+          "x": 0,
+          "y": 240,
+          "width": 40,
+          "height": 40
+        },
+        {
+          "x": 40,
+          "y": 240,
+          "width": 40,
+          "height": 40
+        }
+      ],
+      "left": [
+        {
+          "x": 80,
+          "y": 240,
+          "width": 40,
+          "height": 40
+        },
+        {
+          "x": 120,
+          "y": 240,
+          "width": 40,
+          "height": 40
+        }
+      ],
+      "up": [
+        {
+          "x": 160,
+          "y": 240,
+          "width": 40,
+          "height": 40
+        },
+        {
+          "x": 200,
+          "y": 240,
+          "width": 40,
+          "height": 40
+        }
+      ],
+      "right": [
+        {
+          "x": 240,
+          "y": 240,
+          "width": 40,
+          "height": 40
+        },
+        {
+          "x": 280,
+          "y": 240,
+          "width": 40,
+          "height": 40
+        }
+      ]
+    }
+  },
+  "characters": {
+    "deepseek": {
+      "body": "/assets/office/atlas-body.png",
+      "hair": "/assets/office/atlas-hair-deepseek.png",
+      "accessories": [
+        "/assets/office/atlas-accessory-deepseek-0.png",
+        "/assets/office/atlas-accessory-deepseek-1.png",
+        "/assets/office/atlas-accessory-deepseek-2.png",
+        "/assets/office/atlas-accessory-deepseek-3.png",
+        "/assets/office/atlas-accessory-deepseek-4.png"
+      ]
+    },
+    "doubao": {
+      "body": "/assets/office/atlas-body.png",
+      "hair": "/assets/office/atlas-hair-doubao.png",
+      "accessories": [
+        "/assets/office/atlas-accessory-doubao-0.png",
+        "/assets/office/atlas-accessory-doubao-1.png",
+        "/assets/office/atlas-accessory-doubao-2.png",
+        "/assets/office/atlas-accessory-doubao-3.png",
+        "/assets/office/atlas-accessory-doubao-4.png"
+      ]
+    },
+    "claude": {
+      "body": "/assets/office/atlas-body.png",
+      "hair": "/assets/office/atlas-hair-claude.png",
+      "accessories": [
+        "/assets/office/atlas-accessory-claude-0.png",
+        "/assets/office/atlas-accessory-claude-1.png",
+        "/assets/office/atlas-accessory-claude-2.png",
+        "/assets/office/atlas-accessory-claude-3.png",
+        "/assets/office/atlas-accessory-claude-4.png"
+      ]
+    },
+    "codex": {
+      "body": "/assets/office/atlas-body.png",
+      "hair": "/assets/office/atlas-hair-codex.png",
+      "accessories": [
+        "/assets/office/atlas-accessory-codex-0.png",
+        "/assets/office/atlas-accessory-codex-1.png",
+        "/assets/office/atlas-accessory-codex-2.png",
+        "/assets/office/atlas-accessory-codex-3.png",
+        "/assets/office/atlas-accessory-codex-4.png"
+      ]
+    },
+    "grok": {
+      "body": "/assets/office/atlas-body.png",
+      "hair": "/assets/office/atlas-hair-grok.png",
+      "accessories": [
+        "/assets/office/atlas-accessory-grok-0.png",
+        "/assets/office/atlas-accessory-grok-1.png",
+        "/assets/office/atlas-accessory-grok-2.png",
+        "/assets/office/atlas-accessory-grok-3.png",
+        "/assets/office/atlas-accessory-grok-4.png"
+      ]
+    },
+    "gemini": {
+      "body": "/assets/office/atlas-body.png",
+      "hair": "/assets/office/atlas-hair-gemini.png",
+      "accessories": [
+        "/assets/office/atlas-accessory-gemini-0.png",
+        "/assets/office/atlas-accessory-gemini-1.png",
+        "/assets/office/atlas-accessory-gemini-2.png",
+        "/assets/office/atlas-accessory-gemini-3.png",
+        "/assets/office/atlas-accessory-gemini-4.png"
+      ]
+    },
+    "kimi": {
+      "body": "/assets/office/atlas-body.png",
+      "hair": "/assets/office/atlas-hair-kimi.png",
+      "accessories": [
+        "/assets/office/atlas-accessory-kimi-0.png",
+        "/assets/office/atlas-accessory-kimi-1.png",
+        "/assets/office/atlas-accessory-kimi-2.png",
+        "/assets/office/atlas-accessory-kimi-3.png",
+        "/assets/office/atlas-accessory-kimi-4.png"
+      ]
+    },
+    "qwen": {
+      "body": "/assets/office/atlas-body.png",
+      "hair": "/assets/office/atlas-hair-qwen.png",
+      "accessories": [
+        "/assets/office/atlas-accessory-qwen-0.png",
+        "/assets/office/atlas-accessory-qwen-1.png",
+        "/assets/office/atlas-accessory-qwen-2.png",
+        "/assets/office/atlas-accessory-qwen-3.png",
+        "/assets/office/atlas-accessory-qwen-4.png"
+      ]
+    },
+    "cursor": {
+      "body": "/assets/office/atlas-body.png",
+      "hair": "/assets/office/atlas-hair-cursor.png",
+      "accessories": [
+        "/assets/office/atlas-accessory-cursor-0.png",
+        "/assets/office/atlas-accessory-cursor-1.png",
+        "/assets/office/atlas-accessory-cursor-2.png",
+        "/assets/office/atlas-accessory-cursor-3.png",
+        "/assets/office/atlas-accessory-cursor-4.png"
+      ]
+    },
+    "generic": {
+      "body": "/assets/office/atlas-body.png",
+      "hair": "/assets/office/atlas-hair-generic.png",
+      "accessories": [
+        "/assets/office/atlas-accessory-generic-0.png",
+        "/assets/office/atlas-accessory-generic-1.png",
+        "/assets/office/atlas-accessory-generic-2.png",
+        "/assets/office/atlas-accessory-generic-3.png",
+        "/assets/office/atlas-accessory-generic-4.png"
+      ]
+    }
+  },
+  "assets": {
+    "atlas-body.png": {
+      "bytes": 2800,
+      "width": 320,
+      "height": 280,
+      "sha256": "f03f92d7fb411d9abd680b2ca2f277701f59eef5857cb5a73d56cb8b5dc53421"
+    },
+    "atlas-hair-deepseek.png": {
+      "bytes": 429,
+      "width": 160,
+      "height": 120,
+      "sha256": "6cace411a5f144e285b7981b1b7a69a10dbf610635d6f8a0c0ede98e939f1390"
+    },
+    "atlas-accessory-deepseek-0.png": {
+      "bytes": 308,
+      "width": 160,
+      "height": 120,
+      "sha256": "01a3f52b5df05978f8b9b082af667edacf3f270c84b019ec1b13c53a0e27d3ae"
+    },
+    "atlas-accessory-deepseek-1.png": {
+      "bytes": 311,
+      "width": 160,
+      "height": 120,
+      "sha256": "9399a6cf8763558fcfe5738181b9c263b61512014267c0df2a143ee2a69fde13"
+    },
+    "atlas-accessory-deepseek-2.png": {
+      "bytes": 311,
+      "width": 160,
+      "height": 120,
+      "sha256": "b3c1c616367bdaff4f2dd9171df5147c05f81ca3472eb166daa5b08a05fadf3f"
+    },
+    "atlas-accessory-deepseek-3.png": {
+      "bytes": 311,
+      "width": 160,
+      "height": 120,
+      "sha256": "1f103f9293fa0adbdad712a9fd95cee71b9c7f7c7097c0d49a616a3c90b2b391"
+    },
+    "atlas-accessory-deepseek-4.png": {
+      "bytes": 311,
+      "width": 160,
+      "height": 120,
+      "sha256": "c26d1e12954cc07e82338037692eada696e7ea667d6d3bebbcf37a98c56efa55"
+    },
+    "atlas-hair-doubao.png": {
+      "bytes": 430,
+      "width": 160,
+      "height": 120,
+      "sha256": "341ba9c0ee2a521e5807b435af2866b81df998536a98834674883129c59d59f1"
+    },
+    "atlas-accessory-doubao-0.png": {
+      "bytes": 325,
+      "width": 160,
+      "height": 120,
+      "sha256": "77d1b19498ea2410e8043db251e907b28dbd7f5f700fdc9ba720532e265f4a2b"
+    },
+    "atlas-accessory-doubao-1.png": {
+      "bytes": 325,
+      "width": 160,
+      "height": 120,
+      "sha256": "4bce94bdf08bbdda3a2dead38bf6093504f376bbee54862a3df4cf6cb2f4bbae"
+    },
+    "atlas-accessory-doubao-2.png": {
+      "bytes": 325,
+      "width": 160,
+      "height": 120,
+      "sha256": "d71b2093024e64b02bb3466e7c4675d09865c1424291216c2a7f12b69d9d0b59"
+    },
+    "atlas-accessory-doubao-3.png": {
+      "bytes": 325,
+      "width": 160,
+      "height": 120,
+      "sha256": "473a19ef3027142d0552d307696503d02635121d44f4e0f5ce5f4eb0a29d6a3a"
+    },
+    "atlas-accessory-doubao-4.png": {
+      "bytes": 322,
+      "width": 160,
+      "height": 120,
+      "sha256": "73d0942eb1b656e3c7373868e1b86fea422af47f72b481c7201da9542c77531d"
+    },
+    "atlas-hair-claude.png": {
+      "bytes": 422,
+      "width": 160,
+      "height": 120,
+      "sha256": "875ee8df5afbdd80f393616d74cfe8bb5331940c2dd5caad7a2b97b66e48daee"
+    },
+    "atlas-accessory-claude-0.png": {
+      "bytes": 265,
+      "width": 160,
+      "height": 120,
+      "sha256": "a2787ccc6dba21a311eb41f914986cf9bc6637115a6b38da470e83082bad5396"
+    },
+    "atlas-accessory-claude-1.png": {
+      "bytes": 266,
+      "width": 160,
+      "height": 120,
+      "sha256": "4ef732499a091ff1adcb009ad97a367ce2976800f3ffe748fd84e35cfdd72ffc"
+    },
+    "atlas-accessory-claude-2.png": {
+      "bytes": 265,
+      "width": 160,
+      "height": 120,
+      "sha256": "157c67f1a0f53c3aeb48fcd9f11acdae937e887406d558181f697428424ed747"
+    },
+    "atlas-accessory-claude-3.png": {
+      "bytes": 262,
+      "width": 160,
+      "height": 120,
+      "sha256": "be830acc4f2d817fc674d080404f246d0f4f99fe5802dce29541663403dfe8f8"
+    },
+    "atlas-accessory-claude-4.png": {
+      "bytes": 265,
+      "width": 160,
+      "height": 120,
+      "sha256": "cf678c1a31161cd8da3a2222cdc93699dfd818205d7f759a8a079c54423b8e96"
+    },
+    "atlas-hair-codex.png": {
+      "bytes": 429,
+      "width": 160,
+      "height": 120,
+      "sha256": "860a7adadf706900988febdb918869e35d8267d078ad219b84edc3875a127ea7"
+    },
+    "atlas-accessory-codex-0.png": {
+      "bytes": 265,
+      "width": 160,
+      "height": 120,
+      "sha256": "df316b5bc5f86300f8bac261cae9e31d5317be9156f52cd2e736c1eff48af54f"
+    },
+    "atlas-accessory-codex-1.png": {
+      "bytes": 265,
+      "width": 160,
+      "height": 120,
+      "sha256": "0259722b7ad8844946a521fb5e3eafc353e6df84536a55327caf2aefc617fa17"
+    },
+    "atlas-accessory-codex-2.png": {
+      "bytes": 262,
+      "width": 160,
+      "height": 120,
+      "sha256": "662033340332a533c65b85efd926020da6ef1f2df07c3ef895fb06e9d53f32b5"
+    },
+    "atlas-accessory-codex-3.png": {
+      "bytes": 265,
+      "width": 160,
+      "height": 120,
+      "sha256": "d01aac94783551e673eb9edfa92140ad8f2fdf107a15d251159f14cb4264ac8a"
+    },
+    "atlas-accessory-codex-4.png": {
+      "bytes": 265,
+      "width": 160,
+      "height": 120,
+      "sha256": "ba952983712ab748f052ddd26a18ed102e591465238f960f954a863a61dbaafd"
+    },
+    "atlas-hair-grok.png": {
+      "bytes": 430,
+      "width": 160,
+      "height": 120,
+      "sha256": "8b1ed0db66a3bc9d2f0decff21d98c15bf21e724ef98c7d93272c80e75aaf040"
+    },
+    "atlas-accessory-grok-0.png": {
+      "bytes": 305,
+      "width": 160,
+      "height": 120,
+      "sha256": "70246509dc6c0d568e791a08d9b84a315e476417f44bb2aa403e5ab03e91afba"
+    },
+    "atlas-accessory-grok-1.png": {
+      "bytes": 302,
+      "width": 160,
+      "height": 120,
+      "sha256": "0c0b3b92c6cb595b4f7d1c056e93ba1dc78d820c1ce3940df56e30ed5aaca93b"
+    },
+    "atlas-accessory-grok-2.png": {
+      "bytes": 305,
+      "width": 160,
+      "height": 120,
+      "sha256": "687c645be2ac68c985e22b81150bd606104168c2d90d25a7a1716133c11481c5"
+    },
+    "atlas-accessory-grok-3.png": {
+      "bytes": 305,
+      "width": 160,
+      "height": 120,
+      "sha256": "f1f0e745150cd0f049924eb41b7a7f25c4e5cd06d855e0e85d02c829a8849e28"
+    },
+    "atlas-accessory-grok-4.png": {
+      "bytes": 305,
+      "width": 160,
+      "height": 120,
+      "sha256": "a147462cc773d2f7fe83eff75f7d24aa163e34de85c176b2a971408fd5a07685"
+    },
+    "atlas-hair-gemini.png": {
+      "bytes": 422,
+      "width": 160,
+      "height": 120,
+      "sha256": "17408f42cfb31d389a2810c87eac03a85f8a44519bafe10a725dc139e3a92c6d"
+    },
+    "atlas-accessory-gemini-0.png": {
+      "bytes": 308,
+      "width": 160,
+      "height": 120,
+      "sha256": "01a3f52b5df05978f8b9b082af667edacf3f270c84b019ec1b13c53a0e27d3ae"
+    },
+    "atlas-accessory-gemini-1.png": {
+      "bytes": 311,
+      "width": 160,
+      "height": 120,
+      "sha256": "9399a6cf8763558fcfe5738181b9c263b61512014267c0df2a143ee2a69fde13"
+    },
+    "atlas-accessory-gemini-2.png": {
+      "bytes": 311,
+      "width": 160,
+      "height": 120,
+      "sha256": "b3c1c616367bdaff4f2dd9171df5147c05f81ca3472eb166daa5b08a05fadf3f"
+    },
+    "atlas-accessory-gemini-3.png": {
+      "bytes": 311,
+      "width": 160,
+      "height": 120,
+      "sha256": "1f103f9293fa0adbdad712a9fd95cee71b9c7f7c7097c0d49a616a3c90b2b391"
+    },
+    "atlas-accessory-gemini-4.png": {
+      "bytes": 311,
+      "width": 160,
+      "height": 120,
+      "sha256": "c26d1e12954cc07e82338037692eada696e7ea667d6d3bebbcf37a98c56efa55"
+    },
+    "atlas-hair-kimi.png": {
+      "bytes": 429,
+      "width": 160,
+      "height": 120,
+      "sha256": "3f8cb13a760c30726e9119218160eedc9a5fb7ead404cdeadc2b53d02386df6b"
+    },
+    "atlas-accessory-kimi-0.png": {
+      "bytes": 325,
+      "width": 160,
+      "height": 120,
+      "sha256": "77d1b19498ea2410e8043db251e907b28dbd7f5f700fdc9ba720532e265f4a2b"
+    },
+    "atlas-accessory-kimi-1.png": {
+      "bytes": 325,
+      "width": 160,
+      "height": 120,
+      "sha256": "4bce94bdf08bbdda3a2dead38bf6093504f376bbee54862a3df4cf6cb2f4bbae"
+    },
+    "atlas-accessory-kimi-2.png": {
+      "bytes": 325,
+      "width": 160,
+      "height": 120,
+      "sha256": "d71b2093024e64b02bb3466e7c4675d09865c1424291216c2a7f12b69d9d0b59"
+    },
+    "atlas-accessory-kimi-3.png": {
+      "bytes": 325,
+      "width": 160,
+      "height": 120,
+      "sha256": "473a19ef3027142d0552d307696503d02635121d44f4e0f5ce5f4eb0a29d6a3a"
+    },
+    "atlas-accessory-kimi-4.png": {
+      "bytes": 322,
+      "width": 160,
+      "height": 120,
+      "sha256": "73d0942eb1b656e3c7373868e1b86fea422af47f72b481c7201da9542c77531d"
+    },
+    "atlas-hair-qwen.png": {
+      "bytes": 431,
+      "width": 160,
+      "height": 120,
+      "sha256": "ecf9fe839b942eacded9563acdb31371de2454db4a655f61d00cd076de245a72"
+    },
+    "atlas-accessory-qwen-0.png": {
+      "bytes": 265,
+      "width": 160,
+      "height": 120,
+      "sha256": "a2787ccc6dba21a311eb41f914986cf9bc6637115a6b38da470e83082bad5396"
+    },
+    "atlas-accessory-qwen-1.png": {
+      "bytes": 266,
+      "width": 160,
+      "height": 120,
+      "sha256": "4ef732499a091ff1adcb009ad97a367ce2976800f3ffe748fd84e35cfdd72ffc"
+    },
+    "atlas-accessory-qwen-2.png": {
+      "bytes": 265,
+      "width": 160,
+      "height": 120,
+      "sha256": "157c67f1a0f53c3aeb48fcd9f11acdae937e887406d558181f697428424ed747"
+    },
+    "atlas-accessory-qwen-3.png": {
+      "bytes": 262,
+      "width": 160,
+      "height": 120,
+      "sha256": "be830acc4f2d817fc674d080404f246d0f4f99fe5802dce29541663403dfe8f8"
+    },
+    "atlas-accessory-qwen-4.png": {
+      "bytes": 265,
+      "width": 160,
+      "height": 120,
+      "sha256": "cf678c1a31161cd8da3a2222cdc93699dfd818205d7f759a8a079c54423b8e96"
+    },
+    "atlas-hair-cursor.png": {
+      "bytes": 422,
+      "width": 160,
+      "height": 120,
+      "sha256": "0fdd8be50fc86140735ebbc4cc047b5cb4370b4b6c92ad17ce30f81b6a0717a9"
+    },
+    "atlas-accessory-cursor-0.png": {
+      "bytes": 265,
+      "width": 160,
+      "height": 120,
+      "sha256": "df316b5bc5f86300f8bac261cae9e31d5317be9156f52cd2e736c1eff48af54f"
+    },
+    "atlas-accessory-cursor-1.png": {
+      "bytes": 265,
+      "width": 160,
+      "height": 120,
+      "sha256": "0259722b7ad8844946a521fb5e3eafc353e6df84536a55327caf2aefc617fa17"
+    },
+    "atlas-accessory-cursor-2.png": {
+      "bytes": 262,
+      "width": 160,
+      "height": 120,
+      "sha256": "662033340332a533c65b85efd926020da6ef1f2df07c3ef895fb06e9d53f32b5"
+    },
+    "atlas-accessory-cursor-3.png": {
+      "bytes": 265,
+      "width": 160,
+      "height": 120,
+      "sha256": "d01aac94783551e673eb9edfa92140ad8f2fdf107a15d251159f14cb4264ac8a"
+    },
+    "atlas-accessory-cursor-4.png": {
+      "bytes": 265,
+      "width": 160,
+      "height": 120,
+      "sha256": "ba952983712ab748f052ddd26a18ed102e591465238f960f954a863a61dbaafd"
+    },
+    "atlas-hair-generic.png": {
+      "bytes": 428,
+      "width": 160,
+      "height": 120,
+      "sha256": "ff910983555bf1a40b976a8beaba36a351094dfde5aa14e0998c50c8335adb9d"
+    },
+    "atlas-accessory-generic-0.png": {
+      "bytes": 305,
+      "width": 160,
+      "height": 120,
+      "sha256": "70246509dc6c0d568e791a08d9b84a315e476417f44bb2aa403e5ab03e91afba"
+    },
+    "atlas-accessory-generic-1.png": {
+      "bytes": 302,
+      "width": 160,
+      "height": 120,
+      "sha256": "0c0b3b92c6cb595b4f7d1c056e93ba1dc78d820c1ce3940df56e30ed5aaca93b"
+    },
+    "atlas-accessory-generic-2.png": {
+      "bytes": 305,
+      "width": 160,
+      "height": 120,
+      "sha256": "687c645be2ac68c985e22b81150bd606104168c2d90d25a7a1716133c11481c5"
+    },
+    "atlas-accessory-generic-3.png": {
+      "bytes": 305,
+      "width": 160,
+      "height": 120,
+      "sha256": "f1f0e745150cd0f049924eb41b7a7f25c4e5cd06d855e0e85d02c829a8849e28"
+    },
+    "atlas-accessory-generic-4.png": {
+      "bytes": 305,
+      "width": 160,
+      "height": 120,
+      "sha256": "a147462cc773d2f7fe83eff75f7d24aa163e34de85c176b2a971408fd5a07685"
+    }
+  },
+  "license": "Original Agent Office code-drawn characters. No official product marks or mascots.",
+  "layer_actions": {
+    "body": {
+      "stand": {
+        "down": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          },
+          {
+            "x": 40,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          }
+        ],
+        "left": [
+          {
+            "x": 80,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          },
+          {
+            "x": 120,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          }
+        ],
+        "up": [
+          {
+            "x": 160,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          },
+          {
+            "x": 200,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          }
+        ],
+        "right": [
+          {
+            "x": 240,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          },
+          {
+            "x": 280,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          }
+        ]
+      },
+      "walk": {
+        "down": [
+          {
+            "x": 0,
+            "y": 40,
+            "width": 40,
+            "height": 40
+          },
+          {
+            "x": 40,
+            "y": 40,
+            "width": 40,
+            "height": 40
+          }
+        ],
+        "left": [
+          {
+            "x": 80,
+            "y": 40,
+            "width": 40,
+            "height": 40
+          },
+          {
+            "x": 120,
+            "y": 40,
+            "width": 40,
+            "height": 40
+          }
+        ],
+        "up": [
+          {
+            "x": 160,
+            "y": 40,
+            "width": 40,
+            "height": 40
+          },
+          {
+            "x": 200,
+            "y": 40,
+            "width": 40,
+            "height": 40
+          }
+        ],
+        "right": [
+          {
+            "x": 240,
+            "y": 40,
+            "width": 40,
+            "height": 40
+          },
+          {
+            "x": 280,
+            "y": 40,
+            "width": 40,
+            "height": 40
+          }
+        ]
+      },
+      "sit": {
+        "down": [
+          {
+            "x": 0,
+            "y": 80,
+            "width": 40,
+            "height": 40
+          },
+          {
+            "x": 40,
+            "y": 80,
+            "width": 40,
+            "height": 40
+          }
+        ],
+        "left": [
+          {
+            "x": 80,
+            "y": 80,
+            "width": 40,
+            "height": 40
+          },
+          {
+            "x": 120,
+            "y": 80,
+            "width": 40,
+            "height": 40
+          }
+        ],
+        "up": [
+          {
+            "x": 160,
+            "y": 80,
+            "width": 40,
+            "height": 40
+          },
+          {
+            "x": 200,
+            "y": 80,
+            "width": 40,
+            "height": 40
+          }
+        ],
+        "right": [
+          {
+            "x": 240,
+            "y": 80,
+            "width": 40,
+            "height": 40
+          },
+          {
+            "x": 280,
+            "y": 80,
+            "width": 40,
+            "height": 40
+          }
+        ]
+      },
+      "type": {
+        "down": [
+          {
+            "x": 0,
+            "y": 120,
+            "width": 40,
+            "height": 40
+          },
+          {
+            "x": 40,
+            "y": 120,
+            "width": 40,
+            "height": 40
+          }
+        ],
+        "left": [
+          {
+            "x": 80,
+            "y": 120,
+            "width": 40,
+            "height": 40
+          },
+          {
+            "x": 120,
+            "y": 120,
+            "width": 40,
+            "height": 40
+          }
+        ],
+        "up": [
+          {
+            "x": 160,
+            "y": 120,
+            "width": 40,
+            "height": 40
+          },
+          {
+            "x": 200,
+            "y": 120,
+            "width": 40,
+            "height": 40
+          }
+        ],
+        "right": [
+          {
+            "x": 240,
+            "y": 120,
+            "width": 40,
+            "height": 40
+          },
+          {
+            "x": 280,
+            "y": 120,
+            "width": 40,
+            "height": 40
+          }
+        ]
+      },
+      "talk": {
+        "down": [
+          {
+            "x": 0,
+            "y": 160,
+            "width": 40,
+            "height": 40
+          },
+          {
+            "x": 40,
+            "y": 160,
+            "width": 40,
+            "height": 40
+          }
+        ],
+        "left": [
+          {
+            "x": 80,
+            "y": 160,
+            "width": 40,
+            "height": 40
+          },
+          {
+            "x": 120,
+            "y": 160,
+            "width": 40,
+            "height": 40
+          }
+        ],
+        "up": [
+          {
+            "x": 160,
+            "y": 160,
+            "width": 40,
+            "height": 40
+          },
+          {
+            "x": 200,
+            "y": 160,
+            "width": 40,
+            "height": 40
+          }
+        ],
+        "right": [
+          {
+            "x": 240,
+            "y": 160,
+            "width": 40,
+            "height": 40
+          },
+          {
+            "x": 280,
+            "y": 160,
+            "width": 40,
+            "height": 40
+          }
+        ]
+      },
+      "lie": {
+        "down": [
+          {
+            "x": 0,
+            "y": 200,
+            "width": 40,
+            "height": 40
+          },
+          {
+            "x": 40,
+            "y": 200,
+            "width": 40,
+            "height": 40
+          }
+        ],
+        "left": [
+          {
+            "x": 80,
+            "y": 200,
+            "width": 40,
+            "height": 40
+          },
+          {
+            "x": 120,
+            "y": 200,
+            "width": 40,
+            "height": 40
+          }
+        ],
+        "up": [
+          {
+            "x": 160,
+            "y": 200,
+            "width": 40,
+            "height": 40
+          },
+          {
+            "x": 200,
+            "y": 200,
+            "width": 40,
+            "height": 40
+          }
+        ],
+        "right": [
+          {
+            "x": 240,
+            "y": 200,
+            "width": 40,
+            "height": 40
+          },
+          {
+            "x": 280,
+            "y": 200,
+            "width": 40,
+            "height": 40
+          }
+        ]
+      },
+      "raise": {
+        "down": [
+          {
+            "x": 0,
+            "y": 240,
+            "width": 40,
+            "height": 40
+          },
+          {
+            "x": 40,
+            "y": 240,
+            "width": 40,
+            "height": 40
+          }
+        ],
+        "left": [
+          {
+            "x": 80,
+            "y": 240,
+            "width": 40,
+            "height": 40
+          },
+          {
+            "x": 120,
+            "y": 240,
+            "width": 40,
+            "height": 40
+          }
+        ],
+        "up": [
+          {
+            "x": 160,
+            "y": 240,
+            "width": 40,
+            "height": 40
+          },
+          {
+            "x": 200,
+            "y": 240,
+            "width": 40,
+            "height": 40
+          }
+        ],
+        "right": [
+          {
+            "x": 240,
+            "y": 240,
+            "width": 40,
+            "height": 40
+          },
+          {
+            "x": 280,
+            "y": 240,
+            "width": 40,
+            "height": 40
+          }
+        ]
+      }
+    },
+    "hair": {
+      "stand": {
+        "down": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          },
+          {
+            "x": 0,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          }
+        ],
+        "left": [
+          {
+            "x": 40,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          },
+          {
+            "x": 40,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          }
+        ],
+        "up": [
+          {
+            "x": 80,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          },
+          {
+            "x": 80,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          }
+        ],
+        "right": [
+          {
+            "x": 120,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          },
+          {
+            "x": 120,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          }
+        ]
+      },
+      "walk": {
+        "down": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          },
+          {
+            "x": 0,
+            "y": 40,
+            "width": 40,
+            "height": 40
+          }
+        ],
+        "left": [
+          {
+            "x": 40,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          },
+          {
+            "x": 40,
+            "y": 40,
+            "width": 40,
+            "height": 40
+          }
+        ],
+        "up": [
+          {
+            "x": 80,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          },
+          {
+            "x": 80,
+            "y": 40,
+            "width": 40,
+            "height": 40
+          }
+        ],
+        "right": [
+          {
+            "x": 120,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          },
+          {
+            "x": 120,
+            "y": 40,
+            "width": 40,
+            "height": 40
+          }
+        ]
+      },
+      "sit": {
+        "down": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          },
+          {
+            "x": 0,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          }
+        ],
+        "left": [
+          {
+            "x": 40,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          },
+          {
+            "x": 40,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          }
+        ],
+        "up": [
+          {
+            "x": 80,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          },
+          {
+            "x": 80,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          }
+        ],
+        "right": [
+          {
+            "x": 120,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          },
+          {
+            "x": 120,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          }
+        ]
+      },
+      "type": {
+        "down": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          },
+          {
+            "x": 0,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          }
+        ],
+        "left": [
+          {
+            "x": 40,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          },
+          {
+            "x": 40,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          }
+        ],
+        "up": [
+          {
+            "x": 80,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          },
+          {
+            "x": 80,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          }
+        ],
+        "right": [
+          {
+            "x": 120,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          },
+          {
+            "x": 120,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          }
+        ]
+      },
+      "talk": {
+        "down": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          },
+          {
+            "x": 0,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          }
+        ],
+        "left": [
+          {
+            "x": 40,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          },
+          {
+            "x": 40,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          }
+        ],
+        "up": [
+          {
+            "x": 80,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          },
+          {
+            "x": 80,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          }
+        ],
+        "right": [
+          {
+            "x": 120,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          },
+          {
+            "x": 120,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          }
+        ]
+      },
+      "lie": {
+        "down": [
+          {
+            "x": 0,
+            "y": 80,
+            "width": 40,
+            "height": 40
+          },
+          {
+            "x": 0,
+            "y": 80,
+            "width": 40,
+            "height": 40
+          }
+        ],
+        "left": [
+          {
+            "x": 40,
+            "y": 80,
+            "width": 40,
+            "height": 40
+          },
+          {
+            "x": 40,
+            "y": 80,
+            "width": 40,
+            "height": 40
+          }
+        ],
+        "up": [
+          {
+            "x": 80,
+            "y": 80,
+            "width": 40,
+            "height": 40
+          },
+          {
+            "x": 80,
+            "y": 80,
+            "width": 40,
+            "height": 40
+          }
+        ],
+        "right": [
+          {
+            "x": 120,
+            "y": 80,
+            "width": 40,
+            "height": 40
+          },
+          {
+            "x": 120,
+            "y": 80,
+            "width": 40,
+            "height": 40
+          }
+        ]
+      },
+      "raise": {
+        "down": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          },
+          {
+            "x": 0,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          }
+        ],
+        "left": [
+          {
+            "x": 40,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          },
+          {
+            "x": 40,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          }
+        ],
+        "up": [
+          {
+            "x": 80,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          },
+          {
+            "x": 80,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          }
+        ],
+        "right": [
+          {
+            "x": 120,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          },
+          {
+            "x": 120,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          }
+        ]
+      }
+    },
+    "accessory": {
+      "stand": {
+        "down": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          },
+          {
+            "x": 0,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          }
+        ],
+        "left": [
+          {
+            "x": 40,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          },
+          {
+            "x": 40,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          }
+        ],
+        "up": [
+          {
+            "x": 80,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          },
+          {
+            "x": 80,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          }
+        ],
+        "right": [
+          {
+            "x": 120,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          },
+          {
+            "x": 120,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          }
+        ]
+      },
+      "walk": {
+        "down": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          },
+          {
+            "x": 0,
+            "y": 40,
+            "width": 40,
+            "height": 40
+          }
+        ],
+        "left": [
+          {
+            "x": 40,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          },
+          {
+            "x": 40,
+            "y": 40,
+            "width": 40,
+            "height": 40
+          }
+        ],
+        "up": [
+          {
+            "x": 80,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          },
+          {
+            "x": 80,
+            "y": 40,
+            "width": 40,
+            "height": 40
+          }
+        ],
+        "right": [
+          {
+            "x": 120,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          },
+          {
+            "x": 120,
+            "y": 40,
+            "width": 40,
+            "height": 40
+          }
+        ]
+      },
+      "sit": {
+        "down": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          },
+          {
+            "x": 0,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          }
+        ],
+        "left": [
+          {
+            "x": 40,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          },
+          {
+            "x": 40,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          }
+        ],
+        "up": [
+          {
+            "x": 80,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          },
+          {
+            "x": 80,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          }
+        ],
+        "right": [
+          {
+            "x": 120,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          },
+          {
+            "x": 120,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          }
+        ]
+      },
+      "type": {
+        "down": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          },
+          {
+            "x": 0,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          }
+        ],
+        "left": [
+          {
+            "x": 40,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          },
+          {
+            "x": 40,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          }
+        ],
+        "up": [
+          {
+            "x": 80,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          },
+          {
+            "x": 80,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          }
+        ],
+        "right": [
+          {
+            "x": 120,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          },
+          {
+            "x": 120,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          }
+        ]
+      },
+      "talk": {
+        "down": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          },
+          {
+            "x": 0,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          }
+        ],
+        "left": [
+          {
+            "x": 40,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          },
+          {
+            "x": 40,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          }
+        ],
+        "up": [
+          {
+            "x": 80,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          },
+          {
+            "x": 80,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          }
+        ],
+        "right": [
+          {
+            "x": 120,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          },
+          {
+            "x": 120,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          }
+        ]
+      },
+      "lie": {
+        "down": [
+          {
+            "x": 0,
+            "y": 80,
+            "width": 40,
+            "height": 40
+          },
+          {
+            "x": 0,
+            "y": 80,
+            "width": 40,
+            "height": 40
+          }
+        ],
+        "left": [
+          {
+            "x": 40,
+            "y": 80,
+            "width": 40,
+            "height": 40
+          },
+          {
+            "x": 40,
+            "y": 80,
+            "width": 40,
+            "height": 40
+          }
+        ],
+        "up": [
+          {
+            "x": 80,
+            "y": 80,
+            "width": 40,
+            "height": 40
+          },
+          {
+            "x": 80,
+            "y": 80,
+            "width": 40,
+            "height": 40
+          }
+        ],
+        "right": [
+          {
+            "x": 120,
+            "y": 80,
+            "width": 40,
+            "height": 40
+          },
+          {
+            "x": 120,
+            "y": 80,
+            "width": 40,
+            "height": 40
+          }
+        ]
+      },
+      "raise": {
+        "down": [
+          {
+            "x": 0,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          },
+          {
+            "x": 0,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          }
+        ],
+        "left": [
+          {
+            "x": 40,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          },
+          {
+            "x": 40,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          }
+        ],
+        "up": [
+          {
+            "x": 80,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          },
+          {
+            "x": 80,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          }
+        ],
+        "right": [
+          {
+            "x": 120,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          },
+          {
+            "x": 120,
+            "y": 0,
+            "width": 40,
+            "height": 40
+          }
+        ]
+      }
+    }
+  }
+}

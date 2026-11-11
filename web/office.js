@@ -3,7 +3,7 @@
   'use strict';
   const api = factory();
   if (typeof module === 'object' && module.exports) module.exports = api;
-  if (root) root.AgentOfficeScene = Object.freeze({mount: api.mount,avatarSource:api.avatarSource,characterSource:api.characterSource,clockState:api.clockState,normalizeScene:api.normalizeScene});
+  if (root) root.AgentOfficeScene = Object.freeze({mount: api.mount,describe:api.describe,avatarSource:api.avatarSource,characterSource:api.characterSource,clockState:api.clockState,normalizeScene:api.normalizeScene});
 })(typeof window === 'object' ? window : null, function () {
   'use strict';
   const ASSETS = '/assets/office/';

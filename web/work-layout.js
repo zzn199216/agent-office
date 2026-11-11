@@ -41,5 +41,6 @@
     rail.hidden=!count&&!running.length;document.body.classList.toggle('has-work-rail',!rail.hidden);
     const roomButton=document.querySelector('#rooms [data-room="'+CSS.escape(value.roomId)+'"]');if(roomButton){let badge=roomButton.querySelector('.work-room-badge');if(count){if(!badge){badge=document.createElement('b');badge.className='work-room-badge';roomButton.append(badge);}badge.textContent=String(count);badge.setAttribute('aria-label',count+' 项需要你');}else badge?.remove();}
   }
-  window.AgentOfficeLayout={update,retainedApprovals};
+  function focusAttention(messageId){if(!context?.enabled||!rail)return false;const member=context.messages.find(m=>m.id===messageId)?.to_member_id,card=[...rail.querySelectorAll('[data-approval]')].find(c=>c.querySelector('[data-open-member]')?.dataset.openMember===member),target=card?.querySelector('input,textarea,button')||[...rail.querySelectorAll('[data-layout-resume]')].find(b=>b.dataset.layoutResume===member);if(!target)return false;document.body.classList.add('work-rail-open');target.scrollIntoView({block:'nearest'});target.focus();return true;}
+  window.AgentOfficeLayout={update,retainedApprovals,focusAttention};
 })();
