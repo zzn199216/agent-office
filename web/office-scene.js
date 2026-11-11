@@ -4,7 +4,7 @@
   const color=value=>typeof value==='string'&&/^#[a-f0-9]{6}$/i.test(value),point=(v,w,h)=>Array.isArray(v)&&v.length===2&&v.every(Number.isInteger)&&v[0]>=0&&v[0]<w&&v[1]>=0&&v[1]<h;
   const clone=value=>JSON.parse(JSON.stringify(value));
   function defaultScene(memberIds=[]){
-    const columns=Math.max(3,Math.ceil(Math.sqrt(memberIds.length))),rows=Math.ceil(memberIds.length/columns),width=Math.max(24,columns*4+8),height=Math.max(18,rows*4+8),stations={};
+    const columns=Math.max(3,Math.min(14,Math.ceil(Math.sqrt(memberIds.length)))),rows=Math.ceil(memberIds.length/columns),width=Math.min(64,Math.max(24,columns*4+8)),height=Math.min(64,Math.max(18,rows*4+8)),stations={};
     memberIds.forEach((id,i)=>stations[id]={at:[3+i%columns*4,3+Math.floor(i/columns)*4],face:'down'});
     return {schema:1,revision:0,grid:[width,height],stations,furniture:[
       {id:'sofa',type:'sofa',label:'沙发',at:[width-6,height-6],footprint:[3,1],parts:[{at:[0,0,0],size:[3,1,.5],color:'#3A4668',top:'#8A96BA'},{at:[0,0,.5],size:[3,.25,.6],color:'#3A4668',top:'#687799'}],slots:[{at:[width-6,height-4],face:'down',anim:'sit'},{at:[width-5,height-4],face:'left',anim:'lie'}],offers:[{action:'rest',when:'idle',weight:3,bubble:'休息一下'}]},
@@ -26,5 +26,28 @@
   }
   function station(scene,member,index=0){return scene.stations[member]||{at:[3+index%3*4,3+Math.floor(index/3)*4],face:'down'};}
   function project(x,y,z=0){return {x:(x-y)*18,y:(x+y)*9-z*18};}
-  return {ACTIONS,DIRECTIONS,defaultScene,validateScene,station,project};
+  const cell=at=>Math.round(at[0])+','+Math.round(at[1]);
+  function blocked(scene){
+    const result=new Set();
+    for(const s of Object.values(scene.stations))for(let x=0;x<2;x++)result.add(cell([s.at[0]+x,s.at[1]]));
+    for(const f of scene.furniture)for(let x=0;x<f.footprint[0];x++)for(let y=0;y<f.footprint[1];y++)result.add(cell([f.at[0]+x,f.at[1]+y]));
+    return result;
+  }
+  // Four-neighbour A*: bounded by the scene's 64x64 grid; no corner cutting.
+  function pathfind(scene,from,to,occupied=new Set()){
+    const [w,h]=scene.grid,start=from.map(Math.round),goal=to.map(Math.round);
+    if(!point(start,w,h)||!point(goal,w,h))return null;
+    const walls=blocked(scene),startKey=cell(start),goalKey=cell(goal);
+    for(const key of occupied)walls.add(key);walls.delete(startKey);
+    if(walls.has(goalKey))return null;
+    const distance=at=>Math.abs(at[0]-goal[0])+Math.abs(at[1]-goal[1]),open=[{at:start,g:0,f:distance(start)}],cost=new Map([[startKey,0]]),parents=new Map(),closed=new Set();
+    while(open.length){
+      let best=0;for(let i=1;i<open.length;i++)if(open[i].f<open[best].f)best=i;
+      const node=open.splice(best,1)[0],key=cell(node.at);if(closed.has(key))continue;closed.add(key);
+      if(key===goalKey){const route=[goal];let cursor=key;while(cursor!==startKey){const previous=parents.get(cursor);route.push(previous);cursor=cell(previous);}return route.reverse();}
+      for(const [dx,dy]of [[1,0],[0,1],[-1,0],[0,-1]]){const next=[node.at[0]+dx,node.at[1]+dy],nk=cell(next),g=node.g+1;if(!point(next,w,h)||walls.has(nk)||closed.has(nk)||g>=(cost.get(nk)??Infinity))continue;cost.set(nk,g);parents.set(nk,node.at);open.push({at:next,g,f:g+distance(next)});}
+    }
+    return null;
+  }
+  return {ACTIONS,DIRECTIONS,defaultScene,validateScene,station,project,cell,blocked,pathfind};
 });

@@ -13,6 +13,7 @@
 .canvas-office .canvas-note{position:absolute;transform:translate(-50%,-100%);z-index:3;pointer-events:auto;min-height:44px;max-width:170px;width:max-content;display:flex;flex-direction:column;align-items:flex-start;gap:2px;text-align:left;font-size:12px;line-height:1.35;padding:5px 8px;background:#ffffffed;border-color:#DDE1E7;box-shadow:0 2px 6px #15181E10!important}
 .canvas-note.state-working{border-color:#2F5FD0}.canvas-note.state-attention{background:#FDEBDD;border-color:#F08A3C;color:#8A3A06;z-index:100}.canvas-note.state-unconnected{background:#f0f1f4;color:#434b58;z-index:4}.canvas-note.state-idle span{display:none}.canvas-note.state-idle{min-height:28px;opacity:.92;font-size:11px}
 .canvas-error{margin:0;padding:8px 12px;color:#8A3A06;background:#FDEBDD}
+.canvas-office .canvas-note[hidden]{display:none!important}.canvas-office .canvas-note.state-idle span{display:block}.canvas-office .canvas-note.state-idle{min-height:44px;opacity:1}
 body.canvas-office #work-empty-station,body.canvas-office #work-office-expand{display:none!important}
 body.work-layout.canvas-office #officeScene{height:auto;min-height:0;flex:0 0 auto;max-height:57vh;overflow:visible;border:0}
 body:not(.work-layout).canvas-office .canvas-office{height:100%}

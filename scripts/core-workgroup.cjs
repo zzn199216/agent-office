@@ -26,5 +26,6 @@ module.exports=async function({service,page,api,room,shot}){
   const claims=await require('./core-group-claims.cjs')({service,page,api,room,shot,members:[a,b],prompts});
   const layout=await require('./core-work-layout.cjs')({service,page,api,room,shot,members:[a,b]});
   const canvas=await require('./core-office-canvas.cjs')({service,page,api,roomId:layout.room_id,members:[a,b],shot});
-  return {ok:true,canvas,layout,extra_calls:1,direct_rules:1,catchup:true,off_extra_calls:0,claims};
+  const walking=await require('./core-office-walking.cjs')({service,page,api,roomId:layout.room_id,shot});
+  return {ok:true,canvas,walking,layout,extra_calls:1,direct_rules:1,catchup:true,off_extra_calls:0,claims};
 };
