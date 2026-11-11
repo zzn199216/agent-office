@@ -15,14 +15,22 @@
       return {id:m.id,member:m,profile:key,variant:variant%5,state,label,note:String(note).slice(0,220),message_id:request?.id||null};
     });
   }
+  function events(input){
+    const ids=new Set((input.participants||[]).map(m=>m.id)),result=[];
+    for(const m of (input.messages||[]).slice(-64))if(ids.has(m.sender_id)&&ids.has(m.to_member_id)&&m.sender_id!==m.to_member_id&&!m.connection_verification&&!['failed','cancelled'].includes(m.status)&&['message','reply'].includes(m.kind))result.push({id:'message:'+m.id,type:'pair',from:m.sender_id,to:m.to_member_id,text:String(m.text||'').slice(0,90),seq:m.seq||0});
+    for(const meeting of (input.group?.meetings||[]).slice(-16))for(const report of meeting.reports||[])if(report.source==='member_actual'&&[1,2].includes(report.round)&&ids.has(report.member_id)){
+      const content=report.content||{};result.push({id:'claim:'+meeting.id+':'+report.member_id+':'+report.round,type:'claim',from:report.member_id,round:report.round,text:String(report.round===1?content.first_step||'':content.choice||content.helper_scope||'').slice(0,90)});
+    }
+    return result.slice(-96);
+  }
   class Director{
     constructor(options={}){this.random=options.random||Math.random;this.reset();}
-    reset(){this.entities=new Map();this.reservations=new Map();this.scene=null;this.features={};this.now=0;this.lastStep=null;}
+    reset(){this.entities=new Map();this.reservations=new Map();this.scene=null;this.features={};this.now=0;this.lastStep=null;this.seen=new Set();this.maxSeq=0;this.eventsEnabled=false;this.eventQueue=[];this.playedEvents=[];}
     home(e){return [e.seat.at[0],e.seat.at[1]+1];}
     pose(e){e.anim=e.state==='working'?'type':e.state==='attention'?'raise':e.state==='unconnected'?null:'sit';e.face=e.seat.face;e.frame=0;}
     occupied(except){const cells=new Set();for(const e of this.entities.values())if(e.id!==except){cells.add(model.cell(e.at));if(e.script?.target)cells.add(model.cell(e.script.target));}for(const [key,owner]of this.reservations)if(owner!==except)cells.add(key);return cells;}
     idleLater(e){e.idleDue=this.now+12000+Math.floor(this.random()*8000);}
-    cancel(e){if(e.reservation&&this.reservations.get(e.reservation)===e.id)this.reservations.delete(e.reservation);e.reservation=null;e.script=null;e.bubble='';this.idleLater(e);}
+    cancel(e,linked=true){const partner=this.entities.get(e.partner);if(linked&&e.eventId&&partner?.eventId===e.eventId){this.cancel(partner,false);this.pose(partner);}if(e.reservation&&this.reservations.get(e.reservation)===e.id)this.reservations.delete(e.reservation);e.reservation=null;e.script=null;e.bubble='';e.eventId=null;e.partner=null;this.idleLater(e);}
     settle(e,walk=false){
       this.cancel(e);this.pose(e);const home=this.home(e);
       if(walk&&this.features.walking&&!this.features.reduced_motion&&e.state!=='unconnected'&&e.state!=='attention'&&model.cell(e.at)!==model.cell(home))this.startScript(e.id,[{walkTo:home}],'reaction');
@@ -35,7 +43,7 @@
         const seat=model.station(scene,fact.id,index),prior=this.entities.get(fact.id),seatChanged=prior&&model.cell(prior.seat.at)!==model.cell(seat.at),changed=prior&&prior.state!==fact.state;
         const e=prior||{id:fact.id,at:[seat.at[0],seat.at[1]+1],frame:0,script:null,bubble:''};e.fact=fact;e.seat=seat;e.state=fact.state;this.entities.set(fact.id,e);
         if(!prior){this.pose(e);this.idleLater(e);if(!initial&&features.walking&&!features.reduced_motion&&e.state==='idle'){const entry=[1,1];if(!this.occupied(e.id).has(model.cell(entry)))e.at=entry;this.settle(e,true);}}
-        else if(changed||seatChanged||!features.walking||features.reduced_motion||!features.ambient&&e.script?.layer==='ambient')this.settle(e,changed||seatChanged);
+        else if(changed||seatChanged||!features.walking&&e.script?.steps.some(s=>s.walkTo)||features.reduced_motion||!features.ambient&&e.script?.layer==='ambient'||!features.interactions&&e.eventId)this.settle(e,changed||seatChanged);
         if(ambientEnabled)this.idleLater(e);
       });return this.entities;
     }
@@ -43,6 +51,36 @@
       const e=this.entities.get(id);if(!e||e.state==='unconnected'||layer==='ambient'&&e.state!=='idle'||!Array.isArray(steps)||steps.length>40)return false;
       if(steps.some(s=>!s||Object.keys(s).some(k=>!['walkTo','face','animate','bubble','wait'].includes(k))||s.walkTo&&(!Array.isArray(s.walkTo)||s.walkTo.length!==2||s.walkTo.some(v=>!Number.isInteger(v)))||s.face&&!model.DIRECTIONS.includes(s.face)||s.animate&&!model.ACTIONS.includes(s.animate)||s.wait!==undefined&&(!Number.isFinite(s.wait)||s.wait<0||s.wait>60000)||s.bubble!==undefined&&(typeof s.bubble!=='string'||s.bubble.length>140)))return false;
       this.cancel(e);e.script={steps:steps.map(s=>({...s})),index:0,layer,path:null,target:null,until:null};return true;
+    }
+    observe(list){
+      const enabled=this.features.interactions===true,wasEnabled=this.eventsEnabled;this.eventsEnabled=enabled;let added=false;
+      for(const event of list){
+        const old=this.seen.has(event.id)||event.type==='pair'&&event.seq<=this.maxSeq;this.seen.add(event.id);if(event.type==='pair')this.maxSeq=Math.max(this.maxSeq,event.seq||0);
+        if(enabled&&wasEnabled&&!old){this.eventQueue.push({...event,deadline:this.now+15000});added=true;}
+      }
+      while(this.seen.size>512)this.seen.delete(this.seen.values().next().value);
+      if(!enabled)this.eventQueue=[];this.eventQueue=this.eventQueue.slice(-16);return added;
+    }
+    playEvents(now){
+      for(let index=0;index<this.eventQueue.length;){
+        const event=this.eventQueue[index],a=this.entities.get(event.from),b=this.entities.get(event.to);
+        if(event.deadline<now||!a||['attention','unconnected'].includes(a.state)||event.type==='pair'&&(!b||['attention','unconnected'].includes(b.state))){this.eventQueue.splice(index,1);continue;}
+        if(a.script?.layer==='reaction'||b?.script?.layer==='reaction'){index++;continue;}
+        this.eventQueue.splice(index,1);
+        if(event.type==='claim'){
+          if(a.state!=='idle')continue;
+          this.startScript(a.id,[{animate:event.round===1?'raise':'talk'},{bubble:'真实认领 · 第 '+event.round+' 轮：'+event.text},{wait:2400}]);a.eventId=event.id;
+        }else{
+          this.cancel(a);this.cancel(b);b.at=this.home(b);this.pose(b);
+          const home=this.home(b),near=[[home[0]+1,home[1]],[home[0],home[1]+1],[home[0]-1,home[1]]].map(at=>({at,path:model.pathfind(this.scene,a.at,at,this.occupied(a.id))})).find(v=>v.path&&v.path.length<=25);
+          const walk=this.features.walking&&near,eta=walk?Math.min(10000,near.path.length*340):0;
+          const first=walk?[{walkTo:near.at}]:[];
+          this.startScript(a.id,[...first,{face:'up'},{animate:'talk'},{bubble:'给 '+b.fact.member.name.slice(0,20)+'：'+event.text},{wait:2800},{bubble:''},...(walk?[{walkTo:this.home(a)}]:[])]);
+          this.startScript(b.id,[{wait:eta},{face:'left'},{animate:'talk'},{bubble:a.fact.member.name.slice(0,20)+' 发来：'+event.text},{wait:2800}]);
+          a.eventId=b.eventId=event.id;a.partner=b.id;b.partner=a.id;
+        }
+        this.playedEvents.push({id:event.id,type:event.type,from:event.from,to:event.to||null,round:event.round||null});this.playedEvents=this.playedEvents.slice(-64);
+      }
     }
     ambient(e){
       if(!this.features.ambient||!this.features.walking||e.state!=='idle'||e.script)return false;
@@ -70,7 +108,7 @@
     advance(e,now,dt){
       const script=e.script;if(!script)return false;
       for(let guard=0;guard<40&&e.script;guard++){
-        const instruction=script.steps[script.index];if(!instruction){this.cancel(e);this.pose(e);return true;}
+        const instruction=script.steps[script.index];if(!instruction){this.cancel(e,false);this.pose(e);return true;}
         if(instruction.walkTo){
           if(!this.features.walking){e.at=[...instruction.walkTo];script.index++;continue;}
           if(!script.path){const path=model.pathfind(this.scene,e.at,instruction.walkTo,this.occupied(e.id));if(!path){this.cancel(e);this.pose(e);return true;}script.path=path.slice(1);script.target=null;}
@@ -87,7 +125,7 @@
       return true;
     }
     step(now,reduced=false){
-      const dt=this.lastStep===null?100:Math.max(0,Math.min(180,now-this.lastStep));this.lastStep=now;this.now=now;let moving=false;
+      const dt=this.lastStep===null?100:Math.max(0,Math.min(180,now-this.lastStep));this.lastStep=now;this.now=now;let moving=false;if(!reduced)this.playEvents(now);else this.eventQueue=[];
       for(const e of this.entities.values()){
         if(reduced){if(e.script){this.settle(e);moving=true;}e.frame=0;continue;}
         if(e.state==='idle'&&!e.script&&e.idleDue<=now)this.ambient(e);
@@ -97,5 +135,5 @@
       return moving;
     }
   }
-  return {facts,profile,Director};
+  return {facts,events,profile,Director};
 });

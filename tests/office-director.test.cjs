@@ -32,3 +32,13 @@ test('an unfamiliar furniture offer runs without a type branch, reserves its slo
   director.update([{...a,state:'working',note:'real task'},b],scene,{walking:true,ambient:true});assert.equal(director.reservations.size,0);assert.notEqual(entity.script?.layer,'ambient');assert.equal(entity.fact.note,'real task');assert.equal(a.state,'idle');
   director.update([a,b],scene,{walking:true,ambient:true,reduced_motion:true});director.step(30000,true);assert.equal(director.reservations.size,0);assert.equal(director.nextWake(true),null);
 });
+test('only actual new peer messages and actual claim rounds become reactions; predictions and old history stay silent',()=>{
+  const {events}=require('../web/office-director.js'),director=new Director(),scene=model.defaultScene(['a','b']),a=fact('a'),b=fact('b');director.update([a,b],scene,{interactions:true,walking:true});
+  const input={participants:[a.member,b.member],messages:[{id:'old',seq:1,sender_id:'a',to_member_id:'b',kind:'message',text:'old'}],group:{meetings:[{id:'m',predictions:[{member_id:'a',first_step:'not actual'}],reports:[{member_id:'a',round:1,source:'secretary_prediction',content:{first_step:'fake'}}]}]}};
+  director.observe(events(input));director.step(0);assert.equal(director.playedEvents.length,0);
+  input.messages.push({id:'new',seq:2,sender_id:'a',to_member_id:'b',kind:'message',text:'real question'});director.observe(events(input));director.step(100);assert.equal(director.playedEvents.length,1);assert.equal(director.entities.get('a').anim,'walk');
+  for(let now=200;now<8000;now+=100)director.step(now);assert.equal(director.entities.get('a').script,null);director.observe(events(input));assert.equal(director.eventQueue.length,0);
+  input.group.meetings[0].reports.push(...[1,2].map(round=>({member_id:'b',round,source:'member_actual',content:{first_step:'actual approach',choice:'actual nomination'}})));director.observe(events(input));
+  for(let now=8000;now<14000;now+=100)director.step(now);assert.deepEqual(director.playedEvents.filter(e=>e.type==='claim').map(e=>e.round),[1,2]);assert.equal(director.step(15000),false);
+  director.update([a,b],scene,{interactions:false,walking:true});input.messages.push({id:'off',seq:3,sender_id:'a',to_member_id:'b',kind:'message',text:'off'});director.observe(events(input));assert.equal(director.eventQueue.length,0);
+});

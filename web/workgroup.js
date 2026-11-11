@@ -1,7 +1,7 @@
 (function(){
   'use strict';
   const esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-  let context=null,controls=null,dialog=null,cardsDialog=null;const modes=new Map();
+  let context=null,controls=null,dialog=null,cardsDialog=null,featuresRoom=null;const modes=new Map();
   const flags=[['claims','认领与成员分工'],['trial','两位成员只读试用（调用量增加，选用后再执行）'],['work_layout','办公室与对话同屏'],['canvas','新办公室画布'],['walking','人物走动'],['ambient','空闲活动（需开启人物走动）'],['interactions','成员互动'],['scene_editor','场景布置'],['reduced_motion','减少动画']];
   function install(){
     controls=document.createElement('div');controls.id='group-controls';controls.className='group-controls';
@@ -19,9 +19,9 @@
       await context.refresh();renderCards();
     });};
     controls.querySelector('#group-enabled').onchange=event=>{const enabled=event.target.checked,room=context.roomId;context.action(async()=>{await context.api('/api/room/features',{room_id:room,discussion:enabled});context.resetRecipient(enabled);await context.refresh();});};
-    controls.querySelector('#room-feature-options').onclick=()=>{const settings=context.group.settings;for(const input of dialog.querySelectorAll('[data-room-feature]'))input.checked=!!settings[input.dataset.roomFeature];dialog.querySelector('#group-daily-limit').value=settings.daily_limit??'';dialog.showModal();};
+    controls.querySelector('#room-feature-options').onclick=()=>{featuresRoom=context.roomId;const settings=context.group.settings;for(const input of dialog.querySelectorAll('[data-room-feature]'))input.checked=!!settings[input.dataset.roomFeature];dialog.querySelector('#group-daily-limit').value=settings.daily_limit??'';dialog.showModal();};
     dialog.querySelector('[data-features-close]').onclick=()=>dialog.close();
-    dialog.querySelector('#room-features-save').onclick=()=>context.action(async()=>{const patch={room_id:context.roomId};for(const input of dialog.querySelectorAll('[data-room-feature]'))patch[input.dataset.roomFeature]=input.checked;const limit=dialog.querySelector('#group-daily-limit').value;patch.daily_limit=limit===''?null:Number(limit);await context.api('/api/room/features',patch);dialog.close();await context.refresh();});
+    dialog.querySelector('#room-features-save').onclick=()=>{if(featuresRoom!==context.roomId){dialog.close();return;}const patch={room_id:featuresRoom};for(const input of dialog.querySelectorAll('[data-room-feature]'))patch[input.dataset.roomFeature]=input.checked;const limit=dialog.querySelector('#group-daily-limit').value;patch.daily_limit=limit===''?null:Number(limit);context.action(async()=>{await context.api('/api/room/features',patch);dialog.close();await context.refresh();});};
     document.addEventListener('click',event=>{const button=event.target.closest('[data-group-reassign]');if(!button)return;const card=button.closest('[data-group-card]'),member=card.querySelector('[data-group-owner]').value;context.action(async()=>{button.disabled=true;try{await context.api('/api/group/reassign',{room_id:context.roomId,message_id:button.dataset.groupReassign,member_id:member});await context.refresh();}finally{button.disabled=false;}});});
     document.addEventListener('click',event=>{const button=event.target.closest('[data-group-decision],[data-group-listen]');if(!button)return;const section=button.closest('[data-group-card]'),message=section.dataset.groupCard;context.action(async()=>{button.disabled=true;try{
       if(button.dataset.groupListen)await context.api('/api/group/claim',{room_id:context.roomId,message_id:message,member_id:button.dataset.groupListen});
@@ -29,7 +29,7 @@
       else await context.api('/api/group/decision',{room_id:context.roomId,message_id:message,action:button.dataset.groupDecision,member_id:button.dataset.memberId});await context.refresh();
     }finally{button.disabled=false;}});});
   }
-  function update(value){context=value;if(!context.group)return;if(!controls)install();const {group}=context;controls.querySelector('#group-enabled').checked=group.settings.discussion;controls.querySelector('#group-call-count').textContent='今日 '+group.today_calls+' 次';const notice=group.routes.find(r=>r.status==='needs_user');controls.querySelector('#group-notice').textContent=group.settings.discussion&&notice?notice.reason:'';}
+  function update(value){if(context&&context.roomId!==value.roomId){dialog?.close();cardsDialog?.close();}context=value;if(!context.group)return;if(!controls)install();const {group}=context;controls.querySelector('#group-enabled').checked=group.settings.discussion;controls.querySelector('#group-call-count').textContent='今日 '+group.today_calls+' 次';const notice=group.routes.find(r=>r.status==='needs_user');controls.querySelector('#group-notice').textContent=group.settings.discussion&&notice?notice.reason:'';}
   function card(message,group,members){
     const route=group?.routes.find(r=>r.message_id===message.id);if(!route)return '';const member=members.find(m=>m.id===route.owner_id),name=id=>members.find(m=>m.id===id)?.name||'成员',status={triaging:'秘书在看交给谁',assigned:'处理中',collaborating:'协助者在处理各自部分',trial:'两位正在只读比较',trial_choice:'请选用一份',review:'等待你确认',needs_user:'需要你选择',completed:'已采纳'}[route.status]||route.status;
     let content='<div class="group-task-summary"><strong>'+esc(member?member.name+' 负责':status)+'</strong><span>'+esc(route.reason)+'</span><small>'+esc(status)+'</small>';

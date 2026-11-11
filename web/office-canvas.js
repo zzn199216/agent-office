@@ -54,7 +54,7 @@
     function update(input){
       const nextFacts=drama.facts(input),nextLayout=model.validateScene(input.sceneData||model.defaultScene(nextFacts.map(f=>f.id))),phase=root.AgentOfficeScene.clockState(input.scene?.time_zone,input.scene?.time_mode).phase,next={...input,night:phase==='night'||phase==='dusk'},key=JSON.stringify([input.roomId,nextFacts.map(f=>[f.id,f.profile,f.variant,f.state,f.label,f.note,f.message_id]),nextLayout,next.night,input.features]);
       if(current?.roomId&&current.roomId!==input.roomId){cancel();release();director.reset();expanded=false;scene.classList.remove('expanded');world.hidden=true;expand.setAttribute('aria-expanded','false');expand.textContent='展开办公室';signature='';}
-      current=next;facts=nextFacts;layout=nextLayout;director.update(facts,layout,input.features||{},view.performance.now());if(key!==signature){signature=key;dirty=true;markup();if(active()){dimensions();schedule();}}return metrics;
+      current=next;facts=nextFacts;layout=nextLayout;director.update(facts,layout,input.features||{},view.performance.now());const eventsChanged=director.observe(drama.events(input));if(key!==signature||eventsChanged){signature=key;dirty=true;markup();if(active()){dimensions();schedule();}}return metrics;
     }
     function visibility(){cancel();if(active()){dimensions();dirty=true;schedule();}else if(document.hidden||!visible||!intersecting)release();}
     const nativeVisibility=event=>{if(typeof event.detail?.visible==='boolean'&&visible!==event.detail.visible){visible=event.detail.visible;visibility();}};
