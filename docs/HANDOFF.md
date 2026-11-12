@@ -2,6 +2,68 @@
 
 本项目目前处于本地开发阶段。以源码、测试和 Git 提交为准；开发入口及构建命令见根目录 README。生成包、依赖缓存、日志、截图和临时测试数据不属于源码，不应提交。历史设计稿、阶段报告和旧交接记录可从 Git 历史查阅。
 
+## preview.34 验收修复交付（2026-11-12）
+
+范围：只复验用户的《preview.33 验收后的修复任务》14 项及第三节补验证。基线 `b2d61d7`（preview.33），当前版本 **0.15.0-preview.34**，开发分支 `codex/onboarding-progress-compose`。14 个问题各有独立修复提交；“打开 API 配置”错误后的按钮恢复另有一个补验证发现的修复提交。Y: 旧快照工作目录不参与本轮修改。
+
+源码位置以当前 checkout 为根：`web/` 为界面，`src/` 为服务，`scripts/validate-p33-fixes.cjs` 为本轮浏览器回归。滚动包入口 `dev/AgentOffice.exe`，包内 `dev/release-manifest.json` 的 `source` 记录实际构建提交与指纹；复验前核对版本与该提交，完整保留 `integrations/` 和 Git 历史。不要使用 Y: 的旧快照或导出后缺文件的源码。
+
+### 修复与会在修复前失败的回归
+
+| # | 用户可见的结果 | 修复提交 | 回归名称 |
+| --- | --- | --- | --- |
+| 1 | 输入、发送保留高度；办公室最多占一半，矮窗口自动收起 | `990bfb3` | 浏览器 `layout`：1440×900、1280×720、1024×600 各展开/收起，输入/发送底边不出视口，对话至少 160px |
+| 2 | 每间房间独立保存文字、图片和收件人；发送中切房间不误清草稿 | `2a8f178` | 浏览器 `drafts`，含延迟发送并切房间 |
+| 3 | 只按真实第二轮发言裁决，部分认领等待用户决定；派出后拒绝继续认领 | `f262040` | `partial actual claims wait for the user; predictions never vote and dispatched claims reject without cost`；浏览器 `claims` |
+| 4 | 图片可重新验证缓存，状态刷新保留头像节点 | `f4c5b60` | 浏览器 `images`：两套办公室各刷新 5 次、零 assets 请求；`public asset validators reuse identical bytes and serve changed release bytes on first revalidation` |
+| 5 | 只开启同屏也显示 Canvas 窄状态带，能看到全部成员状态 | `456926a` | 浏览器 `layout_only`，保留对话至少 160px |
+| 6 | 选择器正文、失败原因及行提示至少 12px | `d7d3b74` | 浏览器 `picker_text`，修复前检测到 8px 与 10px |
+| 7 | 侧栏加号、省略号有足够对比度；画布样式限制在场景内 | `8e6854e` | 浏览器 `sidebar_icons` |
+| 8 | 改变窗口宽度时重新计算画布尺寸与投影，右侧不留未绘制区域 | `12462b3` | 浏览器 `canvas_resize`：1280、1920、1440 宽度，画布覆盖视口且空闲停止重绘 |
+| 9 | 开关旁说明当天额度用完，以及到房间选项调整每日上限 | `ca9311c` | 浏览器 `daily_limit`，真实消耗最后一次夹具分派调用 |
+| 10 | 待选择任务的负责人默认采用秘书建议；用户改选仍跨刷新保存 | `61293d9` | 浏览器 `suggested_owner`，建议第三位成员 |
+| 11 | 关闭群内讨论后收件人回到本房间秘书 | `51910da` | 浏览器 `secretary_recipient`，上一条明确发给其他成员 |
+| 12 | 本机昼夜配色、每房间灯光保存；夜间关灯也有可见变化 | `a9e792f` | 浏览器 `canvas_lighting`：固定本机中午/夜间、关灯、刷新和切房间；昼夜与开关各重绘一次 |
+| 13 | 等待反馈只举手一次并定格；文字“等待你的反馈”，便签显示具体事项 | `ae83ade` | `attention raises once then holds its pose with no animation wakeups`；浏览器 `static_attention`：3.1 秒内 RAF 请求 0，修复前 28 |
+| 14 | 房间选项中只读查看失败、移出、归档；复制安全诊断并定位统一选择器 | `460e559` | `tests/failure-archive.test.cjs` 三项；浏览器 `failure_archive`：三次失败、一条移出、剪贴板白名单、查看时零写请求 |
+| 补验证 | 编辑器错误后按钮恢复原文且可再次点击，成功/失败均有提示 | `fb8840e` | 浏览器 `api_editor_feedback`：Windows 成功启动器夹具与 Linux 501 分支；修复前 Linux 按钮停在“正在处理…” |
+
+所有浏览器回归使用全新数据目录、生产界面和 HTTP 路径，客户端和模型为夹具；每项独立实例。红灯日志位于 `output/p33-*-red.log`，定向通过日志为相应 `*-green.log`。图片网络请求的断言使用真实浏览器缓存，未用全局拦截替代缓存。
+
+### 第三节逐项补验证与证据
+
+逻辑专项已独立运行 **101 个测试通过，0 失败、0 跳过**；证据 `output/p34-supplemental-logic.log`。完整的六条浏览器流程及工作群检查也已通过，证据 `output/playwright/core-flows/result.json`；对应截图同目录。
+
+| 补验证项 | 当前结果及独立检查 | 证据 |
+| --- | --- | --- |
+| Windows exe 启动、桌面窗口、manifest 提交一致 | 打包 CLI、自安装、MCP 和清单哈希由完整 Windows 门禁检查；可见桌面窗口实测仍待电脑空闲确认 | 门禁的 `package-smoke.json`、`packaged-mcp.json`、`dev/release-manifest.json`；实窗状态见待确认清单 |
+| 打包后的在线/服务关闭后页面无缺文件 | 门禁逐一核对全部公开网页依赖与图片的包内字节及离线资源；原生 WebView 的在线/离线截图仍待电脑空闲确认 | `package-smoke.json`、`dev/desktop/desktop-manifest.json`；实窗命令见下文 |
+| 打开 API 配置真的打开编辑器，两个平台恢复按钮 | 成功启动器夹具核对 `notepad.exe` 和唯一测试文件；Linux 501 后提示和按钮恢复通过；Windows 编辑器实际可见性待确认 | `api_editor_feedback`；`Claude gateway configuration opens the saved file without auth login or credential rewrites` |
+| 删除房间时收尾；未知请求不自动重放 | 通过 | `tests/onboarding-lifecycle.test.cjs` 的 `retry closes its predecessor; leaving and deleting close every unfinished row and attempt`、`uncertain verification keeps the original attempt and never schedules another run`；`tests/onboarding-verification.test.cjs` 的 `deleting the old room never retries a check whose native submission is still uncertain` |
+| 名片确认、固定、战绩、衰减、只读试用选用 | 通过 | `tests/group-claims.test.cjs` 的 `name card suggestions cannot change pinned user roles; confirmed skills keep individual pins and outcomes decay`、`trial is opt-in, produces two read-only results, and publishes only the selected answer`；浏览器 `workgroup.claims` |
+| 超时交接；已送达但未知的结果待核验 | 通过 | `an expired ownership waits for a confirmed managed stop, then transfers exactly once`、`an uncertain execution remains blocked on lease expiry and cannot create another owner turn` |
+| 旧例会不唤醒自动目标；手动目标和任务仍可用 | 通过 | `automatic group ownership cannot start a second legacy task or scheduled meeting for the same goal`；`tests/team.test.cjs` 的 `one secretary coordinates two windows through deliverables, a meeting, brief acknowledgement and goal acceptance` |
+| 绕家具、工作打断休息、预测不互动、历史不补播、气泡不重叠 | 通过 | `tests/office-director.test.cjs` 六项；浏览器 `workgroup.walking`、`ambient`、`interactions`，成对气泡几何交叉面积为 0 |
+| 授权表单刷新不丢输入 | 通过 | `refreshing the timeline retains an unchanged approval form node and its focus but discards resolved cards`、`a changed onboarding stage retains the pending form draft and focus in the connection page`；浏览器 `workgroup.layout.approval_preserved_and_submitted` |
+
+性能预检（Windows、隔离 Chromium，展开减收起，MiB）：
+
+| 成员数 | 进程私有内存差值 | JS 堆差值 | 解码位图差值 | 画布差值 |
+| --- | ---: | ---: | ---: | ---: |
+| 3 | 3.8320 | 0.1206 | 0.5615 | 1.6976 |
+| 100 | 18.8828 | 0.0231 | 4.7363 | 7.0073 |
+
+进程私有内存为该隔离浏览器进程集合的 `PrivateMemorySize64` 之和；JS 堆来自 CDP 并先回收垃圾；位图和画布按实际分配计数。它们不是原生 WebView 宿主内存。证据 `output/playwright/core-flows/result.json` 中 `workgroup.canvas`；空闲重绘为 0，工作中约 9.11 帧/秒。最终门禁还会独立采样，数值可有正常波动。
+
+正式数据库只运行只读 stats，未启动新版本服务：preview.34 之后的尝试为 **0**，不能算成功率或声称成功率提升。证据 `output/p34-formal-stats-readonly.json`。三失败后移出这一统计转换在隔离夹具中验证为 `failed:1 → 0`、`abandoned:0 → 1`，失败码计数仍为 3。
+
+### 完整门禁、复验方式与待确认
+
+- `npm run verify:dev` 包括零跳过 Node 测试、六条浏览器旅程、现有 UI 验证、本轮 15 项浏览器回归、构建、打包 MCP、包自测、启动恢复及清单哈希。最终结果读取 `output/verify-dev/latest.json`，逐步日志及截图在其 `result_path` 相邻目录；未得到 `status: passed` 的构建不能交付。
+- 远端验收使用 GitHub 开发分支对应提交的 Windows CI；CI 链接由本轮交付消息提供。复验范围只限本节 14 项和补验证，不恢复已后置的功能改动。
+- 当前等待的是电脑空闲确认，然后运行 `node scripts/validate-desktop.cjs --runtime dev/AgentOffice.exe --use-built-desktop`，核对本轮独有临时数据窗口及在线/离线截图；再在独立的无凭据 Claude 配置文件上实开编辑器并观察按钮恢复。仓库 AGENTS.md 要求操作客户端窗口前确认电脑当前可用，已发出询问；收到答复前这些实窗项保持待验证。
+- 本轮尚未升级或启动正式数据，因此正式数据清理及真实账号接入成功率不属于已通过项。没有真实模型调用或个人客户端资格声明。
+
 ## 目录与责任
 
 - `src/`：本地服务、持久信箱、MCP、成员权限和客户端适配器。
