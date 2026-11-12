@@ -38,13 +38,17 @@ cases.images=async f=>{
 cases.layout_only=async f=>{
   await f.features({work_layout:true,canvas:false});await f.page.setViewportSize({width:1440,height:900});const count=await f.page.locator('.canvas-strip [data-scene-member]').count();assert.equal(count,f.members.length,'Concurrent layout must show every member even without the standalone Canvas flag');assert.equal(await f.page.locator('[data-canvas-expand]').getAttribute('aria-expanded'),'false');assert.ok(await f.page.locator('#chat-stream').evaluate(node=>node.getBoundingClientRect().height>=160));
 };
+cases.picker_text=async f=>{
+  await f.page.locator('#professional-toggle').click();if(!await f.page.locator('#secretary-connect-dialog').evaluate(node=>node.open))await f.page.locator('#professional-toggle').click();await f.page.locator('#secretary-connect-candidates .launch-candidate').first().waitFor();
+  const tiny=await f.page.locator('#secretary-connect-dialog').evaluate(host=>[...host.querySelectorAll('p,small,li,summary,.launch-candidate-info span')].filter(node=>node.getBoundingClientRect().width&&node.getBoundingClientRect().height&&node.textContent.trim()&&parseFloat(getComputedStyle(node).fontSize)<12).map(node=>({text:node.textContent.trim().slice(0,70),font:getComputedStyle(node).fontSize})));assert.deepEqual(tiny,[],'Picker body text must be at least 12px');await f.page.locator('#secretary-connect-dialog .close-dialog').first().click();
+};
 
 async function main(){
   const files=fixture(),out=outputDirectory('p33-fixes'),proof={ok:false,isolated:true,real_clients_or_models:false,checks:{},cases:[],screenshots:[]};fs.mkdirSync(out,{recursive:true});
   let service,server,browser,page,base;const token=id(),errors=[],external=[];
   const forbidden=async()=>{throw Error('No personal clients, model calls or installers in acceptance fixes');};
   try{
-    service=new RoomService(files.data,{codex:new FakeCodex(),vault:new FakeVault(),fetch:forbidden,chat:{clientFactory:()=>{const client=new FakeCodex(),run=client.run.bind(client);client.run=async input=>({...await run(input),answer:'独立夹具已完成本条检查'});return client;}},launch:{discover:()=>({candidates:[]}),installer:forbidden},onboarding:{replyVerification:false,desktopConnector:forbidden,runtimeInstaller:forbidden}});
+    service=new RoomService(files.data,{codex:new FakeCodex(),vault:new FakeVault(),fetch:forbidden,chat:{clientFactory:()=>{const client=new FakeCodex(),run=client.run.bind(client);client.run=async input=>({...await run(input),answer:'独立夹具已完成本条检查'});return client;}},launch:{discover:()=>({candidates:[{id:'codex',provider:'codex',name:'Codex',installed:false,support:'needs_setup',reason:'尚未安装',capabilities:{}}]}),installer:forbidden},onboarding:{replyVerification:false,desktopConnector:forbidden,runtimeInstaller:forbidden}});
     const project=service.addProject({path:files.project}),room=service.chat.addRoom({project_id:project.id,title:'验收修复房间一'}),other=service.chat.addRoom({project_id:project.id,title:'验收修复房间二'}),members=[];
     for(const name of ['甲','乙','丙']){const m=service.chat.store.addMember({name,adapter:'codex'});for(const r of [room,other])service.chat.store.join(r.id,m.id);service.chat.store.updateMember(m.id,{status:'ready',verified_at:new Date().toISOString()});service.runtime.workerHeartbeat('fixture:'+m.id,{member_id:m.id});service.runtime.heartbeat(m.id,{session_ref:'fixture:'+m.id});members.push(m);}
     server=createServer(service,{port:0,token});base='http://127.0.0.1:'+await server.listen();service._localUrl=base;
