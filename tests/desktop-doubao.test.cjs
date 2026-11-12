@@ -148,6 +148,19 @@ test('an observed Doubao 2.36.6 warm factory restores the saved chat through the
   assert.equal(f.calls.filter(call=>call.create||call.send).length,0);
 });
 
+test('after-send SDK factories recover a completed Doubao turn in the same chat without resending',async()=>{
+  const f=rspackFixture(),q=require('../src/doubao-native-2.36.6.json');
+  await f.bridge.initialize();await f.bridge.send('native-1',{requestId:'warm-restart',prompt:'once'});await settle();
+  f.reply('warm-restart',{content:'original completed answer'});assert.equal(f.bridge.snapshot('warm-restart').status,'completed');
+  // The installed send SDK replaces this lookup factory after a real turn.
+  f.req.m.lookup={WPM(e,t,a){var s=a("MBf"),r=a("YKu"),n=a("sb7");a.d(t,{},{CB:(e="",t,a,s)=>(0,n.D)(r.pU.getState(),e,t,a,s),NQ:()=>{let{conversationLinks:e}=r.pU.getState();return e},cL:e=>(0,s.tY)(r.pU.getState(),e)})}}.WPM;
+  const restored=createDoubaoNativeBridge(f.req,{...f.options,factorySha256:{...f.options.factorySha256,conversationLookup:q.factorySha256.conversationLookup}},f.ownership);
+  await restored.initialize({nativeChatId:'native-1'});
+  const result=await restored.restore({nativeChatId:'native-1',requestId:'warm-restart',userMessageId:'user-warm-restart',includeContent:true});
+  assert.equal(result.status,'completed');assert.equal(result.replies[0].content,'original completed answer');
+  assert.equal(sends(f).length,1);assert.equal(f.calls.filter(call=>call.create).length,1);
+});
+
 function rendererFixture(f,registry) {
   let captured=0;const chunks=[];chunks.push=([,,resolve])=>{captured++;resolve(f.req);};
   const window={webpackChunkflow_web_extension:chunks};

@@ -11,26 +11,27 @@
 问题依据：本机卸载登记仍写 2.33.3，但已下载豆包 **2.36.6 / 前端资源 1.0.9.3594**。这份资源由 Webpack 改为 Rspack：运行时数组、模块 ID 类型、导出表格式以及会话相关模块的拆分均有变化。旧适配只研究到 2.33.5，会拒绝这份未知源码。用户后来允许实机检查，正常重开后已从实际运行页面确认资源版本确为 1.0.9.3594。
 
 - `src/desktop-doubao.cjs`：识别新运行时、字符串模块 ID、方法形式的工厂和第三参数导出表；把新版分散的接口映射到原有收发逻辑。新版校验 12 个工厂后才调用 SDK；两份按固定路径与 SHA-256 校验的资源仅注册缺失工厂，不运行资源附带的启动逻辑。旧资源配置继续支持。
-- `src/doubao-native-2.36.6.json`：当前静态资源资格表。冷启动和延迟加载的 44 个源码变体均已在本机资源中提取并做隔离 ABI 检查；其中 8 个来自实机补查，每个均与安装资源中的源码字节对应，未把宽泛匹配当成资格。
+- `src/doubao-native-2.36.6.json`：当前静态资源资格表。实机补查先发现 8 个延迟变体，真实发送后又发现会话查询模块会被 SDK 替换。最终检查 184 个相关资源中的 229 个工厂变体，225 个通过已有导出合同和完整 ABI 边界夹具后纳入资格表；另 4 个缺失合同导出的裁剪变体不放行。每个纳入的变体均来自这份安装资源的确定字节，未用宽泛匹配代替源码校验。
 - `tests/desktop-doubao.test.cjs`：新增 `Rspack method factories keep string module IDs and discover direct-value export tables only`（修复前失败），新版同会话收发与重复请求、全部拆分工厂先验校验、新版本配置混用拒绝，以及一个资源提供多个工厂的回归。
 - `tests/desktop-sessions.test.cjs`：新增 `an explicit Doubao automatic reconnect reuses the person after manual fallback and answers queued work once`。明确切回自动后沿用人物、runtime key 和原对话；手动模式仍不被后台偷偷改回。
+- 后续恢复回归：`after-send SDK factories recover a completed Doubao turn in the same chat without resending`。发送 SDK 改写查询工厂后，恢复同一会话并读取原回复，不再次发送；旧资格表在这条用例上失败，红灯日志 `output/doubao-current/restart-regression-red.log`。
 
 已完成的独立证据：
 
 | 验证 | 结果 | 本机忽略目录中的证据 |
 | --- | --- | --- |
-| 原生收发、会话与启动器定向回归 | 118 通过，0 失败、0 跳过 | `output/doubao-current/targeted-tests.log` |
+| 原生收发、会话与启动器定向回归 | 119 通过，0 失败、0 跳过 | `output/doubao-current/targeted-tests.log` |
 | 本机真实静态资源的两阶段准备 | 两个资源校验并注册；准备阶段业务模块执行 0；篡改源码被拒绝 | `output/doubao-current/source-verification.json` |
-| 44 个实际工厂源码变体的 ABI 边界夹具 | 同对话恢复、正确回复关联、重复请求只有一次发送，全部通过 | 同上；SDK 外部边界使用合成数据，真实模型调用 0 |
+| 225 个实际工厂源码变体的 ABI 边界夹具 | 新建与恢复同一会话、正确回复关联、重复请求只有一次发送，全部通过 | 同上；资源对应表 `all-variant-origins.json`；SDK 外部边界使用合成数据，真实模型调用 0 |
 | 真实豆包版本与同一会话的加载 | 已确认 1.0.9.3594，12 个工厂校验通过，保存的同一会话加载成功；这一项没有发送消息 | `output/doubao-current/live-preparation.json`；新增实机变体的资源对应表为 `live-variant-origins.json` |
-| 完整 Windows 开发门禁 | 修复源码已通过：1452 个测试，0 跳过，六条浏览器流程及全部打包检查；最终清单随本节更新后再次运行同一门禁 | `output/verify-dev/latest.json` 及其 `result_path`；连接/办公室回归、打包 MCP、启动恢复和文件哈希均由此命令核对 |
+| 完整 Windows 开发门禁 | 最终源码运行 `npm run verify:dev`；全量计数与最终状态以最新结果为准，要求 0 失败、0 跳过并完成六条浏览器流程及全部打包检查 | `output/verify-dev/latest.json` 及其 `result_path`；连接/办公室回归、打包 MCP、启动恢复和文件哈希均由此命令核对 |
 | 正式数据、Windows 桌面与真实自动往返 | preview.35 实窗启动成功；AO 正常队列发出一次随机标记，豆包实际回复并自动回写，标记与服务器父消息均匹配；耗时 8.611 秒，单次原生执行 | `output/doubao-current/live-roundtrip.json`；生产接入记录为 `ready_automatic`，界面“豆包已连接，有消息会自动处理” |
 
 `stats` 仍按原有口径只读。修复前自 preview.21 起为 2 次首次尝试、0 次重试、1 组首次接通、1 组等待，自动回复已验证尝试 0；修复后为 2 次首次尝试、1 次重试、1 组首次接通、1 组重试后接通、0 组等待，自动回复已验证尝试 1。无版本历史接入记录仍为 94，不混入分母。前后快照分别保存在 `output/doubao-current/stats-before.json` 和 `stats-after.json`。这只证明本次重连成功，不能据此推算所有用户的成功率。
 
 **实机结果**：用户后来已允许换包和真实收发。正式 SQLite 已用一致性备份保存并通过 `quick_check`，位于本机忽略目录 `output/doubao-current/formal-backup/`。豆包正常重开后，显式将原成员恢复为自动处理，原成员数、凭据、runtime key 和原会话均未改变。一次新的 AO 自动校验和原来积压的一条消息各执行一次、各收到一条对应回复；原生已完成记录由 22 条变为 24 条，新增的两条分别对应这两次请求。校验后的桌面确实显示豆包“后台在线”，输入提示为“会自动开始处理”。没有手抄或人工补写回复。
 
-最终换包后只读检查重开 AO 的恢复状态，证据写入 `output/doubao-current/live-restart.json`，不再额外提交模型探针。豆包窗口截图助手曾报相同 app owner 的绑定错误；豆包版本、实际收发和服务器消息关联由产品原生接口独立核验，AO 桌面可正常截图与操作。基础自动消息收发和豆包对话内的 MCP 工具加载是两项能力；本轮没有安装或改写豆包连接器。preview.34 的编辑器实开待验事项继续保留。
+第一次重开 AO 暴露上述发送后工厂缺口，尚不能把首次收发成功当作恢复验收。补齐后刷新豆包界面清除旧资格表的适配缓存；再次加载同一会话，并只预加载真实消息 SDK、不调用 `sendMessage`，校验仍通过，证据 `output/doubao-current/live-sdk-warmup.json`。最终换包后只读检查重开 AO 的恢复状态，证据写入 `output/doubao-current/live-restart.json`，不再额外提交模型探针。豆包窗口截图助手曾报相同 app owner 的绑定错误；豆包版本、实际收发和服务器消息关联由产品原生接口独立核验，AO 桌面可正常截图与操作。基础自动消息收发和豆包对话内的 MCP 工具加载是两项能力；本轮没有安装或改写豆包连接器。preview.34 的编辑器实开待验事项继续保留。
 
 复验边界：使用本节及上述证据核对当前版本的文本自动收发，不以端口可达、历史接通或夹具结果替代。未新增客户端类型、协作能力或接入阶段。对结果未知的历史请求继续保留原请求，不自动重放。
 
