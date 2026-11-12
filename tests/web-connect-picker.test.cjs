@@ -23,7 +23,7 @@ function fixture(candidates = []) {
   vm.runInContext(section('function launchProvider(', 'const providerDocs') +
     section('function onboardingCanInstall(', 'function renderLaunch()') +
     section('async function scanLaunch(', 'async function prepareLaunch()') +
-    section('function openSecretaryConnect()', 'function updateOfficeScene()'), context);
+    section('function openSecretaryConnect(', 'function updateOfficeScene()'), context);
   return {context, $, calls, notices};
 }
 test('the picker leads with an AI that can be the secretary, lists what is on this computer and folds the rest', () => {

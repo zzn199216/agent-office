@@ -63,7 +63,7 @@ async function verify(options={}){
     await stage('regression',['--test','--test-concurrency=4','--test-reporter=tap','tests/*.test.cjs'],row=>{result.tests=unitEvidence(fs.readFileSync(row.log,'utf8'));});
     await stage('browser-install',['node_modules/playwright/cli.js','install','chromium']);
     await stage('core-flows',['scripts/validate-core-flows.cjs'],()=>{result.core_flows=coreEvidence(JSON.parse(fs.readFileSync(path.join(output,'browser','core-flows','result.json'),'utf8')));});
-    for(const [name,script] of [['connection-assist','validate-connection-assist-ui.cjs'],['office-activity','validate-office-activity.cjs'],['office-fullscene','validate-office-fullscene.cjs']]){
+    for(const [name,script] of [['connection-assist','validate-connection-assist-ui.cjs'],['office-activity','validate-office-activity.cjs'],['office-fullscene','validate-office-fullscene.cjs'],['p33-fixes','validate-p33-fixes.cjs']]){
       await stage(name,['scripts/'+script],row=>{row.checks=browserEvidence(JSON.parse(fs.readFileSync(path.join(output,'browser',name,'result.json'),'utf8')));});
     }
     await stage('build',['scripts/build.cjs','--dev']);
