@@ -2,7 +2,7 @@
   'use strict';
   const esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   let context=null,controls=null,dialog=null,cardsDialog=null,featuresRoom=null;const modes=new Map(),pendingToggles=new Map();
-  const flags=[['claims','认领与成员分工'],['trial','两位成员只读试用（调用量增加，选用后再执行）'],['work_layout','办公室与对话同屏'],['canvas','新办公室画布'],['walking','人物走动'],['ambient','空闲活动（需开启人物走动）'],['interactions','成员互动'],['scene_editor','场景布置'],['reduced_motion','减少动画']];
+  const flags=[['claims','认领与成员分工'],['trial','两位成员只读试用（调用量增加，选用后再执行）'],['work_layout','办公室与对话同屏'],['canvas','新办公室画布（同屏模式自动使用）'],['walking','人物走动'],['ambient','空闲活动（需开启人物走动）'],['interactions','成员互动'],['scene_editor','场景布置'],['reduced_motion','减少动画']];
   function install(){
     controls=document.createElement('div');controls.id='group-controls';controls.className='group-controls';
     controls.innerHTML='<label><input type="checkbox" id="group-enabled">群内讨论</label><span id="group-call-count"></span><button type="button" id="room-feature-options" class="text-button">房间选项</button><button type="button" id="group-member-cards" class="text-button">名片与战绩</button><span id="group-notice" role="status"></span>';

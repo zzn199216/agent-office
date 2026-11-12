@@ -7,7 +7,7 @@ module.exports=async function({service,page,api,room,shot,members:[a,b]}){
   await page.locator('#rooms [data-room="'+fresh.id+'"]').click();await page.waitForFunction(id=>document.getElementById('room-heading').textContent==='同屏布局验收',fresh.id);
   if(await page.locator('#secretary-look-around').isVisible())await page.locator('#secretary-look-around').click();
   await page.locator('#room-feature-options').click();await page.locator('[data-room-feature="work_layout"]').check();await page.locator('#room-features-save').click();await page.locator('#room-features-dialog').waitFor({state:'hidden'});await page.locator('body.work-layout').waitFor();
-  await page.locator('#work-empty-station').click();await page.locator('#secretary-connect-dialog').waitFor({state:'visible'});await page.locator('#secretary-connect-dialog .close-dialog').first().click();
+  await page.locator('.canvas-strip [data-canvas-add]').click();await page.locator('#secretary-connect-dialog').waitFor({state:'visible'});await page.locator('#secretary-connect-dialog .close-dialog').first().click();
   await api('/api/chat/rooms/'+fresh.id+'/join',{member_id:a.id});await api('/api/chat/rooms/'+fresh.id+'/join',{member_id:b.id});
   const failed=service.chat.store.addMember({name:'未接通的 Claude',adapter:'claude-code'});service.chat.store.join(fresh.id,failed.id);service.chat.store.updateMember(failed.id,{status:'connection_failed',error:'Claude API 密钥尚未填写，请打开 API 配置。'});
   const configDir=path.join(service.store.dir,'fixture-claude');fs.mkdirSync(configDir,{recursive:true});fs.writeFileSync(path.join(configDir,'settings.json'),JSON.stringify({env:{ANTHROPIC_API_KEY:'YOUR_API_KEY',ANTHROPIC_BASE_URL:'https://fixture.invalid'}}));
@@ -20,7 +20,7 @@ module.exports=async function({service,page,api,room,shot,members:[a,b]}){
   service.chat.clients.set(a.id,waitingClient);service.chat.clients.set(b.id,workingClient);
   const attention=await api('/api/chat/messages',{room_id:fresh.id,to_member_id:a.id,text:'LAYOUT-ATTENTION: ask for the review name',idempotency_key:id()});
   const working=await api('/api/chat/messages',{room_id:fresh.id,to_member_id:b.id,text:'LAYOUT-WORK: check visible layout',idempotency_key:id()});
-  await page.locator('#work-approvals [data-input-submit]').waitFor();await page.locator('#work-connections [data-conn-op="login_client"]').waitFor();await page.locator('.ao-working').waitFor();
+  await page.locator('#work-approvals [data-input-submit]').waitFor();await page.locator('#work-connections [data-conn-op="login_client"]').waitFor();await page.locator('.canvas-member.state-working').waitFor();
   assert.equal(await page.locator('#chat-stream').isVisible(),true);assert.equal(await page.locator('#composer').isVisible(),true);assert.equal(await page.locator('#officeScene').isVisible(),true);assert.equal(await page.locator('#view-switch').isVisible(),false);
   assert.ok(await page.locator('#work-running').textContent());assert.match(await page.locator('#work-connections').textContent(),/密钥尚未填写/);
   await page.locator('#work-connections [data-conn-op="login_client"]').click();await page.locator('#work-connections [data-conn-feedback]').filter({hasText:'已打开本机 Claude API 配置'}).waitFor();assert.equal(editors,1);

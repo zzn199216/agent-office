@@ -1706,7 +1706,7 @@ function openSecretaryConnect() {
   void scanLaunch({quiet:true});
 }
 function updateOfficeScene() {
-  const useCanvas=!!state?.features?.[history?.room?.id]?.canvas;document.body.classList.toggle('canvas-office',useCanvas);
+  const useCanvas=!!(state?.features?.[history?.room?.id]?.canvas||state?.features?.[history?.room?.id]?.work_layout);document.body.classList.toggle('canvas-office',useCanvas);
   if(officeScene&&officeRendererKind!==(useCanvas?'canvas':'legacy')){officeScene.destroy();officeScene=null;}
   officeRendererKind=useCanvas?'canvas':'legacy';const renderer=useCanvas?window.AgentOfficeCanvas:window.AgentOfficeScene;
   if((!officeView&&!state?.features?.[history?.room?.id]?.work_layout) || !professionalView || !history?.room || legacyId) return;

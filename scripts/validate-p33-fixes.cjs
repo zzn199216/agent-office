@@ -35,6 +35,9 @@ cases.images=async f=>{
   }
   const response=await f.context.request.get(f.base+'/assets/office/atlas-body.png'),tag=response.headers().etag;assert.ok(tag);assert.equal((await f.context.request.get(f.base+'/assets/office/atlas-body.png',{headers:{'If-None-Match':tag}})).status(),304);assert.equal((await f.context.request.get(f.base+'/')).headers()['cache-control'],'no-store');assert.equal((await f.context.request.get(f.base+'/api/state')).headers()['cache-control'],'no-store');
 };
+cases.layout_only=async f=>{
+  await f.features({work_layout:true,canvas:false});await f.page.setViewportSize({width:1440,height:900});const count=await f.page.locator('.canvas-strip [data-scene-member]').count();assert.equal(count,f.members.length,'Concurrent layout must show every member even without the standalone Canvas flag');assert.equal(await f.page.locator('[data-canvas-expand]').getAttribute('aria-expanded'),'false');assert.ok(await f.page.locator('#chat-stream').evaluate(node=>node.getBoundingClientRect().height>=160));
+};
 
 async function main(){
   const files=fixture(),out=outputDirectory('p33-fixes'),proof={ok:false,isolated:true,real_clients_or_models:false,checks:{},cases:[],screenshots:[]};fs.mkdirSync(out,{recursive:true});
