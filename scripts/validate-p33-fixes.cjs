@@ -65,6 +65,10 @@ cases.suggested_owner=async f=>{
   await f.features({discussion:true,claims:false,daily_limit:null,work_layout:true});f.service.group.options.triage=async()=>({owner_id:f.members[2].id,kind:'task',uncertain:true});const message=await f.api('/api/chat/messages',{room_id:f.room.id,text:'请判断这个新请求交给谁比较合适',idempotency_key:id()}),owner=f.page.locator('[data-group-card="'+message.id+'"] [data-group-owner]');await owner.waitFor();assert.equal(await owner.inputValue(),f.members[2].id,'Needs-user defaults to the suggested owner');await owner.selectOption(f.members[1].id);await f.page.evaluate(()=>refreshAfterMutation());assert.equal(await owner.inputValue(),f.members[1].id,'An explicit user selection survives refresh');
 };
 
+cases.secretary_recipient=async f=>{
+  await f.features({work_layout:true,discussion:false,daily_limit:null});await f.api('/api/secretary',{room_id:f.room.id,member_id:f.members[0].id});await f.api('/api/chat/messages',{room_id:f.room.id,to_member_id:f.members[2].id,text:'上一条明确交给丙的消息',idempotency_key:id()});await f.features({discussion:true});await f.page.locator('#group-enabled').uncheck();await f.page.waitForFunction(()=>!history.group.settings.discussion&&!document.getElementById('group-enabled').disabled);await sleep(250);assert.equal(await f.page.locator('#recipient').inputValue(),f.members[0].id,'Turning discussion off returns to the secretary despite the last addressed member '+JSON.stringify(await f.page.evaluate(()=>({secretary:currentSecretary(),selected:roomRecipients.get(roomId),history:history.group.settings.discussion}))));
+};
+
 async function main(){
   const files=fixture(),out=outputDirectory('p33-fixes'),proof={ok:false,isolated:true,real_clients_or_models:false,checks:{},cases:[],screenshots:[]};fs.mkdirSync(out,{recursive:true});
   let service,server,browser,page,base;const token=id(),errors=[],external=[];
@@ -79,7 +83,7 @@ async function main(){
     context.on('request',request=>{if(!request.url().startsWith(base+'/')&&!request.url().startsWith('data:'))external.push(request.url());});
     await context.addInitScript(({project,room})=>{localStorage.setItem('agentroom-project',project);localStorage.setItem('agentroom-chat-room',room);localStorage.setItem('agentoffice-room-view','office');},{project:project.id,room:room.id});page=await context.newPage();page.on('pageerror',error=>errors.push(error.message));await page.goto(base);await page.waitForFunction(id=>history?.room?.id===id,room.id);
     const shot=async name=>{await page.screenshot({path:path.join(out,name)});proof.screenshots.push(name);};
-    const f={files,out,service,page,context,api,project,room,other,members,base,shot,features:async patch=>{await api('/api/room/features',{room_id:room.id,...patch});await page.waitForFunction(patch=>Object.entries(patch).every(([key,value])=>state.features[roomId][key]===value),patch);}};
+    const f={files,out,service,page,context,api,project,room,other,members,base,shot,features:async patch=>{await api('/api/room/features',{room_id:room.id,...patch});await page.evaluate(()=>refreshAfterMutation());await page.waitForFunction(patch=>Object.entries(patch).every(([key,value])=>state.features[roomId][key]===value),patch);}};
     const selected=process.argv.includes('--case')?process.argv[process.argv.indexOf('--case')+1].split(','):Object.keys(cases);
     for(const name of selected){assert.ok(cases[name],'Unknown check '+name);try{await cases[name](f);proof.checks[name]=true;proof.cases.push({name,status:'passed'});console.log('PASS '+name);}catch(error){proof.checks[name]=false;proof.cases.push({name,status:'failed',error:error.message});throw error;}}
     assert.deepEqual(errors,[]);assert.deepEqual(external,[]);proof.ok=true;

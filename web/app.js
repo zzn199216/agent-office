@@ -775,9 +775,12 @@ function renderRoom(project) {
   }
   renderApprovals([]);updateOfficeApprovalAlert();
   renderService(); renderInspector(); renderSidebar(); applyRoomView(); updateOfficeScene();
-  globalThis.AgentOfficeGroup?.update({roomId,group:history.group,api,action,refresh:refreshAfterMutation,resetRecipient:enabled=>roomRecipients.set(roomId,enabled?'__group__':defaultRecipient(admittedMembers(history.participants),history.messages))});
+  globalThis.AgentOfficeGroup?.update({roomId,group:history.group,api,action,refresh:refreshAfterMutation,resetRecipient:enabled=>{const selected=enabled?'__group__':secretaryRecipient(admittedMembers(history.participants),history.messages);roomRecipients.set(roomId,selected);if([...$('recipient').options].some(option=>option.value===selected)){$('recipient').value=selected;updateRecipientNote();}}});
   if(globalThis.AgentOfficeLayout)updateWorkLayout();
   if(followTimeline){$('chat-stream').scrollTop=$('chat-stream').scrollHeight;rememberTextScroll();}
+}
+function secretaryRecipient(participants,messages=[]) {
+  const selected=currentSecretary().member_id;return participants.some(member=>member.id===selected)?selected:defaultRecipient(participants,messages);
 }
 function defaultRecipient(participants, messages = []) {
   const present = id => id && participants.some(member => member.id === id);
