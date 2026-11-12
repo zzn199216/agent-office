@@ -94,6 +94,7 @@ class ChatStore {
       INSERT OR IGNORE INTO chat_exports(room_id,revision) SELECT id,1 FROM chat_rooms;
     `);
     this.db.exec('CREATE TABLE IF NOT EXISTS stats_versions(kind TEXT NOT NULL,entity_id TEXT NOT NULL,version TEXT NOT NULL,PRIMARY KEY(kind,entity_id))');
+    for(const name of ['left_status','left_failure_reason'])if(!this.db.prepare('PRAGMA table_info(chat_participants)').all().some(c=>c.name===name))this.db.exec('ALTER TABLE chat_participants ADD COLUMN '+name+' TEXT');
     this.hasRoomTombstones = true;
     this.hasRoomArchives = true;
   }
@@ -214,8 +215,10 @@ class ChatStore {
   }
   leave(roomId, memberId) {
     return this.transaction(() => {
-      this.room(roomId); this.member(memberId);
-      this.db.prepare('UPDATE chat_participants SET joined=0,left_at=? WHERE room_id=? AND member_id=? AND joined=1').run(now(), roomId, memberId);
+      this.room(roomId);const member=this.member(memberId),provider=member.config.launch_provider||member.adapter;
+      const hasAttempts=!!this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='onboarding_attempts'").get();
+      const failure=hasAttempts?this.db.prepare("SELECT failure_reason FROM onboarding_attempts WHERE room_id=? AND (member_id=? OR member_id IS NULL AND provider=?) AND failure_reason IS NOT NULL ORDER BY started_at DESC,rowid DESC LIMIT 1").get(roomId,memberId,provider):null;
+      this.db.prepare('UPDATE chat_participants SET joined=0,left_at=?,left_status=?,left_failure_reason=? WHERE room_id=? AND member_id=? AND joined=1').run(now(),member.status,failure?.failure_reason||null,roomId,memberId);
       this.rehomeCredentials(roomId, memberId);this.closeOnboarding(roomId,memberId,'member_removed');
       return { room_id: roomId, member_id: memberId, joined: false };
     });
@@ -226,7 +229,7 @@ class ChatStore {
     const stamp=now(),scope='room_id=?'+(provider?' AND provider=?':''),values=[roomId,...provider?[provider]:[]];
     const hasClosure=this.db.prepare('PRAGMA table_info(onboarding_runs)').all().some(column=>column.name==='closed_at');
     this.db.prepare("UPDATE onboarding_runs SET status='cancelled',updated=?"+(hasClosure?',closed_at=?,closure_reason=?':'')+" WHERE "+scope+" AND status IN ('running','needs_action')").run(stamp,...hasClosure?[stamp,reason]:[],...values);
-    if(this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='onboarding_attempts'").get())this.db.prepare("UPDATE onboarding_attempts SET outcome='abandoned',completed_at=? WHERE "+scope+" AND outcome='waiting'").run(stamp,...values);
+    if(this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='onboarding_attempts'").get())require('./onboarding-attempts.cjs').abandonAttempts(this.db,roomId,provider);
   }
   // A member's connection credential belongs to the member, not to one room.
   // When its home room is deleted or left, move it to another room the member

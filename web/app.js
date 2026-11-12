@@ -775,7 +775,7 @@ function renderRoom(project) {
   }
   renderApprovals([]);updateOfficeApprovalAlert();
   renderService(); renderInspector(); renderSidebar(); applyRoomView(); updateOfficeScene();
-  globalThis.AgentOfficeGroup?.update({roomId,group:history.group,api,action,refresh:refreshAfterMutation,resetRecipient:enabled=>{const selected=enabled?'__group__':secretaryRecipient(admittedMembers(history.participants),history.messages);roomRecipients.set(roomId,selected);if([...$('recipient').options].some(option=>option.value===selected)){$('recipient').value=selected;updateRecipientNote();}}});
+  globalThis.AgentOfficeGroup?.update({roomId,group:history.group,api,action,addAI:openAddAI,refresh:refreshAfterMutation,resetRecipient:enabled=>{const selected=enabled?'__group__':secretaryRecipient(admittedMembers(history.participants),history.messages);roomRecipients.set(roomId,selected);if([...$('recipient').options].some(option=>option.value===selected)){$('recipient').value=selected;updateRecipientNote();}}});
   if(globalThis.AgentOfficeLayout)updateWorkLayout();
   if(followTimeline){$('chat-stream').scrollTop=$('chat-stream').scrollHeight;rememberTextScroll();}
 }
@@ -1612,6 +1612,7 @@ function renderSecretary() {
   $('secretary-connect-progress').querySelectorAll('button').forEach(button => { if(secretaryConnectRoom !== roomId || !webConnected) button.disabled = true; });
   if(attempt)revealOnboardingAction(attempt);
   const pickerError=launchError||(secretaryNavigationCurrent(secretaryNavigation)&&secretaryNavigation.source==='picker'?secretaryError:'');
+  const focused=$('secretary-connect-dialog').dataset.focusProvider;if(focused){const button=[...$('secretary-connect-candidates').querySelectorAll('button')].find(node=>node.dataset.onboardingProvider===focused||node.dataset.onboardingRequirements===focused);if(button){button.closest('details')?.setAttribute('open','');button.scrollIntoView({block:'center'});button.focus();delete $('secretary-connect-dialog').dataset.focusProvider;}}
   $('secretary-connect-error').textContent = pickerError; $('secretary-connect-error').classList.toggle('hidden',!pickerError);
 }
 function needsSecretaryHint() { return !currentSecretary().member_id; }
@@ -1704,8 +1705,8 @@ function discussWithSecretary() {
   const selected = currentSecretary(); if (!webConnected || selected.status !== 'ready' || ![...$('recipient').options].some(option => option.value === selected.member_id)) return;
   closeSecretaryTutorial(); $('recipient').value = selected.member_id; updateRecipientNote(); if(officeView)toggleOfficeComposer(true); else $('prompt').focus();
 }
-function openSecretaryConnect() {
-  if (!roomId || !webConnected) return; secretaryNavigation=null;secretaryConnectRoom = roomId; secretaryConnectJob = null; secretaryError = ''; $('secretary-connect-dialog').showModal(); renderSecretary();
+function openSecretaryConnect(focusProvider=null) {
+  if (!roomId || !webConnected) return; secretaryNavigation=null;secretaryConnectRoom = roomId; secretaryConnectJob = null; secretaryError = ''; if(typeof focusProvider==='string')$('secretary-connect-dialog').dataset.focusProvider=focusProvider;$('secretary-connect-dialog').showModal(); renderSecretary();
   void scanLaunch({quiet:true});
 }
 function updateOfficeScene() {
@@ -2011,7 +2012,7 @@ installDesktopChrome();
 for (const id of ['add-project','welcome-project','mobile-add-project','launch-add-project']) $(id).onclick = showProject;
 setProfessionalView(professionalView);
 // Every "add an AI" button opens the same picker; the picker links to existing members and other ways in.
-function openAddAI() { if (!professionalView) { setProfessionalView(true); return; } if (roomId && !legacyId) openSecretaryConnect(); else if (projectId) action(() => openFirstRoom(projectId)); else showProject(); }
+function openAddAI(focusProvider=null) { if(typeof focusProvider!=='string')focusProvider=null;if (!professionalView) { setProfessionalView(true);if(!focusProvider)return; } if (roomId && !legacyId) openSecretaryConnect(focusProvider); else if (projectId) action(() => openFirstRoom(projectId)); else showProject(); }
 $('professional-toggle').onclick = openAddAI;
 $('sidebar-toggle').onclick=()=>{const mobile=matchMedia('(max-width:760px)').matches,expanded=mobile?document.body.classList.toggle('mobile-sidebar-open'):!document.body.classList.toggle('sidebar-collapsed');$('sidebar-toggle').setAttribute('aria-expanded',String(expanded));$('sidebar-toggle').setAttribute('aria-label',expanded?'收起房间列表':'展开房间列表');};
 $('sidebar-close').onclick=()=>{document.body.classList.remove('mobile-sidebar-open');$('sidebar-toggle').setAttribute('aria-expanded','false');$('sidebar-toggle').setAttribute('aria-label','展开房间列表');};

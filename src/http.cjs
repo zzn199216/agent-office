@@ -60,6 +60,7 @@ function createServer(service,{token,port=47831,onShutdown}={}) {
     try {
       if(req.method==='POST'&&pathname!=='/api/shutdown')require('./desktop-lifecycle.cjs').assertBackgroundAllowed(service.store.dir);
       if(service.closing&&req.method==='POST'&&pathname!=='/api/shutdown')throw new RoomError('服务正在停止，新的操作尚未开始。',503,'service_stopping');
+      if(req.method==='GET'&&pathname==='/api/failures-archive'){const q=new URL(req.url,'http://localhost').searchParams;return json(res,require('./failure-archive.cjs').roomArchive(service,{room_id:q.get('room_id'),offset:q.has('offset')?Number(q.get('offset')):0}));}
       if(req.method==='GET' && pathname==='/api/state')return json(res,service.snapshot());
       if(req.method==='GET' && pathname==='/api/office/scene')return json(res,service.officeScenes.get(new URL(req.url,'http://localhost').searchParams.get('room_id')));
       const assistDocument=pathname.match(/^\/api\/connection-assists\/([a-f0-9-]{36})\/document$/i);

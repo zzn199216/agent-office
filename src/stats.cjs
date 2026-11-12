@@ -42,8 +42,8 @@ function summarize(rows) {
     median_connect_ms:median(rows.filter(row=>row.outcome==='connected').map(row=>Date.parse(row.completed_at)-Date.parse(row.started_at)))};
   for (const attempts of groups.values()) {
     const success = attempts.find(row=>row.outcome==='connected');
-    if (success) result[success.kind==='first'?'first_connected':'retry_connected']++;
-    else if (attempts.at(-1).outcome==='abandoned') result.abandoned++;
+    if (attempts.at(-1).outcome==='abandoned') result.abandoned++;
+    else if (success) result[success.kind==='first'?'first_connected':'retry_connected']++;
     else if(attempts.at(-1).outcome==='failed')result.failed++;
     else result.waiting++;
   }
