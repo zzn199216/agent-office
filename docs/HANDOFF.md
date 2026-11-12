@@ -6,10 +6,10 @@
 
 本轮只修豆包桌面的版本适配。工作目录仍为当前 checkout，分支 `codex/onboarding-progress-compose`，版本 **0.15.0-preview.35**；Y: 旧快照不参与修改。打包入口仍是 `dev/AgentOffice.exe`，提交和指纹以 `dev/release-manifest.json.source` 为准。
 
-问题依据：本机卸载登记仍写 2.33.3，但已下载豆包 **2.36.6 / 前端资源 1.0.9.3594**。这份资源由 Webpack 改为 Rspack：运行时数组、模块 ID 类型、导出表格式以及会话相关模块的拆分均有变化。旧适配只研究到 2.33.5，会拒绝这份未知源码。缓存包存在不代表运行中的窗口已加载它，实际加载版本仍需实机检查。
+问题依据：本机卸载登记仍写 2.33.3，但已下载豆包 **2.36.6 / 前端资源 1.0.9.3594**。这份资源由 Webpack 改为 Rspack：运行时数组、模块 ID 类型、导出表格式以及会话相关模块的拆分均有变化。旧适配只研究到 2.33.5，会拒绝这份未知源码。用户后来允许实机检查，正常重开后已从实际运行页面确认资源版本确为 1.0.9.3594。
 
 - `src/desktop-doubao.cjs`：识别新运行时、字符串模块 ID、方法形式的工厂和第三参数导出表；把新版分散的接口映射到原有收发逻辑。新版校验 12 个工厂后才调用 SDK；两份按固定路径与 SHA-256 校验的资源仅注册缺失工厂，不运行资源附带的启动逻辑。旧资源配置继续支持。
-- `src/doubao-native-2.36.6.json`：当前静态资源资格表。冷启动和正常延迟加载的 36 个源码变体均已在本机资源中提取并做隔离 ABI 检查，未把对厂商源码的宽泛匹配当成资格。
+- `src/doubao-native-2.36.6.json`：当前静态资源资格表。冷启动和延迟加载的 44 个源码变体均已在本机资源中提取并做隔离 ABI 检查；其中 8 个来自实机补查，每个均与安装资源中的源码字节对应，未把宽泛匹配当成资格。
 - `tests/desktop-doubao.test.cjs`：新增 `Rspack method factories keep string module IDs and discover direct-value export tables only`（修复前失败），新版同会话收发与重复请求、全部拆分工厂先验校验、新版本配置混用拒绝，以及一个资源提供多个工厂的回归。
 - `tests/desktop-sessions.test.cjs`：新增 `an explicit Doubao automatic reconnect reuses the person after manual fallback and answers queued work once`。明确切回自动后沿用人物、runtime key 和原对话；手动模式仍不被后台偷偷改回。
 
@@ -17,14 +17,15 @@
 
 | 验证 | 结果 | 本机忽略目录中的证据 |
 | --- | --- | --- |
-| 原生收发、会话与启动器定向回归 | 117 通过，0 失败、0 跳过 | `output/doubao-current/targeted-tests.log` |
+| 原生收发、会话与启动器定向回归 | 全部通过，0 失败、0 跳过；最新数量见日志 | `output/doubao-current/targeted-tests.log` |
 | 本机真实静态资源的两阶段准备 | 两个资源校验并注册；准备阶段业务模块执行 0；篡改源码被拒绝 | `output/doubao-current/source-verification.json` |
-| 36 个实际工厂源码变体的 ABI 边界夹具 | 同对话恢复、正确回复关联、重复请求只有一次发送，全部通过 | 同上；SDK 外部边界使用合成数据，真实模型调用 0 |
+| 44 个实际工厂源码变体的 ABI 边界夹具 | 同对话恢复、正确回复关联、重复请求只有一次发送，全部通过 | 同上；SDK 外部边界使用合成数据，真实模型调用 0 |
+| 真实豆包版本与同一会话的加载 | 已确认 1.0.9.3594，12 个工厂校验通过，保存的同一会话加载成功；这一项没有发送消息 | `output/doubao-current/live-preparation.json`；新增实机变体的资源对应表为 `live-variant-origins.json` |
 | 完整 Windows 开发门禁 | 交付前运行 `npm run verify:dev`；最终状态、全量数字与日志以本次 `output/verify-dev/latest.json` 为准 | 对应 `result_path`；六条浏览器流程、连接/办公室回归、打包 MCP、启动恢复和文件哈希均由此命令核对 |
 
 `stats` 仍按原有口径只读。修复前自 preview.21 起为 2 次首次尝试、0 次重试、1 组首次接通、1 组等待，自动回复已验证尝试 0；无版本历史接入记录 94。前后快照分别保存在 `output/doubao-current/stats-before.json` 和 `stats-after.json`。本轮隔离检查不能作为正式接入成功率提升的证据。
 
-**实机待完成**：用户要求先完成代码和隔离验证，电脑暂不方便操作；已允许之后正常退出并重开豆包。尚未重启豆包、重载正式 AO 服务、切换正式成员的发送模式或发送真实探针。因此当前没有新的真实自动收发成功结论，preview.34 的桌面实窗和编辑器实开待验事项也仍然保留。
+**实机进度**：用户后来已允许换包和真实收发。正式 SQLite 已用一致性备份保存并通过 `quick_check`，位于本机忽略目录 `output/doubao-current/formal-backup/`。豆包已正常重开；在继续加载修复包、切换正式成员前，先完成上述同一会话的只读加载检查。真实队列往返结果仍须另记，不能以该加载检查替代；preview.34 的编辑器实开待验事项继续保留。
 
 电脑可用后：确认豆包实际加载的资源版本，正常退出后由现有启动器只开启回环连接；加载本修复版 AO，显式恢复同一位豆包成员及保存的对话。先核对结果未知的历史任务，不自动重放；用一条唯一随机标记消息检查真实发送、服务器消息 ID、对应完成回复及 AO 中的同一条回答。验证后记录真实结果和前后 `stats`，不以端口可达、历史接通或夹具结果替代。
 

@@ -137,6 +137,17 @@ test('Rspack adaptation verifies every split factory before executing any native
   await assert.rejects(bridge.initialize(),/SOURCE_IDENTITY_MISMATCH/);assert.deepEqual(f.calls,[]);
 });
 
+test('an observed Doubao 2.36.6 warm factory restores the saved chat through the qualified SDK',async()=>{
+  const f=rspackFixture(),q=require('../src/doubao-native-2.36.6.json'),chatId='existing-warm-chat';
+  // The tiny constant-export factory from the installed warm resources. Its
+  // binding names differ from the cold chunk; the exact source is still pinned.
+  f.req.m.bot={K0(e,t,a){a.d(t,{},{O:"7338286299411103781"})}}.K0;
+  f.infos.set(chatId,{conversation_id:chatId,bot_id:'native-default-bot',conversation_type:2});
+  const bridge=createDoubaoNativeBridge(f.req,{...f.options,factorySha256:{...f.options.factorySha256,bot:q.factorySha256.bot}},f.ownership);
+  const proof=await bridge.initialize({nativeChatId:chatId});assert.equal(proof.nativeChatId,chatId);
+  assert.equal(f.calls.filter(call=>call.create||call.send).length,0);
+});
+
 function rendererFixture(f,registry) {
   let captured=0;const chunks=[];chunks.push=([,,resolve])=>{captured++;resolve(f.req);};
   const window={webpackChunkflow_web_extension:chunks};
