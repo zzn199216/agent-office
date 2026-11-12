@@ -90,7 +90,14 @@ cases.failure_archive=async f=>{
   await f.page.locator('[data-archive-reconnect]').first().click();await f.page.locator('#secretary-connect-dialog[open]').waitFor();await f.page.waitForFunction(()=>document.activeElement?.dataset.onboardingRequirements==='codex'||document.activeElement?.dataset.onboardingProvider==='codex');assert.equal(require('../src/stats.cjs').connectionStats(f.files.data).connections.abandoned,1);await f.page.locator('#secretary-connect-dialog .close-dialog').click();f.page.off('request',watch);
 };
 
-async function main(){
+cases.api_editor_feedback=async f=>{
+  const directory=path.join(f.files.root,'.claude'),file=path.join(directory,'settings.json');fs.mkdirSync(directory);fs.writeFileSync(file,JSON.stringify({env:{ANTHROPIC_BASE_URL:'https://fixture.invalid'}}));const env={CLAUDE_CONFIG_DIR:directory,HOME:f.files.root,USERPROFILE:f.files.root};f.service.onboarding.options.env=env;f.service.onboardingActions.options.env=env;
+  f.service.launch.options.discover=()=>({candidates:[{id:'claude-code',provider:'claude-code',name:'Claude Code',installed:true,support:'ready',capabilities:{automatic_launch:true}}]});const run=id(),stamp=new Date().toISOString();f.service.store.db.prepare("INSERT INTO onboarding_runs(id,room_id,requested_provider,provider,mode,status,stage,error,error_code,created,updated) VALUES(?,?,'claude-code','claude-code','managed','needs_action','error',?,'claude_api_key_missing',?,?)").run(run,f.room.id,'Claude API 密钥尚未填写，请打开 API 配置。',stamp,stamp);await f.page.evaluate(()=>refreshAfterMutation());await f.page.locator('#professional-toggle').click();if(!await f.page.locator('#secretary-connect-dialog').evaluate(n=>n.open))await f.page.locator('#professional-toggle').click();await f.page.locator('#secretary-connect-candidates [data-onboarding-provider=claude-code]').click();const button=f.page.locator('#secretary-connect-progress [data-conn-op=login_client]'),feedback=f.page.locator('#secretary-connect-progress [data-conn-feedback],#secretary-connect-progress [data-onboarding-feedback]');await button.waitFor();const launched=[];
+  for(const platform of ['win32','linux']){f.service.onboardingActions.options.platform=platform;if(platform==='win32')f.service.onboardingActions.options.launcher=async request=>{launched.push(request);};else delete f.service.onboardingActions.options.launcher;await button.click();await feedback.filter({hasText:platform==='win32'?'已打开本机 Claude API 配置':'当前系统不能自动打开配置编辑器'}).waitFor();await sleep(150);assert.equal(await button.textContent(),'打开 API 配置','Completed editor action must restore the primary label on '+platform);assert.equal(await button.isEnabled(),true);}
+  assert.equal(launched.length,1);assert.equal(launched[0].command,'notepad.exe');assert.deepEqual(launched[0].args,[file]);await f.page.locator('#secretary-connect-dialog .close-dialog').click();
+};
+
+async function runCases(selected){
   const files=fixture(),out=outputDirectory('p33-fixes'),proof={ok:false,isolated:true,real_clients_or_models:false,checks:{},cases:[],screenshots:[]};fs.mkdirSync(out,{recursive:true});
   let service,server,browser,page,base;const token=id(),errors=[],external=[];
   const forbidden=async()=>{throw Error('No personal clients, model calls or installers in acceptance fixes');};
@@ -105,11 +112,16 @@ async function main(){
     await context.addInitScript(({project,room})=>{localStorage.setItem('agentroom-project',project);localStorage.setItem('agentroom-chat-room',room);localStorage.setItem('agentoffice-room-view','office');},{project:project.id,room:room.id});page=await context.newPage();page.on('pageerror',error=>errors.push(error.message));await page.goto(base);await page.waitForFunction(id=>history?.room?.id===id,room.id);
     const shot=async name=>{await page.screenshot({path:path.join(out,name)});proof.screenshots.push(name);};
     const f={files,out,service,page,context,api,project,room,other,members,base,shot,features:async patch=>{await api('/api/room/features',{room_id:room.id,...patch});await page.evaluate(()=>refreshAfterMutation());await page.waitForFunction(patch=>Object.entries(patch).every(([key,value])=>state.features[roomId][key]===value),patch);}};
-    const selected=process.argv.includes('--case')?process.argv[process.argv.indexOf('--case')+1].split(','):Object.keys(cases);
     for(const name of selected){assert.ok(cases[name],'Unknown check '+name);try{await cases[name](f);proof.checks[name]=true;proof.cases.push({name,status:'passed'});console.log('PASS '+name);}catch(error){proof.checks[name]=false;proof.cases.push({name,status:'failed',error:error.message});throw error;}}
     assert.deepEqual(errors,[]);assert.deepEqual(external,[]);proof.ok=true;
   }catch(error){proof.error=error.stack;process.exitCode=1;if(page)await page.screenshot({path:path.join(out,'failure.png')}).catch(()=>{});}
   finally{await browser?.close();await server?.close();await service?.close();proof.page_errors=errors;proof.external_request_count=external.length;fs.writeFileSync(path.join(out,'result.json'),JSON.stringify(proof,null,2));const owned=path.resolve(files.root);assert.equal(path.dirname(owned),path.resolve(os.tmpdir()));assert.match(path.basename(owned),/^agentroom-test-/);fs.rmSync(owned,{recursive:true,force:true});console.log(JSON.stringify({ok:proof.ok,error:proof.error,result:path.join(out,'result.json')}));}
+  return proof;
+}
+async function main(){
+  const selected=process.argv.includes('--case')?process.argv[process.argv.indexOf('--case')+1].split(','):Object.keys(cases),combined={ok:true,isolated:true,real_clients_or_models:false,checks:{},cases:[],screenshots:[],page_errors:[],external_request_count:0},out=outputDirectory('p33-fixes');
+  for(const name of selected){const proof=await runCases([name]);fs.writeFileSync(path.join(out,name+'-result.json'),JSON.stringify(proof,null,2));Object.assign(combined.checks,proof.checks);for(const key of ['cases','screenshots','page_errors'])combined[key].push(...proof[key]||[]);combined.external_request_count+=proof.external_request_count;if(!proof.ok){combined.ok=false;combined.error=proof.error;break;}}
+  fs.writeFileSync(path.join(out,'result.json'),JSON.stringify(combined,null,2));
 }
 if(require.main===module)main().catch(error=>{console.error(error.stack);process.exitCode=1;});
 module.exports={cases};

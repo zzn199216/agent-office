@@ -17,7 +17,7 @@ function fixture(){
     desktop:null,messageContent:value=>`<div class="fixture-content">${value.text}</div>`,messageImages:()=>'',messageCanReconcile:()=>false,nativeConnectionMessage:()=>'',pill:()=>'',plainMarkdown:text=>text,
     avatar:()=>'<span class="fixture-avatar"></span>',time:value=>String(value||''),
     navigator:{clipboard:{writeText:async text=>calls.copy.push(text)}},toast:text=>calls.toast.push(text),confirm:text=>{calls.confirm.push(text);return context.__confirm!==false;},
-    refresh:async()=>{calls.refresh++;},refreshOnboarding:async()=>{},action:work=>Promise.resolve().then(work).catch(error=>calls.toast.push(`error:${error.message}`)),
+    refresh:async()=>{calls.refresh++;},refreshOnboarding:async()=>{},renderLaunch:()=>{},action:work=>Promise.resolve().then(work).catch(error=>calls.toast.push(`error:${error.message}`)),
     api:async(url,body)=>{calls.api.push([url,body]);if(url.startsWith('/api/onboarding/jobs/'))return jobs.get(decodeURIComponent(url.split('/').pop()))||null;if(url.includes('/setup'))return context.__setup;return {};},
     onboardingFeedbackFor:()=>null,onboardingJobs:jobs,onboardingView:value=>value?.job||value,onboardingActions:job=>job?.next_actions||[],
     runOnboardingOperation:async(job,operation)=>{calls.operations.push([job.id,operation]);return job;},connectOnboardingNative:async job=>{calls.native.push(job.id);},

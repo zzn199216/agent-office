@@ -911,7 +911,7 @@ document.addEventListener('click',event=>{
     connectionOperationsPending.add(key);button.disabled=true;
     try{connectionOperationFeedback.set(key,{message:'正在处理…'});renderConnectionOperationFeedback();const ctx=await connectionContext(source,id);await runConnectionOperation(button.dataset.connOp,ctx,button.dataset.connTarget||null);const feedback=ctx.job&&onboardingFeedbackFor(ctx.job);connectionOperationFeedback.set(key,{message:feedback?.message||'已提交操作，请查看当前连接状态。',error:feedback?.error===true});}
     catch(error){connectionOperationFeedback.set(key,{message:error.message||'这一步未完成，请重试。',error:true});throw error;}
-    finally{connectionOperationsPending.delete(key);button.disabled=false;renderConnectionOperationFeedback();}
+    finally{connectionOperationsPending.delete(key);button.disabled=false;renderLaunch();if(history?.room?.id===roomId&&!legacyId){lastTimeline='';renderRoom(state.projects.find(project=>project.id===projectId));}if($('member-setup-dialog').open){lastSetupSignature='';renderSetup();}renderConnectionOperationFeedback();}
   });
 });
 function renderTyping(messages) {
