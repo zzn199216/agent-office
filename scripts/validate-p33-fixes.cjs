@@ -61,6 +61,10 @@ cases.daily_limit=async f=>{
   const notice=await f.page.locator('#group-notice').textContent();assert.match(notice,/今天的群内讨论已到上限/);assert.match(notice,/房间选项.*每日上限/);assert.ok(await f.page.locator('#group-notice').isVisible());
 };
 
+cases.suggested_owner=async f=>{
+  await f.features({discussion:true,claims:false,daily_limit:null,work_layout:true});f.service.group.options.triage=async()=>({owner_id:f.members[2].id,kind:'task',uncertain:true});const message=await f.api('/api/chat/messages',{room_id:f.room.id,text:'请判断这个新请求交给谁比较合适',idempotency_key:id()}),owner=f.page.locator('[data-group-card="'+message.id+'"] [data-group-owner]');await owner.waitFor();assert.equal(await owner.inputValue(),f.members[2].id,'Needs-user defaults to the suggested owner');await owner.selectOption(f.members[1].id);await f.page.evaluate(()=>refreshAfterMutation());assert.equal(await owner.inputValue(),f.members[1].id,'An explicit user selection survives refresh');
+};
+
 async function main(){
   const files=fixture(),out=outputDirectory('p33-fixes'),proof={ok:false,isolated:true,real_clients_or_models:false,checks:{},cases:[],screenshots:[]};fs.mkdirSync(out,{recursive:true});
   let service,server,browser,page,base;const token=id(),errors=[],external=[];
