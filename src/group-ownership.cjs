@@ -48,6 +48,7 @@ class GroupOwnership{
     if(chat.active.get(task.assignee_id)?.messageId===task.message_id)throw new RoomError('处理尚未结束，请稍后确认结果。',409,'task_execution_active');
   }
   async decide(input){
+    if(input.action==='resolve_claims')return this.group.claims.decide(input);
     const route=this.group.get(input.message_id);if(!route||route.room_id!==input.room_id||!route.task_id)throw new RoomError('任务单不存在。',404);
     let task=this.team.record(route.task_id,'task',route.room_id);
     if(input.action==='choose_trial')return this.chooseTrial(route,input);

@@ -74,8 +74,10 @@ class GroupClaims{
   }
   async listen(input){
     const route=this.group.get(input.message_id);if(!route||route.room_id!==input.room_id||!route.meeting_id)throw new RoomError('没有可认领的任务单。',404);
+    if(route.delivery_id||route.status!=='needs_user')throw new RoomError('任务已经派出，不能继续发起认领。',409,'group_claim_closed');
     if(!this.group.enabled(input.room_id)||!this.service.features.get(input.room_id).claims)throw new RoomError('请开启群内讨论和认领。',409);
     const team=this.service.team,meeting=team.record(route.meeting_id,'meeting',input.room_id),member=this.group.candidates(input.room_id).find(m=>m.id===input.member_id);
+    if(meeting.resolution_started)throw new RoomError('正在按已有认领决定负责人，请稍候。',409,'group_claim_deciding');
     if(!member||!meeting.participant_ids.includes(member.id))throw new RoomError('这位成员当前不能参与自动认领。',409);
     if((meeting.claims_pending||[]).includes(member.id)||meeting.claims_failed?.[member.id]||meeting.reports.some(r=>r.member_id===member.id))throw new RoomError('这位成员的本次认领已发起，请按已有结果选择负责人。',409,'group_round_limit');
     team.save(meeting,{claims_pending:[...(meeting.claims_pending||[]),member.id]},null,'group_claim_invited');const abort=new AbortController(),pendingKey='claim:'+meeting.id+':'+member.id,deadline=setTimeout(()=>abort.abort(),90000);
@@ -90,14 +92,25 @@ class GroupClaims{
       const current=team.record(meeting.id,'meeting',input.room_id);team.save(current,{claims_pending:(current.claims_pending||[]).filter(m=>m!==member.id)},null,'group_claim_finished');await this.resolve(route.message_id,abort.signal);return this.group.state(input.room_id);
     })();this.group.pending.set(pendingKey,{abort,work});try{return await work;}catch(error){if(!this.service.chat.roomDeleted(input.room_id)){const current=team.record(meeting.id,'meeting',input.room_id);team.save(current,{claims_pending:(current.claims_pending||[]).filter(m=>m!==member.id),claims_failed:{...(current.claims_failed||{}),[member.id]:redact(error.message).slice(0,500)}},null,'group_claim_failed');this.service.changed();}throw error;}finally{clearTimeout(deadline);this.group.pending.delete(pendingKey);}
   }
-  async resolve(messageId,signal){
+  async decide(input){
+    const route=this.group.get(input.message_id);if(!route||route.room_id!==input.room_id||!route.meeting_id)throw new RoomError('没有可认领的任务单。',404);
+    if(route.delivery_id||route.status!=='needs_user')throw new RoomError('任务已经派出，不能继续裁决认领。',409,'group_claim_closed');
+    if(!this.group.enabled(input.room_id)||!this.service.features.get(input.room_id).claims)throw new RoomError('请开启群内讨论和认领。',409);
+    await this.resolve(input.message_id,undefined,{explicit:true});return this.group.get(input.message_id);
+  }
+  async resolve(messageId,signal,{explicit=false}={}){
     const route=this.group.get(messageId);if(route.status!=='needs_user'||route.delivery_id||!route.meeting_id)return;
     const team=this.service.team,meeting=team.record(route.meeting_id,'meeting',route.room_id);if(meeting.resolution_started)return;
-    const candidates=this.group.candidates(route.room_id),nominations=meeting.participant_ids.map(member=>meeting.reports.find(r=>r.member_id===member&&r.round===2)?.content.owner_id||meeting.predictions.find(p=>p.member_id===member)?.nomination).filter(v=>candidates.some(m=>m.id===v));
+    const candidates=this.group.candidates(route.room_id),actual=meeting.reports.filter(r=>r.source==='member_actual'&&meeting.participant_ids.includes(r.member_id)),second=actual.filter(r=>r.round===2).filter((r,i,all)=>all.findIndex(v=>v.member_id===r.member_id)===i),nominations=second.map(r=>r.content?.owner_id).filter(v=>candidates.some(m=>m.id===v));
+    if(meeting.claims_pending?.length){if(explicit)throw new RoomError('还有成员正在认领，请等这一轮结束。',409,'group_claim_pending');return;}
+    if(!second.length){if(explicit)throw new RoomError('请先邀请至少一位成员完成两轮认领。',409,'group_claim_empty');return;}
+    if(!explicit&&!meeting.participant_ids.every(member=>second.some(r=>r.member_id===member))){this.group.save({...route,reason:'已有成员完成认领；可继续邀请其他成员，或按现有认领决定'});this.service.changed();return;}
     team.save(meeting,{resolution_started:true},null,'group_claim_resolution');let choice;
-    if(nominations.length&&new Set(nominations).size===1)choice={owner_id:nominations[0],reason:'认领意见一致'};
-    else{const secretary=this.group.triager(route.room_id,candidates);if(!secretary)return;choice=this.group.parse(await this.group.lightweight(secretary,route.room_id,JSON.stringify({task:this.service.chat.store.message(messageId).text.slice(0,5000),cards:this.group.cards(route.room_id,candidates),reports:meeting.reports,predictions:meeting.predictions}),signal,'claim_decision'));}
-    if(!candidates.some(m=>m.id===choice.owner_id)||choice.uncertain){this.group.save({...this.group.get(messageId),reason:'认领仍有分歧，请选择负责人'});this.service.changed();return;}
+    try{
+      if(nominations.length===second.length&&new Set(nominations).size===1){const owner=nominations[0],speaker=candidates.find(m=>m.id===second[0].member_id);choice={owner_id:owner,kind:'task',task_type:route.task_type,reason:second.length===1?'按 '+(speaker?.name||'该成员')+' 的认领决定':'认领意见一致',helpers:second.filter(r=>r.member_id!==owner&&short(r.content?.helper_scope,250)).map(r=>({member_id:r.member_id,subtask:short(r.content.helper_scope,250)}))};}
+      else{const secretary=this.group.triager(route.room_id,candidates);if(!secretary)throw new RoomError('请选择一位负责人。',409);choice=this.group.parse(await this.group.lightweight(secretary,route.room_id,JSON.stringify({task:this.service.chat.store.message(messageId).text.slice(0,5000),cards:this.group.cards(route.room_id,candidates),reports:actual,predictions:meeting.predictions}),signal,'claim_decision'));}
+    }catch(error){const fresh=team.record(meeting.id,'meeting',route.room_id);team.save(fresh,{resolution_started:false},null,'group_claim_resolution_failed');this.service.changed();throw error;}
+    if(!candidates.some(m=>m.id===choice.owner_id)||choice.uncertain){const fresh=team.record(meeting.id,'meeting',route.room_id);team.save(fresh,{resolution_started:false},null,'group_claim_unresolved');this.group.save({...this.group.get(messageId),reason:'认领仍有分歧，请选择负责人'});this.service.changed();return;}
     choice=this.normalize(this.service.chat.store.message(messageId),choice);
     if(!this.begin(this.service.chat.store.message(messageId),choice))this.group.dispatch(this.service.chat.store.message(messageId),choice);
   }
