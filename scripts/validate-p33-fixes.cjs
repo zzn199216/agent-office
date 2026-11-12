@@ -55,6 +55,12 @@ cases.canvas_resize=async f=>{
   await sleep(300);const before=await f.page.evaluate(()=>officeScene.getMetrics().draws);await sleep(500);assert.equal(await f.page.evaluate(()=>officeScene.getMetrics().draws),before,'Idle resize must settle without a render loop');
 };
 
+cases.daily_limit=async f=>{
+  await f.features({discussion:true,daily_limit:1});f.service.group.options.triage=async()=>({owner_id:f.members[0].id,kind:'answer'});
+  await f.api('/api/chat/messages',{room_id:f.room.id,text:'请帮我处理这条没有指定成员的请求',idempotency_key:id()});await f.page.waitForFunction(()=>history.group.today_calls===1&&!history.group.settings.discussion);await f.page.waitForFunction(()=>!document.getElementById('group-enabled').checked);
+  const notice=await f.page.locator('#group-notice').textContent();assert.match(notice,/今天的群内讨论已到上限/);assert.match(notice,/房间选项.*每日上限/);assert.ok(await f.page.locator('#group-notice').isVisible());
+};
+
 async function main(){
   const files=fixture(),out=outputDirectory('p33-fixes'),proof={ok:false,isolated:true,real_clients_or_models:false,checks:{},cases:[],screenshots:[]};fs.mkdirSync(out,{recursive:true});
   let service,server,browser,page,base;const token=id(),errors=[],external=[];

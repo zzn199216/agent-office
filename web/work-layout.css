@@ -95,3 +95,5 @@ body.work-layout .ao-clock-meta{background:#fff!important;color:#15181E;border:1
 @media(max-width:850px){body.work-layout #officeScene{height:180px;flex-basis:180px}body.work-layout.work-office-expanded #officeScene{height:380px;flex-basis:380px}}
 
 body.pixel-theme.work-layout .sidebar .icon-button,body.pixel-theme.work-layout .sidebar .room-actions-button{background:transparent;color:#c1c9da}
+
+body.work-layout #group-notice{flex:0 0 auto;max-width:none;white-space:nowrap;font-size:12px}
