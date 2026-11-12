@@ -54,6 +54,23 @@ test('new room and service restart reuse the durable native conversation identit
   assert.equal(f.ledger.initializations.at(-1).nativeChatId,nativeId);assert.equal(f.ledger.sends.at(-1).nativeChatId,nativeId);assert.equal(f.service.desktop.row(f.member.id).native_session_id,nativeId);
 });
 
+test('an explicit Doubao automatic reconnect reuses the person after manual fallback and answers queued work once',async t=>{
+  const f=setup(t);f.service.chat.store.updateMember(f.member.id,{config:{launch_provider:'doubao'}});
+  await f.service.desktop.connect({member_id:f.member.id,room_id:f.room.id});
+  const saved=f.service.desktop.row(f.member.id),memberCount=f.service.chat.store.members().length;
+  f.service.chat.store.updateMember(f.member.id,{config:{...f.service.chat.store.member(f.member.id).config,desktop_delivery_mode:'manual_mcp'}});
+  await f.reopen();
+  await assert.rejects(f.service.desktop.connect({member_id:f.member.id,room_id:f.room.id,automatic:true}),{code:'desktop_manual_mode'});
+  const message=f.rawPost('one automatic Doubao probe','doubao-restored-auto');
+  await f.service.desktop.connect({member_id:f.member.id,room_id:f.room.id});await f.service.desktop.pump(f.member.id);
+  await until(()=>f.service.chat.store.message(message.id).status==='answered');
+  const restored=f.service.desktop.row(f.member.id);
+  assert.equal(restored.native_session_id,saved.native_session_id);assert.equal(restored.runtime_key,saved.runtime_key);
+  assert.equal(f.service.chat.store.members().length,memberCount);assert.equal(f.ledger.sends.filter(send=>send.requestId===message.id).length,1);
+  assert.equal(f.service.chat.store.member(f.member.id).config.desktop_delivery_mode,'native_desktop');
+  assert.equal(f.service.runtime.connectionState(f.member.id).automatic_reply_verified,true);
+});
+
 test('persistent native person turns receive recent context only from the addressed room before their own message',async t=>{
   const f=setup(t);await f.service.desktop.connect({member_id:f.member.id,room_id:f.room.id});
   const other=f.service.chat.addRoom({title:'Second context room',project_id:f.project.id});f.service.chat.join(other.id,f.member.id);

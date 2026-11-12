@@ -74,6 +74,69 @@ function fixture({createFailure=false,sendFailure=false,swallowStop=false}={}) {
 }
 const settle=()=>new Promise(resolve=>setImmediate(resolve));
 const sends=f=>f.calls.filter(call=>call.send);
+
+test('Rspack method factories keep string module IDs and discover direct-value export tables only',()=>{
+  const factories={
+    Z8R(module,exports,req){req.d(exports,{},{createStore:()=>null,useMessageStore:{getState:()=>null}});return 'useMessageStore is not initialized';},
+    decoy(module,exports,req){const {useMessageStore}=req('Z8R');return {useMessageStore,note:'useMessageStore is not initialized'};},
+    nested(module,exports,req){req.d(exports,{},{other:()=>({useMessageStore:1})});return 'useMessageStore is not initialized';},
+  };
+  const entry=findDoubaoModule({m:factories},'messageStore');
+  assert.equal(entry.id,'Z8R');assert.equal(entry.source,factories.Z8R.toString());
+  assert.equal(findDoubaoModule({m:{decoy:factories.decoy}},'messageStore',true),null);
+  assert.equal(findDoubaoModule({m:{nested:factories.nested}},'messageStore',true),null);
+});
+
+function rspackFixture() {
+  const f=fixture(),old=f.exports;
+  const factories={
+    conversation(module,exports,req){req.d(exports,{c:()=>0});return 'launchShareTraceId sdk.ContinueChat( conversationId:t.conversationId';},
+    context(module,exports,req){req.d(exports,{},{s:()=>0});return 'local_conversation_id last_section_id conversation_type';},
+    lookup(module,exports,req){req.d(exports,{},{cL:()=>0,NQ:()=>0});return 'conversationLinks feed.getState()';},
+    bot(module,exports,req){req.d(exports,{},{O:"123"});},
+    creationApi(module,exports,req){req.d(exports,{},{h:()=>0});return 'api.ThreadCreate( samantha_onboarding thread_info';},
+    service(module,exports,req){req.d(exports,{},{K:()=>0,V:()=>0});return 'chat-ioc-manager: cannot bind empty service serviceContainer';},
+    message(module,exports,req){req.d(exports,{},{WJ:()=>0,yE:()=>0});return 'local_message_id conversationContext textBlock';},
+    text(module,exports,req){req.d(exports,{},{N:()=>0});return 'text_block pc_event_block append_fields';},
+    store(module,exports,req){req.d(exports,{},{useMessageStore:{getState:()=>0}});return 'useMessageStore is not initialized';},
+    info(module,exports,req){req.d(exports,{},{fetchUpdateConversationInfo:()=>0});return 'updateConversationInfo: invalid data from api';},
+    complete(module,exports,req){req.d(exports,{},{o:()=>0});return 'status.Streaming is_finish async_task';},
+    identity(module,exports,req){req.d(exports,{},{F6:()=>0,Sp:()=>0});return 'user_id_str isUserInfoLoaded';},
+  };
+  const values={conversation:{c:old[17].createConversation},context:{s:old[17].createSendMessageConversationContext},
+    lookup:{cL:old[17].getInfoByConversationId,NQ:()=>[]},bot:{O:old[17].MAIN_BOT_ID},creationApi:{h:()=>{}},
+    service:{K:old[29].getChatService,V:()=>{}},message:{WJ:old[41].createSendMessage,yE:old[41].combineBlocks},
+    text:{N:old[53].mapTextToTextBlock},store:old[67],info:old[71],complete:{o:old[83].z},identity:{F6:old[101].n5,Sp:()=>{}}};
+  f.req=id=>{f.calls.push({require:id});if(!values[id])throw Error('missing fixture module');return values[id];};f.req.m=factories;
+  const kinds=['conversations','services','messages','text','messageStore','conversationInfo','complete','identity','conversationContext','conversationLookup','bot','creationApi'];
+  f.options={...f.options,apiLayout:'rspack2366',factorySha256:Object.fromEntries(kinds.map(kind=>[kind,createHash('sha256').update(findDoubaoModule(f.req,kind,false,'rspack2366').source).digest('hex')]))};
+  f.bridge=createDoubaoNativeBridge(f.req,f.options,f.ownership);return f;
+}
+
+test('qualified Rspack exports restore the same chat and correlate automatic replies without duplicate sends',async()=>{
+  const f=rspackFixture(),chatId='existing-native-chat';
+  f.infos.set(chatId,{conversation_id:chatId,bot_id:'native-default-bot',conversation_type:2});
+  await f.bridge.initialize({nativeChatId:chatId});
+  assert.equal(f.calls.filter(call=>call.create).length,0);
+  await f.bridge.send(chatId,{requestId:'modern-turn',prompt:'modern probe'});await settle();
+  f.reply('modern-turn',{chatId,id:'unrelated',parent:'some-other-turn',content:'wrong answer'});
+  assert.equal(f.bridge.snapshot('modern-turn').status,'running');
+  f.reply('modern-turn',{chatId,content:'modern correlated answer'});
+  const result=f.bridge.snapshot('modern-turn',{includeContent:true});
+  assert.equal(result.status,'completed');assert.equal(result.replies[0].content,'modern correlated answer');
+  await f.bridge.send(chatId,{requestId:'modern-turn',prompt:'modern probe'});
+  assert.equal(sends(f).length,1);assert.equal(result.nativeChatId,chatId);
+  assert.deepEqual(f.visible,{chatId:'human-visible-chat',composer:'human unsent draft'});
+});
+
+test('Rspack adaptation verifies every split factory before executing any native SDK module',async()=>{
+  const f=rspackFixture();
+  assert.throws(()=>createDoubaoNativeBridge(f.req,{...f.options,factorySha256:{}}),/SOURCE_IDENTITY_REQUIRED/);
+  const pins={...f.options.factorySha256,creationApi:'0'.repeat(64)};
+  const bridge=createDoubaoNativeBridge(f.req,{...f.options,factorySha256:pins});
+  await assert.rejects(bridge.initialize(),/SOURCE_IDENTITY_MISMATCH/);assert.deepEqual(f.calls,[]);
+});
+
 function rendererFixture(f,registry) {
   let captured=0;const chunks=[];chunks.push=([,,resolve])=>{captured++;resolve(f.req);};
   const window={webpackChunkflow_web_extension:chunks};
@@ -185,6 +248,15 @@ test('native preparation executes only the exact hashed bytes and never requests
   assert.equal(findDoubaoModule(p.f.req,'services').id,29);assert.equal(findDoubaoModule(p.f.req,'conversations').id,17);
 });
 
+test('a qualified chunk supplies a missing split factory even when its primary factory is already loaded',async()=>{
+  const p=preparationFixture({ready:true}),identity=p.f.req.m[101];delete p.f.req.m[101];
+  const resource=p.resources[0];resource.source=resource.source.replace('29:',`101:${identity.toString()},29:`);
+  resource.sha256=createHash('sha256').update(resource.source).digest('hex');
+  Object.assign(p.qualification.chunks[0],{kinds:['services','identity'],sha256:resource.sha256});
+  const proof=await p.read();assert.deepEqual(Array.from(proof.sources,source=>source.id),['93166']);
+  await p.apply(proof);assert.equal(findDoubaoModule(p.f.req,'identity').id,101);assert.deepEqual(p.f.calls,[]);
+});
+
 test('bad chunk bytes and changed asset paths fail before any native chunk registration',async()=>{
   const p=preparationFixture();p.setFetch(async()=>({ok:true,redirected:false,arrayBuffer:async()=>new TextEncoder().encode('changed resource').buffer}));
   await assert.rejects(p.read(),/PREPARATION_UNSUPPORTED_SOURCE/);
@@ -233,17 +305,20 @@ test('public preparation fixes all eight pins and rejects source substitution be
   assert.throws(()=>buildDoubaoNativeRegistration([{id:'unknown',source:'x'}]),{code:'desktop_adapter_unsupported'});
 });
 
-for(const [profileId,file] of [['current','doubao-native-2.33.3.json'],['currentRefresh','doubao-native-2.33.3-refresh.json'],['desktop2335','doubao-native-2.33.5.json']])test(`${profileId} Doubao profile pins reach the native bridge and reject an unknown or mixed profile`,async()=>{
+for(const [profileId,file] of [['current','doubao-native-2.33.3.json'],['currentRefresh','doubao-native-2.33.3-refresh.json'],['desktop2335','doubao-native-2.33.5.json'],['desktop2366','doubao-native-2.36.6.json']])test(`${profileId} Doubao profile pins reach the native bridge and reject an unknown or mixed profile`,async()=>{
   const q=require('../src/'+file);
-  const state={contractVersion:q.contractVersion,runtimeGlobal:q.runtimeGlobal,factorySha256:q.factorySha256};
+  const state={contractVersion:q.contractVersion,runtimeGlobal:q.runtimeGlobal,...q.apiLayout?{apiLayout:q.apiLayout}:{},factorySha256:q.factorySha256};
   let calls=0;
   const value=await prepareDoubaoNativeRuntime({evaluate:async()=>++calls===1?{...state,profileId,sources:[]}:state});
   assert.deepEqual(value,state);assert.equal(calls,2);
-  const f=fixture(),bridge=createDoubaoNativeBridge(f.req,{...f.options,...value});
+  const f=q.apiLayout?rspackFixture():fixture(),bridge=createDoubaoNativeBridge(f.req,{...f.options,...value});
   bridge.assertSourceIdentity(q.factorySha256);
   await assert.rejects(bridge.initialize(),/SOURCE_IDENTITY_MISMATCH/,'fixture factories must still fail the real source hash check');
   for(const bad of [{profileId:'unknown'},{profileId:'legacy'},{profileId:'current',factorySha256:{...q.factorySha256,messages:'unqualified'}}]){
     calls=0;await assert.rejects(prepareDoubaoNativeRuntime({evaluate:async()=>{calls++;return {...state,sources:[],...bad};}}),{code:'desktop_adapter_unsupported'});assert.equal(calls,1);
+  }
+  if(q.apiLayout)for(const bad of [{apiLayout:'unknown'},{apiLayout:undefined},{runtimeGlobal:'@flow-web/desktop:stable'}]){
+    calls=0;await assert.rejects(prepareDoubaoNativeRuntime({evaluate:async()=>{calls++;return {...state,profileId,sources:[],...bad};}}),{code:'desktop_adapter_unsupported'});assert.equal(calls,1);
   }
   assert.throws(()=>buildDoubaoNativeRegistration([{id:q.chunks[0].id,source:'window.runBusinessSideEffect()'}],profileId),{code:'desktop_adapter_unsupported'});
 });

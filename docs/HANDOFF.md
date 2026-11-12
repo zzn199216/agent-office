@@ -2,6 +2,32 @@
 
 本项目目前处于本地开发阶段。以源码、测试和 Git 提交为准；开发入口及构建命令见根目录 README。生成包、依赖缓存、日志、截图和临时测试数据不属于源码，不应提交。历史设计稿、阶段报告和旧交接记录可从 Git 历史查阅。
 
+## preview.35 豆包自动收发适配（2026-11-12）
+
+本轮只修豆包桌面的版本适配。工作目录仍为当前 checkout，分支 `codex/onboarding-progress-compose`，版本 **0.15.0-preview.35**；Y: 旧快照不参与修改。打包入口仍是 `dev/AgentOffice.exe`，提交和指纹以 `dev/release-manifest.json.source` 为准。
+
+问题依据：本机卸载登记仍写 2.33.3，但已下载豆包 **2.36.6 / 前端资源 1.0.9.3594**。这份资源由 Webpack 改为 Rspack：运行时数组、模块 ID 类型、导出表格式以及会话相关模块的拆分均有变化。旧适配只研究到 2.33.5，会拒绝这份未知源码。缓存包存在不代表运行中的窗口已加载它，实际加载版本仍需实机检查。
+
+- `src/desktop-doubao.cjs`：识别新运行时、字符串模块 ID、方法形式的工厂和第三参数导出表；把新版分散的接口映射到原有收发逻辑。新版校验 12 个工厂后才调用 SDK；两份按固定路径与 SHA-256 校验的资源仅注册缺失工厂，不运行资源附带的启动逻辑。旧资源配置继续支持。
+- `src/doubao-native-2.36.6.json`：当前静态资源资格表。冷启动和正常延迟加载的 36 个源码变体均已在本机资源中提取并做隔离 ABI 检查，未把对厂商源码的宽泛匹配当成资格。
+- `tests/desktop-doubao.test.cjs`：新增 `Rspack method factories keep string module IDs and discover direct-value export tables only`（修复前失败），新版同会话收发与重复请求、全部拆分工厂先验校验、新版本配置混用拒绝，以及一个资源提供多个工厂的回归。
+- `tests/desktop-sessions.test.cjs`：新增 `an explicit Doubao automatic reconnect reuses the person after manual fallback and answers queued work once`。明确切回自动后沿用人物、runtime key 和原对话；手动模式仍不被后台偷偷改回。
+
+已完成的独立证据：
+
+| 验证 | 结果 | 本机忽略目录中的证据 |
+| --- | --- | --- |
+| 原生收发、会话与启动器定向回归 | 117 通过，0 失败、0 跳过 | `output/doubao-current/targeted-tests.log` |
+| 本机真实静态资源的两阶段准备 | 两个资源校验并注册；准备阶段业务模块执行 0；篡改源码被拒绝 | `output/doubao-current/source-verification.json` |
+| 36 个实际工厂源码变体的 ABI 边界夹具 | 同对话恢复、正确回复关联、重复请求只有一次发送，全部通过 | 同上；SDK 外部边界使用合成数据，真实模型调用 0 |
+| 完整 Windows 开发门禁 | 交付前运行 `npm run verify:dev`；最终状态、全量数字与日志以本次 `output/verify-dev/latest.json` 为准 | 对应 `result_path`；六条浏览器流程、连接/办公室回归、打包 MCP、启动恢复和文件哈希均由此命令核对 |
+
+`stats` 仍按原有口径只读。修复前自 preview.21 起为 2 次首次尝试、0 次重试、1 组首次接通、1 组等待，自动回复已验证尝试 0；无版本历史接入记录 94。前后快照分别保存在 `output/doubao-current/stats-before.json` 和 `stats-after.json`。本轮隔离检查不能作为正式接入成功率提升的证据。
+
+**实机待完成**：用户要求先完成代码和隔离验证，电脑暂不方便操作；已允许之后正常退出并重开豆包。尚未重启豆包、重载正式 AO 服务、切换正式成员的发送模式或发送真实探针。因此当前没有新的真实自动收发成功结论，preview.34 的桌面实窗和编辑器实开待验事项也仍然保留。
+
+电脑可用后：确认豆包实际加载的资源版本，正常退出后由现有启动器只开启回环连接；加载本修复版 AO，显式恢复同一位豆包成员及保存的对话。先核对结果未知的历史任务，不自动重放；用一条唯一随机标记消息检查真实发送、服务器消息 ID、对应完成回复及 AO 中的同一条回答。验证后记录真实结果和前后 `stats`，不以端口可达、历史接通或夹具结果替代。
+
 ## preview.34 验收修复交付（2026-11-12）
 
 范围：只复验用户的《preview.33 验收后的修复任务》14 项及第三节补验证。基线 `b2d61d7`（preview.33），当前版本 **0.15.0-preview.34**，开发分支 `codex/onboarding-progress-compose`。14 个问题各有独立修复提交；“打开 API 配置”错误后的按钮恢复另有一个补验证发现的修复提交。Y: 旧快照工作目录不参与本轮修改。
