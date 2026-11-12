@@ -49,6 +49,12 @@ cases.sidebar_icons=async f=>{
   assert.ok(icons.length>=3,JSON.stringify(icons));for(const icon of icons){assert.match(icon.text,/^[＋⋯]$/);assert.equal(icon.background,'rgba(0, 0, 0, 0)','Sidebar icons retain a dark background');assert.equal(icon.color,'rgb(193, 201, 218)','Sidebar symbols contrast with the dark sidebar');}
 };
 
+cases.canvas_resize=async f=>{
+  await f.features({work_layout:true,canvas:true});await f.page.locator('[data-canvas-expand]').click();await f.page.waitForFunction(()=>officeScene.getMetrics().bitmap_count>=5);
+  for(const width of [1280,1920,1440]){await f.page.setViewportSize({width,height:900});await sleep(300);const size=await f.page.locator('.canvas-world').evaluate(world=>({world:world.clientWidth,canvas:parseFloat(world.querySelector('canvas').style.width),backing:world.querySelector('canvas').width}));assert.ok(size.canvas>=size.world,'Resized Canvas must cover the visible world '+JSON.stringify(size));assert.ok(size.backing>0);}
+  await sleep(300);const before=await f.page.evaluate(()=>officeScene.getMetrics().draws);await sleep(500);assert.equal(await f.page.evaluate(()=>officeScene.getMetrics().draws),before,'Idle resize must settle without a render loop');
+};
+
 async function main(){
   const files=fixture(),out=outputDirectory('p33-fixes'),proof={ok:false,isolated:true,real_clients_or_models:false,checks:{},cases:[],screenshots:[]};fs.mkdirSync(out,{recursive:true});
   let service,server,browser,page,base;const token=id(),errors=[],external=[];
