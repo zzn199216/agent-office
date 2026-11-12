@@ -43,6 +43,12 @@ cases.picker_text=async f=>{
   const tiny=await f.page.locator('#secretary-connect-dialog').evaluate(host=>[...host.querySelectorAll('p,small,li,summary,.launch-candidate-info span')].filter(node=>node.getBoundingClientRect().width&&node.getBoundingClientRect().height&&node.textContent.trim()&&parseFloat(getComputedStyle(node).fontSize)<12).map(node=>({text:node.textContent.trim().slice(0,70),font:getComputedStyle(node).fontSize})));assert.deepEqual(tiny,[],'Picker body text must be at least 12px');await f.page.locator('#secretary-connect-dialog .close-dialog').first().click();
 };
 
+cases.sidebar_icons=async f=>{
+  await f.page.locator('#professional-toggle').click();await f.features({work_layout:true,canvas:true});
+  await f.page.locator('body.work-layout.canvas-office').waitFor();await f.page.locator('#add-room').waitFor();const icons=await f.page.locator('#add-project,#add-room,.room-actions-button').evaluateAll(nodes=>nodes.filter(n=>n.getBoundingClientRect().height).map(n=>{const c=getComputedStyle(n);return {text:n.textContent.trim(),color:c.color,background:c.backgroundColor};}));
+  assert.ok(icons.length>=3,JSON.stringify(icons));for(const icon of icons){assert.match(icon.text,/^[＋⋯]$/);assert.equal(icon.background,'rgba(0, 0, 0, 0)','Sidebar icons retain a dark background');assert.equal(icon.color,'rgb(193, 201, 218)','Sidebar symbols contrast with the dark sidebar');}
+};
+
 async function main(){
   const files=fixture(),out=outputDirectory('p33-fixes'),proof={ok:false,isolated:true,real_clients_or_models:false,checks:{},cases:[],screenshots:[]};fs.mkdirSync(out,{recursive:true});
   let service,server,browser,page,base;const token=id(),errors=[],external=[];

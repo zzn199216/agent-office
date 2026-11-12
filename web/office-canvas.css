@@ -1,5 +1,5 @@
-.canvas-office{height:auto;background:#fff;color:#15181E;border:1px solid #DDE1E7;font:13px "Segoe UI","Microsoft YaHei",system-ui,sans-serif}
-.canvas-office button{min-height:44px;border:1px solid #DDE1E7;background:#fff;color:#15181E;padding:6px 10px;cursor:pointer;box-shadow:none!important;border-radius:0!important}
+section.canvas-office{height:auto;background:#fff;color:#15181E;border:1px solid #DDE1E7;font:13px "Segoe UI","Microsoft YaHei",system-ui,sans-serif}
+section.canvas-office button{min-height:44px;border:1px solid #DDE1E7;background:#fff;color:#15181E;padding:6px 10px;cursor:pointer;box-shadow:none!important;border-radius:0!important}
 .canvas-toolbar{display:flex;gap:8px;align-items:center;flex-wrap:nowrap;padding:3px 8px;border-bottom:1px solid #DDE1E7;min-height:44px}
 .canvas-toolbar .canvas-count{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .canvas-toolbar>button,.canvas-toolbar>label{flex-shrink:0}
@@ -20,10 +20,10 @@ body.canvas-office #work-empty-station,body.canvas-office #work-office-expand{di
 body.work-layout.canvas-office #officeScene{height:auto;min-height:0;flex:0 0 auto;max-height:57vh;overflow:visible;border:0}
 body.work-layout.canvas-office .canvas-world{height:var(--canvas-world-height,200px);max-height:none}
 body.work-layout.canvas-office #officeScene{max-height:none}
-body:not(.work-layout).canvas-office .canvas-office{height:100%}
+body:not(.work-layout).canvas-office section.canvas-office{height:100%}
 body:not(.work-layout).canvas-office .canvas-world{height:calc(100% - 120px);max-height:none}
-@media(max-width:850px){.canvas-toolbar{gap:4px;padding:3px 6px}.canvas-toolbar strong{font-size:11px;flex:1 1 100%}.canvas-strip{padding:6px}.canvas-world{height:250px;max-height:30vh}.canvas-office button{font-size:12px}.canvas-member{min-width:132px}.canvas-office .canvas-note{max-width:150px;font-size:11px}body.work-layout.canvas-office #officeScene{max-height:46vh}}
-@media(prefers-reduced-motion:reduce){.canvas-office *{scroll-behavior:auto!important}}
+@media(max-width:850px){.canvas-toolbar{gap:4px;padding:3px 6px}.canvas-toolbar strong{font-size:11px;flex:1 1 100%}.canvas-strip{padding:6px}.canvas-world{height:250px;max-height:30vh}section.canvas-office button{font-size:12px}.canvas-member{min-width:132px}.canvas-office .canvas-note{max-width:150px;font-size:11px}body.work-layout.canvas-office #officeScene{max-height:46vh}}
+@media(prefers-reduced-motion:reduce){section.canvas-office *{scroll-behavior:auto!important}}
 body.work-layout .canvas-toolbar strong{flex:1 1 auto;font-size:12px}
 
 .canvas-office .canvas-empty-world{border-style:dashed;min-width:100px;text-align:center;align-items:center;background:#ffffffd9;transform:none}

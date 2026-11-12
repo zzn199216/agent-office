@@ -93,3 +93,5 @@ body.work-layout #officeScene{height:380px;flex-basis:380px}
 body.work-layout.work-office-expanded #officeScene{height:540px;flex-basis:540px}
 body.work-layout .ao-clock-meta{background:#fff!important;color:#15181E;border:1px solid #DDE1E7!important}
 @media(max-width:850px){body.work-layout #officeScene{height:180px;flex-basis:180px}body.work-layout.work-office-expanded #officeScene{height:380px;flex-basis:380px}}
+
+body.pixel-theme.work-layout .sidebar .icon-button,body.pixel-theme.work-layout .sidebar .room-actions-button{background:transparent;color:#c1c9da}
