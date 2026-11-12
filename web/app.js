@@ -37,6 +37,12 @@ const admittedMembers=members=>(members||[]).filter(member=>!!member.verified_at
 const visibleMembers=members=>(members||[]).filter(member=>member.verified_at||member.adapter!=='grok-proxy');
 const staleMembers=()=>(state?.chat?.members||[]).filter(member=>!member.verified_at&&member.adapter!=='grok-proxy'&&['connection_failed','awaiting_handshake','offline'].includes(member.status)&&Date.now()-Date.parse(member.created)>10*60000);
 const imageDrafts=new Map();
+const roomDrafts=new Map();let composerRoom=null;
+function synchronizeRoomDraft(nextRoom){
+  if(composerRoom===nextRoom)return;
+  if(composerRoom){roomDrafts.set(composerRoom,$('prompt').value);if(recipientRoom===composerRoom)roomRecipients.set(composerRoom,$('recipient').value);}
+  composerRoom=nextRoom;$('prompt').value=roomDrafts.get(nextRoom)||'';
+}
 const draftImages=()=>imageDrafts.get(roomId)||[];
 function renderImageDrafts(){
   $('image-drafts').innerHTML=draftImages().map(item=>`<div class="image-draft"><img src="${item.data_url}" alt="${escape(item.name)}"><span>${escape(item.name)}</span><button type="button" data-remove-image="${item.id}" aria-label="移除 ${escape(item.name)}">×</button></div>`).join('');
@@ -740,6 +746,7 @@ function renderSettings() {
   if (document.activeElement !== $('codex-path') && !$('codex-path').dataset.dirty) $('codex-path').value = codex.executable || '';
 }
 function renderRoom(project) {
+  synchronizeRoomDraft(history.room.id);
   renderImageDrafts(); const room = history.room, participants = admittedMembers(history.participants), messages = history.messages || []; $('discussion-heading').textContent = room.title+(room.archived?' · 已归档':''); $('room-heading').textContent = room.title; $('room-eyebrow').textContent = 'LOCAL CHAT ROOM';
   $('room-subtitle').textContent = `${project?.name || room.project_name || ''} · ${participants.length} 位成员 · ${project?.access === 'workspace-write' ? '允许项目修改' : '默认仅查询资料'}`;
   $('native-thread').classList.toggle('hidden',!history.participants.some(m=>['codex','native'].includes(m.adapter)&&m.native_thread_id)); $('composer').classList.remove('hidden'); $('legacy-note').classList.add('hidden'); $('room-members-bar').classList.remove('hidden');
@@ -2118,7 +2125,7 @@ $('connector-fields-dialog').addEventListener('close',()=>{connectorFields=null;
 $('connector-fields-dialog').onclick=event=>{const button=event.target.closest('[data-connector-copy]');if(!button||!connectorFields)return;action(async()=>{const name=button.dataset.connectorCopy,value=connectorFields[name];if(value===undefined)return;if(name==='headers'&&!Object.keys(value).length){toast('这个连接器不需要标头。');return;}await navigator.clipboard.writeText(typeof value==='string'?value:JSON.stringify(value,null,2));toast('已复制。只填写到这个 AI 本人的连接器设置。');});};
 $('connector-copy-all').onclick=()=>action(async()=>{if(!connectorFields)return;const fields=connectorFields;await navigator.clipboard.writeText(`名称：${fields.name}\n连接方式：${fields.transport}\nURL：${fields.url}\n标头：${Object.keys(fields.headers).length?JSON.stringify(fields.headers,null,2):'无需填写'}`);toast('字段已复制。按名称、连接方式、URL 分别填写，不作为 JSON 导入。');});
 $('projects').onclick = event => { const button = event.target.closest('[data-project]'); if (button) { secretaryNavigation=null;projectId = button.dataset.project; roomId = null; legacyId = null; document.body.classList.remove('mobile-sidebar-open');syncSidebarToggle();setReply(null); action(refresh); } };
-const onRoomListClick = event => { const manage=event.target.closest('[data-room-actions]');if(manage){showRoomActions(manage.dataset.roomActions);return;}const button = event.target.closest('[data-room]'); if (button) { secretaryNavigation=null;roomId = button.dataset.room; legacyId = null;document.body.classList.remove('mobile-sidebar-open');syncSidebarToggle();setReply(null); setProfessionalView(true); action(refresh); } };
+const onRoomListClick = event => { const manage=event.target.closest('[data-room-actions]');if(manage){showRoomActions(manage.dataset.roomActions);return;}const button = event.target.closest('[data-room]'); if (button) { secretaryNavigation=null;synchronizeRoomDraft(button.dataset.room);roomId = button.dataset.room; legacyId = null;renderImageDrafts();document.body.classList.remove('mobile-sidebar-open');syncSidebarToggle();setReply(null); setProfessionalView(true); action(refresh); } };
 $('rooms').onclick=onRoomListClick;$('archived-rooms-list').onclick=onRoomListClick;
 $('room-actions-archive').onclick=()=>action(toggleRoomArchive);
 $('room-actions-delete').onclick=()=>{const id=managedRoomId;$('room-actions-dialog').close();managedRoomId=null;showDeleteRoom(id);};
@@ -2223,15 +2230,17 @@ $('image-drafts').onclick=event=>{const button=event.target.closest('[data-remov
 $('messages').addEventListener('click',event=>{const link=event.target.closest('[data-show-image]');if(link){event.preventDefault();$('image-full').src='/api/chat/images/'+link.dataset.showImage;$('image-dialog').showModal();}});
 $('image-close').onclick=()=>$('image-dialog').close();
 $('composer').onsubmit = event => { event.preventDefault(); if (submitting) return; action(async () => {
-  const text = $('prompt').value.trim(),images=draftImages().slice(); if ((!text&&!images.length) || !roomId || legacyId) return; const named = mentionedMember(text); if (named) { $('recipient').value = named.id; updateRecipientNote(); } const groupSend=$('recipient').value==='__group__',target=groupSend?null:$('recipient').value||null, submittedRoom=roomId, fingerprint = JSON.stringify([submittedRoom,target,text,replyTo,images.map(image=>image.id)]);
+  const submittedDraft=$('prompt').value,text = submittedDraft.trim(),images=draftImages().slice(); if ((!text&&!images.length) || !roomId || legacyId) return; const named = mentionedMember(text); if (named) { $('recipient').value = named.id; updateRecipientNote(); } const groupSend=$('recipient').value==='__group__',target=groupSend?null:$('recipient').value||null, submittedRoom=roomId, fingerprint = JSON.stringify([submittedRoom,target,text,replyTo,images.map(image=>image.id)]);
+  roomDrafts.set(submittedRoom,submittedDraft);
   if (!pendingSubmission || pendingSubmission.fingerprint !== fingerprint) pendingSubmission = {fingerprint,key:crypto.randomUUID()}; submitting = true; $('send-button').disabled = true;
   try { await api('/api/chat/messages',{room_id:submittedRoom,sender_id:'user',to_member_id:target,announcement:!groupSend&&!target,text,idempotency_key:pendingSubmission.key,reply_to:replyTo,attachments:images.map(({name,data_url})=>({name,data_url}))}); pendingSubmission = null;
     const unchanged=JSON.stringify([roomId,$('recipient').value==='__group__'?null:$('recipient').value||null,$('prompt').value.trim(),replyTo,draftImages().map(image=>image.id)])===fingerprint;
+    if(roomDrafts.get(submittedRoom)===submittedDraft){roomDrafts.delete(submittedRoom);if(composerRoom===submittedRoom&&$('prompt').value===submittedDraft)$('prompt').value='';}
     if(unchanged){$('prompt').value = ''; imageDrafts.delete(submittedRoom);renderImageDrafts();$('mention-choices').classList.add('hidden'); setReply(null); if(document.body.classList.contains('office-view'))toggleOfficeComposer(false);}else{const sentIds=new Set(images.map(image=>image.id));imageDrafts.set(submittedRoom,(imageDrafts.get(submittedRoom)||[]).filter(image=>!sentIds.has(image.id)));renderImageDrafts();}
     await refresh(); if(!officeView||state?.features?.[roomId]?.work_layout)$('chat-stream').scrollTop = $('chat-stream').scrollHeight;
   }finally { submitting = false; $('send-button').disabled = !webConnected;updateOfficeComposerPresentation(); }
 }); };
-$('prompt').oninput = ()=>{secretaryNavigation=null;renderMentions();updateOfficeComposerPresentation();};
+$('prompt').oninput = ()=>{secretaryNavigation=null;if(composerRoom)roomDrafts.set(composerRoom,$('prompt').value);renderMentions();updateOfficeComposerPresentation();};
 $('prompt').onkeydown = event => {
   if (event.isComposing || event.keyCode === 229) return;
   const picking = !$('mention-choices').classList.contains('hidden');
