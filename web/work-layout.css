@@ -35,13 +35,20 @@ body.work-layout .ao-heading,body.work-layout .ao-scene-settings,body.work-layou
 body.work-layout .ao-health{display:none}body.work-layout .ao-seat-status{background:#fff;color:#15181E;border:1px solid #DDE1E7;padding:2px 4px}
 body.work-layout .ao-has-progress .ao-bubble{background:#fff;color:#15181E;border-color:#2F5FD0}
 body.work-layout .ao-needs-input .ao-bubble{background:#FDEBDD;color:#8A3A06;border-color:#F08A3C}
-body.work-layout #chat-stream{display:block!important;min-height:100px;flex:1;overflow:auto;padding:16px 4px;background:#EEF0F4}
+body.work-layout #chat-stream{display:block!important;min-height:160px;flex:1 1 160px;overflow:auto;padding:8px 4px;background:#EEF0F4}
 body.pixel-theme.work-layout .chat-message .message-body{background:#fff;border:1px solid #DDE1E7;box-shadow:none;color:#15181E;max-width:100%}
 body.pixel-theme.work-layout .chat-message.own-message .message-body{background:#f6f8fd;border-color:#d5def2}
 body.work-layout .message-content,body.work-layout .message-body{font-size:14px;line-height:1.65}
 body.work-layout .message-header time,body.work-layout time,body.work-layout code,body.work-layout .group-controls>span{font-family:Consolas,"Cascadia Mono",monospace}
 body.work-layout .chat-message{margin-bottom:20px}
-body.pixel-theme.work-layout #composer{position:relative;inset:auto;width:auto;flex:none;padding:10px 14px;margin:0;border:1px solid #DDE1E7;background:#fff;box-shadow:none;max-height:38vh}
+body.pixel-theme.work-layout #composer{position:relative;inset:auto;width:auto;flex:0 0 auto;padding:4px 10px;margin:0;border:1px solid #DDE1E7;background:#fff;box-shadow:none;max-height:none}
+body.work-layout #composer .composer-toolbar,body.work-layout #composer .composer-bottom{min-height:44px;margin:0}
+body.work-layout #composer label{margin:0}
+body.work-layout #composer #recipient-note{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+body.work-layout #composer #prompt{display:block;width:100%;height:44px;min-height:44px;margin:0;padding:4px 3px}
+body.work-layout .group-controls{flex-wrap:nowrap;overflow-x:auto;min-height:44px;gap:8px;margin:0;align-items:center}
+body.work-layout .group-controls>*{flex-shrink:0;white-space:nowrap}
+@media(max-height:700px){body.work-layout .footer{display:none}body.pixel-theme.work-layout .content{padding:4px 10px}body.pixel-theme.work-layout .topbar{min-height:52px;padding-top:2px;padding-bottom:2px}}
 body.work-layout .composer-bottom>span{color:#5B6472}body.work-layout .composer textarea{background:#fff;min-height:44px;max-height:16vh}
 body.work-layout .footer{background:#EEF0F4;border-top:0;color:#5B6472;height:26px;min-height:26px}
 body.work-layout .work-rail{width:300px;min-width:0;padding:20px 14px;background:#fff;border-left:1px solid #DDE1E7;height:100dvh;overflow:auto}

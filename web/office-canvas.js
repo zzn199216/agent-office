@@ -11,6 +11,13 @@
     const metrics={draws:0,scheduled:0,bitmap_bytes:0,canvas_bytes:0,loaded_assets:[],frames:0};
     const reduced=()=>current?.features?.reduced_motion===true||media?.matches===true,active=()=>expanded&&!suspended&&!document.hidden&&visible&&intersecting&&!destroyed;
     function error(message){const p=scene.querySelector('.canvas-error');p.hidden=!message;p.textContent=message||'';}
+    function fitBudget(){
+      const room=container.closest('#room');if(!current?.features?.work_layout||!room)return true;
+      const chat=document.getElementById('chat-stream'),composer=document.getElementById('composer');
+      const others=[...room.children].filter(node=>node!==container&&node!==chat&&node!==composer).reduce((sum,node)=>{const css=view.getComputedStyle(node);return css.display==='none'||['absolute','fixed'].includes(css.position)?sum:sum+node.getBoundingClientRect().height+(parseFloat(css.marginTop)||0)+(parseFloat(css.marginBottom)||0);},0);
+      const collapsed=toolbar.getBoundingClientRect().height+strip.getBoundingClientRect().height+2,maxOffice=Math.min(room.clientHeight/2,room.clientHeight-others-composer.getBoundingClientRect().height-160),available=Math.max(0,Math.min(430,Math.floor(maxOffice-collapsed)));
+      scene.style.setProperty('--canvas-world-height',available+'px');return available>=96;
+    }
     function cancel(){if(raf!==null)view.cancelAnimationFrame(raf);if(timer!==null)view.clearTimeout(timer);raf=timer=null;metrics.scheduled=0;}
     function release(){epoch++;bitmapAbort?.abort();bitmapAbort=null;for(const bitmap of bitmaps.values())bitmap.close();bitmaps.clear();loading.clear();metrics.bitmap_bytes=0;metrics.loaded_assets=[];if(canvas){canvas.width=1;canvas.height=1;metrics.canvas_bytes=4;}}
     let timerAt=Infinity;
@@ -65,7 +72,7 @@
     }
     function choose(memberId){const fact=facts.find(f=>f.id===memberId);if(!fact)return;if(fact.state==='attention'&&fact.message_id)options.onSelectMessage?.({id:fact.message_id});else options.onSelectMember?.(fact.member);}
     scene.addEventListener('click',event=>{const member=event.target.closest('[data-scene-member]');if(member)choose(member.dataset.sceneMember);if(event.target.closest('[data-canvas-add]'))options.onAddMember?.();});
-    async function expandScene(on){expanded=on;scene.classList.toggle('expanded',on);world.hidden=!on;expand.textContent=on?'收起办公室':'展开办公室';expand.setAttribute('aria-expanded',String(on));options.onExpanded?.(on);cancel();if(!on){release();return;}dimensions();dirty=true;schedule();try{await atlas();if(active()){dirty=true;schedule();}}catch(e){error(e.message);}}
+    async function expandScene(on){if(on&&!fitBudget())on=false;expanded=on;scene.classList.toggle('expanded',on);world.hidden=!on;expand.textContent=on?'收起办公室':'展开办公室';expand.setAttribute('aria-expanded',String(on));options.onExpanded?.(on);cancel();if(!on){release();return;}dimensions();dirty=true;schedule();try{await atlas();if(active()){dirty=true;schedule();}}catch(e){error(e.message);}}
     expand.onclick=()=>expandScene(!expanded);motion.onchange=()=>options.onMotionChange?.(motion.checked);edit.onclick=()=>options.onSceneSettings?.();
     function update(input){
       const nextFacts=drama.facts(input),nextLayout=model.validateScene(input.sceneData||model.defaultScene(nextFacts.map(f=>f.id))),phase=root.AgentOfficeScene.clockState(input.scene?.time_zone,input.scene?.time_mode).phase,next={...input,night:phase==='night'||phase==='dusk'},key=JSON.stringify([input.roomId,nextFacts.map(f=>[f.id,f.profile,f.variant,f.state,f.label,f.note,f.message_id]),nextLayout,next.night,input.features]);
@@ -76,7 +83,7 @@
     const nativeVisibility=event=>{if(typeof event.detail?.visible==='boolean'&&visible!==event.detail.visible){visible=event.detail.visible;visibility();}};
     const intersection=typeof view.IntersectionObserver==='function'?new view.IntersectionObserver(entries=>{const next=entries.some(e=>e.isIntersecting);if(next!==intersecting){intersecting=next;visibility();}}):null;intersection?.observe(scene);
     document.addEventListener('visibilitychange',visibility);view.addEventListener('agentoffice-visibility',nativeVisibility);media?.addEventListener?.('change',visibility);
-    const resize=typeof view.ResizeObserver==='function'?new view.ResizeObserver(()=>{if(active()){dirty=true;schedule();}}):null;resize?.observe(world);
+    const resize=typeof view.ResizeObserver==='function'?new view.ResizeObserver(()=>{if(!fitBudget()&&expanded)expandScene(false);if(active()){dirty=true;schedule();}}):null;resize?.observe(world);for(const target of [container.closest('#room'),document.getElementById('composer'),toolbar,strip,document.getElementById('group-controls')])if(target)resize?.observe(target);
     return Object.freeze({update,setSuspended(value){if(suspended===!!value)return;suspended=!!value;visibility();},getMetrics(){return {...metrics,expanded,active:active(),entities:director.entities.size,bitmap_count:bitmaps.size,actors:[...director.entities.values()].map(e=>({id:e.id,at:[...e.at],state:e.state,animation:e.anim,layer:e.script?.layer||null,bubble:e.bubble||''}))};},expand:expandScene,director,destroy(){if(destroyed)return;destroyed=true;cancel();release();document.removeEventListener('visibilitychange',visibility);view.removeEventListener('agentoffice-visibility',nativeVisibility);media?.removeEventListener?.('change',visibility);resize?.disconnect();intersection?.disconnect();scene.remove();}});
   }
   root.AgentOfficeCanvas=Object.freeze({mount});
