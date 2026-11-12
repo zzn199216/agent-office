@@ -26,6 +26,15 @@ cases.claims=async f=>{
   const message=await f.api('/api/chat/messages',{room_id:room.id,text:'认领必须等待实际意见',idempotency_key:id()}),card=page.locator('[data-group-card="'+message.id+'"]');await card.locator('.group-claims summary').click();await card.locator('[data-group-listen="'+b.id+'"]').click();await card.locator('[data-group-decision="resolve_claims"]').waitFor();assert.equal(service.group.get(message.id).status,'needs_user');assert.equal(service.store.db.prepare("SELECT count(*) n FROM group_calls WHERE room_id=? AND purpose='claim_decision'").get(room.id).n,0);assert.equal(await card.locator('[data-group-listen="'+c.id+'"]').count(),1);
   await card.locator('[data-group-decision="resolve_claims"]').click();await page.waitForFunction(id=>history.group.routes.find(r=>r.message_id===id)?.status==='review',message.id);assert.match(service.group.get(message.id).reason,/按 乙 的认领决定/);assert.equal(await card.locator('[data-group-listen]').count(),0);const count=service.group.today(room.id),response=await f.context.request.post(f.base+'/api/group/claim',{data:{room_id:room.id,message_id:message.id,member_id:c.id}});assert.equal(response.status(),409);assert.equal(service.group.today(room.id),count);
 };
+cases.images=async f=>{
+  const requests=[];f.page.on('request',request=>{if(new URL(request.url()).pathname.startsWith('/assets/'))requests.push(request.url());});
+  for(const canvas of [false,true]){
+    await f.features({work_layout:canvas,canvas});if(canvas){await f.page.locator('[data-canvas-expand]').click();await f.page.waitForFunction(()=>officeScene.getMetrics().bitmap_count>=5);}
+    await f.page.waitForFunction(()=>[...document.images].every(img=>img.complete));await sleep(150);await f.page.evaluate(()=>window.__stableAvatar=document.querySelector('#room-members img'));requests.length=0;
+    for(let i=0;i<5;i++)await f.page.evaluate(()=>refreshAfterMutation());await sleep(100);assert.deepEqual(requests,[],'Five status refreshes must not request public images in '+(canvas?'Canvas':'legacy')+' mode');assert.equal(await f.page.evaluate(()=>window.__stableAvatar===document.querySelector('#room-members img')),true,'Unchanged avatars retain their DOM node');
+  }
+  const response=await f.context.request.get(f.base+'/assets/office/atlas-body.png'),tag=response.headers().etag;assert.ok(tag);assert.equal((await f.context.request.get(f.base+'/assets/office/atlas-body.png',{headers:{'If-None-Match':tag}})).status(),304);assert.equal((await f.context.request.get(f.base+'/')).headers()['cache-control'],'no-store');assert.equal((await f.context.request.get(f.base+'/api/state')).headers()['cache-control'],'no-store');
+};
 
 async function main(){
   const files=fixture(),out=outputDirectory('p33-fixes'),proof={ok:false,isolated:true,real_clients_or_models:false,checks:{},cases:[],screenshots:[]};fs.mkdirSync(out,{recursive:true});
@@ -38,7 +47,7 @@ async function main(){
     server=createServer(service,{port:0,token});base='http://127.0.0.1:'+await server.listen();service._localUrl=base;
     const api=async(route,input)=>{const r=await fetch(base+route,{method:input===undefined?'GET':'POST',headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},...(input===undefined?{}:{body:JSON.stringify(input)})});const value=await r.json();assert.ok(r.ok,route+': '+value.error);return value;};
     browser=await playwright.chromium.launch({headless:true});const context=await browser.newContext({viewport:{width:1440,height:900},timezoneId:'Asia/Taipei',reducedMotion:'no-preference'});
-    await context.route('**/*',route=>{if(route.request().url().startsWith(base+'/'))return route.continue();external.push(route.request().url());return route.abort();});
+    context.on('request',request=>{if(!request.url().startsWith(base+'/')&&!request.url().startsWith('data:'))external.push(request.url());});
     await context.addInitScript(({project,room})=>{localStorage.setItem('agentroom-project',project);localStorage.setItem('agentroom-chat-room',room);localStorage.setItem('agentoffice-room-view','office');},{project:project.id,room:room.id});page=await context.newPage();page.on('pageerror',error=>errors.push(error.message));await page.goto(base);await page.waitForFunction(id=>history?.room?.id===id,room.id);
     const shot=async name=>{await page.screenshot({path:path.join(out,name)});proof.screenshots.push(name);};
     const f={files,out,service,page,context,api,project,room,other,members,base,shot,features:async patch=>{await api('/api/room/features',{room_id:room.id,...patch});await page.waitForFunction(patch=>Object.entries(patch).every(([key,value])=>state.features[roomId][key]===value),patch);}};

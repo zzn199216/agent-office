@@ -3,10 +3,17 @@
   'use strict';
   const api = factory();
   if (typeof module === 'object' && module.exports) module.exports = api;
-  if (root) root.AgentOfficeScene = Object.freeze({mount: api.mount,describe:api.describe,avatarSource:api.avatarSource,characterSource:api.characterSource,clockState:api.clockState,normalizeScene:api.normalizeScene});
+  if (root) root.AgentOfficeScene = Object.freeze({mount: api.mount,describe:api.describe,avatarSource:api.avatarSource,characterSource:api.characterSource,clockState:api.clockState,normalizeScene:api.normalizeScene,replaceImageHTML:api.replaceImageHTML});
 })(typeof window === 'object' ? window : null, function () {
   'use strict';
   const ASSETS = '/assets/office/';
+  function replaceImageHTML(host,html){
+    const document=host.ownerDocument,template=document.createElement('template'),images=new Map();
+    for(const image of host.querySelectorAll('img')){const key=image.getAttribute('src')+'|'+(image.getAttribute('srcset')||''),queue=images.get(key)||[];queue.push(image);images.set(key,queue);}
+    // Template content is inert: fresh IMG nodes never start duplicate requests.
+    template.innerHTML=html;for(const image of template.content.querySelectorAll('img')){const key=image.getAttribute('src')+'|'+(image.getAttribute('srcset')||''),prior=images.get(key)?.shift();if(!prior)continue;for(const attribute of [...prior.attributes])if(!image.hasAttribute(attribute.name))prior.removeAttribute(attribute.name);for(const attribute of image.attributes)if(prior.getAttribute(attribute.name)!==attribute.value)prior.setAttribute(attribute.name,attribute.value);image.replaceWith(prior);}
+    host.replaceChildren(template.content);
+  }
   const COLORS = {deepseek:'#4d6bfe',kimi:'#3b3f7a',codex:'#547b69',claude:'#c87958',qwen:'#8a76b7',grok:'#48545c',cursor:'#587994',doubao:'#5c9b96',gemini:'#6c86bc',opencode:'#6c727c',cline:'#637d94',roo:'#a98162',cherry:'#b97680',generic:'#8e815f'};
   // Original pixel characters; see web/pixel-art.js and scripts/generate-pixel-art.cjs.
   const PIXEL_CHARACTERS = new Set(['deepseek','doubao','claude','codex','grok','gemini','kimi','qwen','cursor']);
@@ -533,5 +540,5 @@
   function avatarSource(member = {}, appearances, members) {return appearance(member,appearances,members?autoVariants(members,appearances).get(member.id)||0:0).avatar;}
   function defaultCharacter(value){return `${ASSETS}pixel-${value.preset==='robot'?'generic':pixelKey(value.provider)}${value.variant?`-v${value.variant}`:''}.png`;}
   function characterSource(member={},appearances,members){const value=appearance(member,appearances,members?autoVariants(members,appearances).get(member.id)||0:0);return value.character||defaultCharacter(value);}
-  return {mount,describe,provider,plainText,autoVariants,safeImage,avatarSource,characterSource,clockState,normalizeScene,SCENE_DEFAULTS,CAMERA_LIMITS,GEOMETRY,allocateSlots,layoutOffice,cameraLayout,routeToSeat,joiningMembers};
+  return {mount,describe,provider,plainText,autoVariants,safeImage,avatarSource,characterSource,clockState,normalizeScene,replaceImageHTML,SCENE_DEFAULTS,CAMERA_LIMITS,GEOMETRY,allocateSlots,layoutOffice,cameraLayout,routeToSeat,joiningMembers};
 });
