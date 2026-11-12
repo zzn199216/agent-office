@@ -8,9 +8,9 @@
       const approval=(input.approvals||[]).find(a=>a.member_id===m.id||a.request_id===request?.id);
       let state='idle',note='',label='空闲';
       if(!described.online||!m.verified_at||info.presence.needsConnection||['connection_failed','failed','disabled','revoked','offline'].includes(m.status)){state='unconnected';note=!described.online?'本机服务未连接':m.connection_presentation?.reason||m.error||info.presence.label||'继续接入';label=!m.verified_at?'未接通':'当前离线';}
-      else if(info.needsInput||approval){state='attention';note=approval?.questions?.[0]?.question||approval?.reason||request?.error||'请确认这一步后继续';label='等你';}
+      else if(info.needsInput||approval){state='attention';note=approval?.questions?.[0]?.question||approval?.reason||request?.error||'请确认这一步后继续';label='等待你的反馈';}
       else if(info.processing){state='working';note=info.activity?.text||'正在处理消息';label='工作中';}
-      else if(info.waiting&&!m.delivery_capability?.can_wake){state='attention';note='请在 '+m.name+' 的窗口处理消息';label='等你';}
+      else if(info.waiting&&!m.delivery_capability?.can_wake){state='attention';note='请在 '+m.name+' 的窗口处理消息';label='等待你的反馈';}
       else if(info.waiting)label='等待接手';
       return {id:m.id,member:m,profile:key,variant:variant%5,state,label,note:String(note).slice(0,220),message_id:request?.id||null};
     });
@@ -27,7 +27,7 @@
     constructor(options={}){this.random=options.random||Math.random;this.reset();}
     reset(){this.entities=new Map();this.reservations=new Map();this.scene=null;this.features={};this.now=0;this.lastStep=null;this.seen=new Set();this.maxSeq=0;this.eventsEnabled=false;this.eventQueue=[];this.playedEvents=[];}
     home(e){return [e.seat.at[0],e.seat.at[1]+1];}
-    pose(e){e.anim=e.state==='working'?'type':e.state==='attention'?'raise':e.state==='unconnected'?null:'sit';e.face=e.seat.face;e.frame=0;}
+    pose(e){e.anim=e.state==='working'?'type':e.state==='attention'?'raise':e.state==='unconnected'?null:'sit';e.face=e.seat.face;e.raiseStarted=this.now;e.frame=e.state==='attention'&&this.features.reduced_motion?1:0;}
     occupied(except){const cells=new Set();for(const e of this.entities.values())if(e.id!==except){cells.add(model.cell(e.at));if(e.script?.target)cells.add(model.cell(e.script.target));}for(const [key,owner]of this.reservations)if(owner!==except)cells.add(key);return cells;}
     idleLater(e){e.idleDue=this.now+12000+Math.floor(this.random()*8000);}
     cancel(e,linked=true){const partner=this.entities.get(e.partner);if(linked&&e.eventId&&partner?.eventId===e.eventId){this.cancel(partner,false);this.pose(partner);}if(e.reservation&&this.reservations.get(e.reservation)===e.id)this.reservations.delete(e.reservation);e.reservation=null;e.script=null;e.bubble='';e.eventId=null;e.partner=null;this.idleLater(e);}
@@ -127,10 +127,10 @@
     step(now,reduced=false){
       const dt=this.lastStep===null?100:Math.max(0,Math.min(180,now-this.lastStep));this.lastStep=now;this.now=now;let moving=false;if(!reduced)this.playEvents(now);else this.eventQueue=[];
       for(const e of this.entities.values()){
-        if(reduced){if(e.script){this.settle(e);moving=true;}e.frame=0;continue;}
+        if(reduced){if(e.script){this.settle(e);moving=true;}const frame=e.state==='attention'?1:0;if(e.frame!==frame)moving=true;e.frame=frame;continue;}
         if(e.state==='idle'&&!e.script&&e.idleDue<=now)this.ambient(e);
         if(e.script)moving=this.advance(e,now,dt)||moving;
-        const animated=['working','attention'].includes(e.state)||e.script&&['walk','talk','type','raise'].includes(e.anim);e.frame=animated?Math.floor(now/100)%2:0;if(animated)moving=true;
+        const raising=e.state==='attention'&&now-e.raiseStarted<250,animated=e.state==='working'||e.script&&['walk','talk','type'].includes(e.anim),frame=e.anim==='raise'?(e.state==='attention'?Math.min(1,Math.floor(Math.max(0,now-e.raiseStarted)/150)):1):animated?Math.floor(now/100)%2:0;if(e.frame!==frame)moving=true;e.frame=frame;if(animated||raising)moving=true;
       }
       return moving;
     }

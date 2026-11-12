@@ -15,7 +15,7 @@ test('new arrivals walk without changing facts; a repeated snapshot preserves mo
   director.update([a,b],scene,{walking:true});const entity=director.entities.get('b');assert.deepEqual(entity.at,[1,1]);director.step(100);const first=[...entity.at];assert.notDeepEqual(first,[1,1]);
   director.update([a,b],scene,{walking:true});assert.deepEqual(entity.at,first);director.step(200);assert.notDeepEqual(entity.at,first);assert.equal(entity.anim,'walk');
   director.update([a,{...b,state:'attention',note:'real question'}],scene,{walking:true});assert.equal(entity.script,null);assert.equal(entity.anim,'raise');assert.deepEqual(entity.at,[scene.stations.b.at[0],scene.stations.b.at[1]+1]);
-  assert.equal(b.state,'idle');assert.equal(b.note,'');director.step(300,true);assert.equal(entity.frame,0);
+  assert.equal(b.state,'idle');assert.equal(b.note,'');director.step(300,true);assert.equal(entity.frame,1);
 });
 test('declarative scripts finish and stop ticking; disabling movement settles the actor at its seat',()=>{
   const director=new Director(),scene=model.defaultScene(['a']),a=fact('a');director.update([a],scene,{walking:true});const entity=director.entities.get('a');
@@ -41,4 +41,11 @@ test('only actual new peer messages and actual claim rounds become reactions; pr
   input.group.meetings[0].reports.push(...[1,2].map(round=>({member_id:'b',round,source:'member_actual',content:{first_step:'actual approach',choice:'actual nomination'}})));director.observe(events(input));
   for(let now=8000;now<14000;now+=100)director.step(now);assert.deepEqual(director.playedEvents.filter(e=>e.type==='claim').map(e=>e.round),[1,2]);assert.equal(director.step(15000),false);
   director.update([a,b],scene,{interactions:false,walking:true});input.messages.push({id:'off',seq:3,sender_id:'a',to_member_id:'b',kind:'message',text:'off'});director.observe(events(input));assert.equal(director.eventQueue.length,0);
+});
+
+test('attention raises once then holds its pose with no animation wakeups',()=>{
+  const director=new Director(),scene=model.defaultScene(['a','b']);director.update([fact('a','attention'),fact('b')],scene,{},0);
+  assert.equal(director.step(100),true);director.step(200);director.step(300);
+  const e=director.entities.get('a');assert.equal(e.anim,'raise');assert.equal(e.frame,1);
+  for(let now=400;now<=3400;now+=100)assert.equal(director.step(now),false,'Waiting for feedback must not loop');assert.equal(director.nextWake(),null);
 });
